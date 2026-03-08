@@ -1,0 +1,100 @@
+# 变更日志
+
+> 按里程碑记录各阶段交付内容。每次分支合回 main 时追加条目。
+
+---
+
+## M4: 记忆系统（进行中）
+
+### 4.3 灵魂层 — `memory/m43-soul-layer`
+
+- 新增 `ProfileBuilder`：结构化画像 prompt、JSON 校验和 `SoulProfile` 构建
+- `SoulEngine.build_initial_profile()` 从 history + preference 生成初始画像并持久化到 `data/memory/soul.json`
+- `SoulEngine.get_profile()` 支持读取已保存画像，未初始化时抛 `SoulProfileNotInitializedError`
+- `SoulProfile` 增加 `to_dict()` / `from_dict()` 及偏好层序列化辅助
+- CLI `profile` 命令从 stub 升级为真实展示，缺失画像时提示后续执行 `openbiliclaw init`
+
+### 4.2 偏好层 — `memory/m42-preference-layer`
+
+- 新增 `PreferenceAnalyzer`：LLM structured extraction + JSON 解析 + 兴趣合并
+- 新增 `build_preference_analysis_prompt()`：结构化偏好提取 prompt
+- `SoulEngine.analyze_events()` 对接 `PreferenceAnalyzer`，偏好持久化到 JSON
+- 兴趣标签带时间衰减（`decay_factor_per_week=0.9`）和最低权重过滤
+
+### 4.1 事件层 — `memory/m41-event-layer`
+
+- `Database` 新增 `query_events()` 和 `count_events_by_type()` 
+- `MemoryManager.propagate_event()` 从 stub 改为 SQLite 持久化
+- 事件类型枚举：`view`, `search`, `favorite`, `like`, `comment`, `click`, `feedback`
+- 新增 `MemoryManager.query_events()` 和 `get_event_stats()` 委托方法
+
+---
+
+## M3: Bilibili 接入层 ✅
+
+### 3.3 agent-browser 集成 — `bili/m33-agent-browser`
+
+- `BilibiliBrowser` 重写：`BrowserCommandError` 异常 + `open` → `snapshot -i --json` 流程
+- CLI 新增 `browser status` / `browser open` / `browser content` 命令
+- `is_available` 检测 + 官方安装提示
+
+### 3.2 核心 API — `bili/m32-core-api`
+
+- `BilibiliAPIClient` 新增统一请求助手 `_get_json()` + 轻量限流 `_respect_rate_limit()`
+- 新增 cursor-based `get_user_history(max_items=200)`
+- 新增 `get_favorite_folders()` / `get_all_favorites()` 带预算控制
+- 新增 `get_following()` / `get_video_comments()`
+- 新增 `FavoriteFolder`, `FavoriteFolderWithItems`, `FollowingUser`, `CommentInfo` 数据结构
+- 新增集成测试骨架 `@pytest.mark.integration`
+
+### 3.1 Cookie 认证 — `bili/m31-cookie-auth`
+
+- `AuthManager`：cookie 持久化 + nav API 验证 + `SupportsNavClient` Protocol DI
+- `BilibiliAPIClient.get_nav_info()`：解析 `/x/web-interface/nav`
+- CLI 新增 `auth login`（交互式 + `--cookie`）和 `auth status`
+
+---
+
+## M2: LLM 多模型支持 ✅
+
+### 2.3 Prompt 管理与 LLM Service — `llm/m23-prompt-management`
+
+- 新增 `prompts.py`：Socratic 对话 prompt 构建 + core memory 注入
+- 新增 `service.py`：`LLMService` 门面（prompt 组装 + registry 调用 + 空响应校验）
+- 新增 `MemoryManager.render_core_memory_prompt()`
+- `SocraticDialogue.respond()` 对接 LLMService，替换 TODO stub
+
+### 2.2 Provider Registry — `llm/m22-registry`
+
+- 新增 `build_llm_registry()`：从 Config 自动构建 + provider fallback
+- `LLMRegistry.complete()`：sequential fallback，`LLMResponseError` 不触发 fallback
+- CLI 新增 `health-check` 命令 + `config-show` 显示已注册 provider
+
+### 2.1 Provider 实现 — `llm/m21-providers`
+
+- 新增统一异常层级：`LLMProviderError` → `LLMRateLimitError` / `LLMTimeoutError` / `LLMResponseError`
+- `OpenAIProvider` / `ClaudeProvider`：retry + 超时映射 + 空响应保护
+- 新增 `OllamaProvider`（本地 LLM）
+- 新增 `DeepSeekProvider`（继承 OpenAI）
+
+---
+
+## M1: 基础设施 ✅
+
+### 1.3 日志系统 — `infra/m13-logging-system`
+
+- 新增 `logging_setup.py`：Rich 控制台 + 文件 handler，防重复初始化
+- `LoggingConfig`：level / file_level / directory / filename
+- CLI 全局 `--log-level` 选项
+
+### 1.2 配置系统 — `infra/m12-config-system`
+
+- `config.py` 增强：`ConfigError` / `ConfigDiagnostics` / 严格校验
+- CLI `config-show` 显示配置 + 引导提示
+- `config.example.toml` 完整注释
+
+### 1.1 开发环境和 CI — `infra-m1`
+
+- Ruff + MyPy + Pytest 质量门禁
+- GitHub Actions CI 工作流
+- `tomllib` 配置加载
