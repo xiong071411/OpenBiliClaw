@@ -25,7 +25,7 @@ openbiliclaw [--log-level DEBUG|INFO|WARNING|ERROR] <命令>
 | `browser status` | 检查 agent-browser 安装 | ✅ |
 | `browser open <url>` | 通过浏览器打开页面 | ✅ |
 | `browser content <url>` | 获取页面文本内容 | ✅ |
-| `start` | 启动 Agent | 🔲 stub |
+| `start` | 启动本地 API 服务 | ✅ |
 | `init` | 首次初始化 | ✅ |
 | `recommend` | 查看推荐 | ✅ |
 | `feedback <id> <like\|dislike>` | 对推荐提交反馈 | ✅ |
@@ -253,11 +253,26 @@ $ openbiliclaw chat
 openbiliclaw init
 ```
 
+### `openbiliclaw start`
+
+启动本地后端 API 服务，默认监听 `127.0.0.1:8420`，供浏览器插件或本地调试调用。
+
+```bash
+$ openbiliclaw start
+启动 OpenBiliClaw
+API 服务
+  正在启动本地后端，默认监听 127.0.0.1:8420。
+```
+
+当前 `start` 会启动这些接口：
+
+- `GET /api/health`
+- `POST /api/events`
+- `GET /api/recommendations`
+
 ### Stub 命令的输出约定
 
-`start` 目前仍是 stub，但已经统一使用“开发中”占位态输出，避免与真实错误混淆，并会附带建议的下一步命令。
-
-这条命令会同时：
+当前仍是 stub 的命令会统一使用“开发中”占位态输出，避免与真实错误混淆，并会附带建议的下一步命令。
 
 - 更新 `recommendations` 表中的 `feedback_type` / `feedback_note` / `feedback_at`
 - 写入一条 `event_type="feedback"` 的事件，供后续记忆系统使用

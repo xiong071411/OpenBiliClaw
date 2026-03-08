@@ -324,14 +324,22 @@ def test_browser_content_reports_command_failure(
 def test_start_uses_placeholder_output(
     monkeypatch: pytest.MonkeyPatch, runner: CliRunner
 ) -> None:
+    called: dict[str, object] = {}
+
+    def fake_run_api_server(*, host: str = "127.0.0.1", port: int = 8420) -> None:
+        called["host"] = host
+        called["port"] = port
+
     monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
+    monkeypatch.setattr(cli_module, "_run_api_server", fake_run_api_server, raising=False)
     monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
 
     result = runner.invoke(app, ["start"])
 
     assert result.exit_code == 0
     assert "启动 OpenBiliClaw" in result.stdout
-    assert "功能开发中" in result.stdout
+    assert "API 服务" in result.stdout
+    assert called == {"host": "127.0.0.1", "port": 8420}
 
 
 def test_discover_prints_init_guidance_when_profile_missing(

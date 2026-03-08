@@ -190,6 +190,15 @@ def _build_dialogue(soul_engine: Any) -> Any:
     return SocraticDialogue(llm=_build_registry(), soul_engine=soul_engine)
 
 
+def _run_api_server(*, host: str = "127.0.0.1", port: int = 8420) -> None:
+    """Run the local FastAPI service used by the browser extension."""
+    import uvicorn
+
+    from openbiliclaw.api.app import create_app
+
+    uvicorn.run(create_app(), host=host, port=port, log_level="info")
+
+
 def _build_memory_manager() -> Any:
     """Build the initialized memory manager for event writes."""
     from openbiliclaw.config import load_config
@@ -339,12 +348,13 @@ def _require_runtime_config() -> None:
 @app.command()
 def start() -> None:
     """启动 OpenBiliClaw Agent."""
-    _require_runtime_config()
-    _print_placeholder(
-        "启动 OpenBiliClaw",
-        "先执行 `openbiliclaw init` 完成初始化，后续再接通常驻 Agent。",
+    _print_page_title("启动 OpenBiliClaw", "本地 API 服务")
+    _print_status_panel(
+        "info",
+        "API 服务",
+        "正在启动本地后端，默认监听 127.0.0.1:8420。",
     )
-    # TODO: Initialize and start the agent orchestrator
+    _run_api_server(host="127.0.0.1", port=8420)
 
 
 @app.command()

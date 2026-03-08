@@ -4,6 +4,15 @@
 
 ---
 
+## M8: 插件后端 API（进行中）
+
+### 8.2 后端 API — `api/m82-backend-api`
+
+- 新增 FastAPI 应用，提供 `GET /api/health`、`POST /api/events`、`GET /api/recommendations`
+- 插件上报的行为事件会映射到记忆系统事件层，并写入 SQLite `events` 表
+- 推荐接口会返回推荐 ID、BV 号、标题、UP 主、推荐文案与展示状态，供插件 popup 使用
+- CLI `openbiliclaw start` 从 stub 升级为真实本地 API 服务启动入口，默认监听 `127.0.0.1:8420`
+
 ## M5: 内容发现引擎（进行中）
 
 ## M7: CLI 体验 ✅

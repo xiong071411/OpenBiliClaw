@@ -306,8 +306,12 @@ class Database:
         """Get recommendation history ordered by newest first."""
         cursor = self.conn.execute(
             """
-            SELECT *
-            FROM recommendations
+            SELECT
+                r.*,
+                c.title AS title,
+                c.up_name AS up_name
+            FROM recommendations AS r
+            LEFT JOIN content_cache AS c ON c.bvid = r.bvid
             ORDER BY created_at DESC, id DESC
             LIMIT ?
             """,
