@@ -80,7 +80,9 @@ class ProfileBuilder:
         missing = [field for field in required_fields if field not in payload]
         if missing:
             missing_text = ", ".join(missing)
-            raise SoulProfileBuildError(f"LLM soul profile response is missing fields: {missing_text}")
+            raise SoulProfileBuildError(
+                f"LLM soul profile response is missing fields: {missing_text}"
+            )
 
         portrait = str(payload.get("personality_portrait", "")).strip()
         if len(portrait) < 200:

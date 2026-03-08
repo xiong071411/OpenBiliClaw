@@ -77,8 +77,10 @@ async def test_build_initial_profile_reads_preference_and_saves_soul(tmp_path: P
     registry = FakeRegistry(
         json.dumps(
             {
-                "personality_portrait": "这个人会反复在高信息密度内容里停留，也会主动寻找讲清原理的表达方式。"
-                * 8,
+                "personality_portrait": (
+                    "这个人会反复在高信息密度内容里停留，也会主动寻找讲清原理的表达方式。"
+                    * 8
+                ),
                 "core_traits": ["理性", "好奇", "克制"],
                 "values": ["成长", "真实"],
                 "life_stage": "处于探索与积累阶段",
@@ -108,7 +110,10 @@ async def test_get_profile_loads_saved_soul_profile(tmp_path: Path) -> None:
     memory.initialize()
     memory.get_layer("soul").data.update(
         {
-            "personality_portrait": "这是一个偏爱深度内容、对信息质量较敏感、做决定前会先观察的人。" * 8,
+            "personality_portrait": (
+                "这是一个偏爱深度内容、对信息质量较敏感、做决定前会先观察的人。"
+                * 8
+            ),
             "core_traits": ["理性", "谨慎", "自驱"],
             "values": ["真实", "成长"],
             "life_stage": "稳定积累阶段",
