@@ -13,6 +13,12 @@
 - 刷新失败时保留当前推荐，不清空内容，只给出轻量错误提示
 - 后续修正：手动刷新现在走 `force_refresh()`，不会再因为 `below_threshold` 被短路
 
+### 候选供给升级 — `candidate-supply`
+
+- `ContentDiscoveryEngine` 现在采用“主发现 + backfill”两阶段流程：主候选不足时会扩搜索、放宽高精度策略阈值，并从历史缓存补齐到目标上限
+- `content_cache` 新增 `relevance_score`、`relevance_reason`、`candidate_tier`，缓存候选与实时发现候选终于共享同一套质量信号
+- `RecommendationEngine` 和 `Database.get_unrecommended_content()` 现已统一按 `candidate_tier -> relevance_score -> last_scored_at -> view_count` 排序，避免缓存回读退化成只看播放量
+
 ### Gemini 可选依赖导入修复 — `fix/gemini-optional-import`
 
 - `google-genai` 缺失时，`openbiliclaw.llm` 和 `openbiliclaw.llm.registry` 现在仍可正常导入，不再因为 Gemini 顶层依赖阻塞整个测试收集

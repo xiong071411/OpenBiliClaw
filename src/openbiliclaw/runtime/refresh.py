@@ -70,6 +70,7 @@ class ContinuousRefreshController:
     explore_refresh_hours: int = 12
     notification_cooldown_hours: int = 2
     check_interval_seconds: int = 60
+    discovery_limit: int = 18
 
     _signal_event_types = [
         "view",
@@ -224,7 +225,11 @@ class ContinuousRefreshController:
         strategies: list[str],
         reason: str,
     ) -> dict[str, object]:
-        discovered = await self.discovery_engine.discover(profile, strategies=strategies, limit=30)
+        discovered = await self.discovery_engine.discover(
+            profile,
+            strategies=strategies,
+            limit=self.discovery_limit,
+        )
         recommendations = await self.recommendation_engine.generate_recommendations(
             discovered,
             profile,

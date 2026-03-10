@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, NoReturn
 
 from .base import (
     LLMProvider,
@@ -14,22 +14,22 @@ from .base import (
     LLMTimeoutError,
 )
 
-google_genai: Any
-google_errors: Any
-google_types: Any
+genai: Any | None
+errors: Any | None
+types: Any | None
 
 try:
-    from google import genai as google_genai
-    from google.genai import errors as google_errors
-    from google.genai import types as google_types
+    from google import genai as _genai
+    from google.genai import errors as _errors
+    from google.genai import types as _types
 except ModuleNotFoundError:  # pragma: no cover - exercised via integration behavior
-    google_genai = None
-    google_errors = None
-    google_types = None
-
-genai: Any = google_genai
-errors: Any = google_errors
-types: Any = google_types
+    genai = None
+    errors = None
+    types = None
+else:
+    genai = _genai
+    errors = _errors
+    types = _types
 
 
 def gemini_sdk_available() -> bool:
@@ -37,7 +37,7 @@ def gemini_sdk_available() -> bool:
     return genai is not None and types is not None
 
 
-def _raise_missing_sdk() -> None:
+def _raise_missing_sdk() -> NoReturn:
     raise LLMProviderError(
         "Gemini provider requires the optional dependency 'google-genai' to be installed."
     )

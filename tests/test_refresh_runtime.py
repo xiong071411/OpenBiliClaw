@@ -193,3 +193,38 @@ async def test_force_refresh_runs_even_when_threshold_not_met() -> None:
     assert result["strategies"] == ["search", "related_chain", "trending", "explore"]
     assert len(discovery.calls) == 1
     assert len(recommendations.calls) == 1
+
+
+async def test_refresh_controller_requests_discovery_with_backfill_limit() -> None:
+    discovery = _FakeDiscoveryEngine()
+    now = datetime.now().isoformat()
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(
+            {
+                "last_event_refresh_at": "",
+                "last_trending_refresh_at": now,
+                "last_explore_refresh_at": now,
+                "last_processed_event_id": 0,
+                "last_notification_at": "",
+            }
+        ),
+        database=_FakeDatabase(
+            [
+                {"id": 1, "event_type": "view"},
+                {"id": 2, "event_type": "search"},
+                {"id": 3, "event_type": "view"},
+                {"id": 4, "event_type": "favorite"},
+                {"id": 5, "event_type": "comment"},
+                {"id": 6, "event_type": "feedback"},
+            ]
+        ),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=discovery,
+        recommendation_engine=_FakeRecommendationEngine(),
+        trending_refresh_hours=999,
+        explore_refresh_hours=999,
+    )
+
+    await controller.refresh_if_needed()
+
+    assert discovery.calls[0][2] == 18
