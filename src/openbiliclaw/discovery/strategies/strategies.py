@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Protocol
 
 from openbiliclaw.discovery.engine import (
@@ -86,6 +86,7 @@ class SearchStrategy(DiscoveryStrategy):
     bilibili_client: SupportsSearchClient
     queries_per_run: int = 8
     page_size: int = 10
+    max_pages: int = 1
 
     @property
     def name(self) -> str:
@@ -114,30 +115,39 @@ class SearchStrategy(DiscoveryStrategy):
         seen_bvids: set[str] = set()
 
         for query_index, query in enumerate(queries):
-            try:
-                search_results = await self.bilibili_client.search(
-                    query,
-                    page=1,
-                    page_size=self.page_size,
-                )
-            except Exception:
-                logger.exception("Search query failed: %s", query)
-                continue
+            for page in range(1, self.max_pages + 1):
+                try:
+                    search_results = await self.bilibili_client.search(
+                        query,
+                        page=page,
+                        page_size=self.page_size,
+                    )
+                except Exception:
+                    logger.exception("Search query failed: %s", query)
+                    break
 
-            for item_index, item in enumerate(search_results):
-                content = self._map_search_result(
-                    item,
-                    query_index=query_index,
-                    item_index=item_index,
-                )
-                if content is None or content.bvid in seen_bvids:
-                    continue
-                seen_bvids.add(content.bvid)
-                results.append(content)
-                if len(results) >= limit:
-                    return results
+                for item_index, item in enumerate(search_results):
+                    content = self._map_search_result(
+                        item,
+                        query_index=query_index,
+                        item_index=item_index + (page - 1) * self.page_size,
+                    )
+                    if content is None or content.bvid in seen_bvids:
+                        continue
+                    seen_bvids.add(content.bvid)
+                    results.append(content)
+                    if len(results) >= limit:
+                        return results
 
         return results
+
+    def create_backfill_strategy(self) -> DiscoveryStrategy | None:
+        return replace(
+            self,
+            queries_per_run=min(max(self.queries_per_run + 4, self.queries_per_run), 12),
+            page_size=min(max(self.page_size, 12), 20),
+            max_pages=max(self.max_pages, 2),
+        )
 
     async def _generate_queries(self, profile: SoulProfile) -> list[str]:
         prompt_messages = build_search_queries_prompt(
@@ -288,6 +298,14 @@ class TrendingStrategy(DiscoveryStrategy):
     def name(self) -> str:
         return "trending"
 
+    def create_backfill_strategy(self) -> DiscoveryStrategy | None:
+        if self.score_threshold <= 0.58:
+            return None
+        return replace(
+            self,
+            score_threshold=max(0.58, round(self.score_threshold - 0.07, 2)),
+        )
+
     async def discover(
         self, profile: SoulProfile, limit: int = 20
     ) -> list[DiscoveredContent]:
@@ -411,6 +429,15 @@ class RelatedChainStrategy(DiscoveryStrategy):
     @property
     def name(self) -> str:
         return "related_chain"
+
+    def create_backfill_strategy(self) -> DiscoveryStrategy | None:
+        if self.score_threshold <= 0.58:
+            return None
+        return replace(
+            self,
+            score_threshold=max(0.58, round(self.score_threshold - 0.07, 2)),
+            related_per_seed=max(self.related_per_seed, 10),
+        )
 
     async def discover(
         self, profile: SoulProfile, limit: int = 20
@@ -625,6 +652,16 @@ class ExploreStrategy(DiscoveryStrategy):
     @property
     def name(self) -> str:
         return "explore"
+
+    def create_backfill_strategy(self) -> DiscoveryStrategy | None:
+        if self.score_threshold <= 0.58:
+            return None
+        return replace(
+            self,
+            score_threshold=max(0.58, round(self.score_threshold - 0.07, 2)),
+            queries_per_domain=max(self.queries_per_domain, 3),
+            max_domains=max(self.max_domains, 6),
+        )
 
     async def discover(
         self, profile: SoulProfile, limit: int = 20

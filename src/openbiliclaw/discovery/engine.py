@@ -76,6 +76,10 @@ class DiscoveryStrategy(ABC):
         """
         ...
 
+    def create_backfill_strategy(self) -> DiscoveryStrategy | None:
+        """Return an expanded/relaxed variant for supply backfill if supported."""
+        return None
+
 
 class ContentDiscoveryEngine:
     """Orchestrates multiple discovery strategies.
@@ -93,10 +97,15 @@ class ContentDiscoveryEngine:
         self,
         llm_service: SupportsStructuredTask | None = None,
         database: Database | None = None,
+        *,
+        target_primary_count: int = 12,
+        backfill_target_count: int = 18,
     ) -> None:
         self._strategies: list[DiscoveryStrategy] = []
         self._llm_service = llm_service
         self._database = database
+        self._target_primary_count = max(1, target_primary_count)
+        self._backfill_target_count = max(self._target_primary_count, backfill_target_count)
 
     def register_strategy(self, strategy: DiscoveryStrategy) -> None:
         """Register a discovery strategy."""
@@ -126,28 +135,26 @@ class ContentDiscoveryEngine:
         if not active:
             return []
 
-        tasks = [strategy.discover(profile, limit=limit) for strategy in active]
-        gathered = await asyncio.gather(*tasks, return_exceptions=True)
+        effective_limit = max(1, min(limit, self._backfill_target_count))
+        primary_results = await self._run_strategies(
+            active,
+            profile=profile,
+            limit=effective_limit,
+        )
+        final_results = self._merge_and_rank(primary_results)[:effective_limit]
 
-        results: list[DiscoveredContent] = []
-        for strategy, outcome in zip(active, gathered, strict=True):
-            if isinstance(outcome, BaseException):
-                logger.exception("Strategy '%s' failed.", strategy.name, exc_info=outcome)
-                continue
-            if not isinstance(outcome, list):
-                logger.error(
-                    "Strategy '%s' returned unexpected outcome type: %s",
-                    strategy.name,
-                    type(outcome).__name__,
-                )
-                continue
-            items: list[DiscoveredContent] = outcome
-            results.extend(items)
-            logger.info("Strategy '%s' found %d items.", strategy.name, len(items))
+        primary_target = min(self._target_primary_count, effective_limit)
+        if len(final_results) < primary_target:
+            backfill_results = await self._run_backfill(
+                active,
+                profile=profile,
+                limit=effective_limit,
+                existing=final_results,
+            )
+            final_results = self._merge_and_rank(
+                [*final_results, *backfill_results]
+            )[:effective_limit]
 
-        merged = self._merge_duplicates(results)
-        merged.sort(key=lambda x: x.relevance_score, reverse=True)
-        final_results = merged[:limit]
         self._cache_results(final_results)
         return final_results
 
@@ -233,6 +240,125 @@ class ContentDiscoveryEngine:
             if existing is None or item.relevance_score > existing.relevance_score:
                 by_bvid[item.bvid] = item
         return list(by_bvid.values())
+
+    async def _run_strategies(
+        self,
+        strategies: list[DiscoveryStrategy],
+        *,
+        profile: SoulProfile,
+        limit: int,
+    ) -> list[DiscoveredContent]:
+        tasks = [strategy.discover(profile, limit=limit) for strategy in strategies]
+        gathered = await asyncio.gather(*tasks, return_exceptions=True)
+
+        results: list[DiscoveredContent] = []
+        for strategy, outcome in zip(strategies, gathered, strict=True):
+            if isinstance(outcome, BaseException):
+                logger.exception("Strategy '%s' failed.", strategy.name, exc_info=outcome)
+                continue
+            if not isinstance(outcome, list):
+                logger.error(
+                    "Strategy '%s' returned unexpected outcome type: %s",
+                    strategy.name,
+                    type(outcome).__name__,
+                )
+                continue
+            items: list[DiscoveredContent] = outcome
+            results.extend(items)
+            logger.info("Strategy '%s' found %d items.", strategy.name, len(items))
+        return results
+
+    async def _run_backfill(
+        self,
+        strategies: list[DiscoveryStrategy],
+        *,
+        profile: SoulProfile,
+        limit: int,
+        existing: list[DiscoveredContent],
+    ) -> list[DiscoveredContent]:
+        remaining = limit - len(existing)
+        if remaining <= 0:
+            return []
+
+        backfill_strategies: list[DiscoveryStrategy | None] = []
+        for strategy in strategies:
+            factory = getattr(strategy, "create_backfill_strategy", None)
+            if not callable(factory):
+                backfill_strategies.append(None)
+                continue
+            backfill_strategies.append(factory())
+        active_backfill = [strategy for strategy in backfill_strategies if strategy is not None]
+        results: list[DiscoveredContent] = []
+        if active_backfill:
+            results.extend(
+                await self._run_strategies(
+                    active_backfill,
+                    profile=profile,
+                    limit=remaining,
+                )
+            )
+
+        merged = self._merge_and_rank([*existing, *results])[:limit]
+        if len(merged) >= limit:
+            return results
+
+        results.extend(
+            self._load_cached_backfill(
+                limit=limit,
+                exclude_bvids={item.bvid for item in merged},
+            )
+        )
+        return results
+
+    def _load_cached_backfill(
+        self,
+        *,
+        limit: int,
+        exclude_bvids: set[str],
+    ) -> list[DiscoveredContent]:
+        if self._database is None:
+            return []
+
+        rows = self._database.get_unrecommended_content(limit=limit)
+        candidates: list[DiscoveredContent] = []
+        for row in rows:
+            bvid = str(row.get("bvid", "")).strip()
+            if not bvid or bvid in exclude_bvids:
+                continue
+            candidates.append(
+                DiscoveredContent(
+                    bvid=bvid,
+                    title=str(row.get("title", "")),
+                    up_name=str(row.get("up_name", "")),
+                    up_mid=int(row.get("up_mid", 0) or 0),
+                    duration=int(row.get("duration", 0) or 0),
+                    tags=[],
+                    description=str(row.get("description", "")),
+                    cover_url=str(row.get("cover_url", "")),
+                    view_count=int(row.get("view_count", 0) or 0),
+                    like_count=int(row.get("like_count", 0) or 0),
+                    source_strategy=str(row.get("source", "")),
+                    relevance_score=self._clamp_score(row.get("relevance_score", 0.0)),
+                    relevance_reason=str(row.get("relevance_reason", "")),
+                    candidate_tier="backfill",
+                )
+            )
+            if len(candidates) >= limit:
+                break
+        return candidates
+
+    @staticmethod
+    def _merge_and_rank(results: list[DiscoveredContent]) -> list[DiscoveredContent]:
+        merged = ContentDiscoveryEngine._merge_duplicates(results)
+        merged.sort(
+            key=lambda item: (
+                item.candidate_tier != "primary",
+                -item.relevance_score,
+                -item.view_count,
+                item.bvid,
+            )
+        )
+        return merged
 
     def _cache_results(self, results: list[DiscoveredContent]) -> None:
         if self._database is None or not results:

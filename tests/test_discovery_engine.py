@@ -216,6 +216,28 @@ class _RecordingStrategy:
         return self._result[:limit]
 
 
+class _BackfillAwareStrategy(_RecordingStrategy):
+    def __init__(
+        self,
+        name: str,
+        result: list[DiscoveredContent],
+        *,
+        backfill_result: list[DiscoveredContent],
+        started: list[str] | None = None,
+        backfill_started: list[str] | None = None,
+    ) -> None:
+        super().__init__(name, result, started=started)
+        self._backfill_result = backfill_result
+        self._backfill_started = backfill_started if backfill_started is not None else []
+
+    def create_backfill_strategy(self) -> _RecordingStrategy:
+        return _RecordingStrategy(
+            f"{self.name}-backfill",
+            self._backfill_result,
+            started=self._backfill_started,
+        )
+
+
 @pytest.mark.asyncio
 async def test_discovery_engine_runs_strategies_concurrently_and_tolerates_failures() -> None:
     started: list[str] = []
@@ -355,3 +377,90 @@ async def test_discovery_engine_cache_results_preserves_relevance_fields() -> No
         assert cached[0]["relevance_score"] == 0.88
         assert cached[0]["relevance_reason"] == "fits profile"
         assert cached[0]["candidate_tier"] == "primary"
+
+
+@pytest.mark.asyncio
+async def test_discovery_engine_backfills_when_primary_results_too_few() -> None:
+    started: list[str] = []
+    backfill_started: list[str] = []
+    engine = ContentDiscoveryEngine()
+    engine.register_strategy(
+        _BackfillAwareStrategy(
+            "search",
+            [
+                DiscoveredContent(
+                    bvid="BV1PRIMARY",
+                    title="主候选",
+                    relevance_score=0.91,
+                    candidate_tier="primary",
+                    source_strategy="search",
+                )
+            ],
+            backfill_result=[
+                DiscoveredContent(
+                    bvid="BV1BACK1",
+                    title="补货 1",
+                    relevance_score=0.73,
+                    candidate_tier="backfill",
+                    source_strategy="search",
+                ),
+                DiscoveredContent(
+                    bvid="BV1BACK2",
+                    title="补货 2",
+                    relevance_score=0.68,
+                    candidate_tier="backfill",
+                    source_strategy="search",
+                ),
+            ],
+            started=started,
+            backfill_started=backfill_started,
+        )
+    )
+
+    results = await engine.discover(_build_profile(), limit=18)
+
+    assert started == ["search"]
+    assert backfill_started == ["search-backfill"]
+    assert [item.bvid for item in results] == ["BV1PRIMARY", "BV1BACK1", "BV1BACK2"]
+    assert [item.candidate_tier for item in results] == ["primary", "backfill", "backfill"]
+
+
+@pytest.mark.asyncio
+async def test_discovery_engine_skips_backfill_when_primary_results_enough() -> None:
+    started: list[str] = []
+    backfill_started: list[str] = []
+    engine = ContentDiscoveryEngine()
+    primary_results = [
+        DiscoveredContent(
+            bvid=f"BV1{index:02d}",
+            title=f"主候选 {index}",
+            relevance_score=0.95 - index * 0.01,
+            candidate_tier="primary",
+            source_strategy="search",
+        )
+        for index in range(12)
+    ]
+    engine.register_strategy(
+        _BackfillAwareStrategy(
+            "search",
+            primary_results,
+            backfill_result=[
+                DiscoveredContent(
+                    bvid="BV1BACK",
+                    title="补货",
+                    relevance_score=0.5,
+                    candidate_tier="backfill",
+                    source_strategy="search",
+                )
+            ],
+            started=started,
+            backfill_started=backfill_started,
+        )
+    )
+
+    results = await engine.discover(_build_profile(), limit=18)
+
+    assert started == ["search"]
+    assert backfill_started == []
+    assert len(results) == 12
+    assert all(item.candidate_tier == "primary" for item in results)
