@@ -453,6 +453,24 @@
       font-weight: 700;
     }
 
+    .pool-status {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.78);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .pool-status-line {
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--text-secondary);
+    }
+
     .recommendation-title {
       font-size: 16px;
       line-height: 1.45;
@@ -860,6 +878,11 @@
         <div class="recommendation-toolbar">
           <button id="refreshRecommendationsButton" class="action-button action-secondary" type="button">换一批</button>
           <span id="refreshRecommendationsStatus" class="toolbar-status" hidden>正在给你换一批…</span>
+        </div>
+        <div id="poolStatus" class="pool-status" hidden>
+          <p id="poolAvailable" class="pool-status-line">当前池子里还有 0 条可换</p>
+          <p id="poolReplenished" class="pool-status-line">刚补进 0 条新的</p>
+          <p id="poolTopics" class="pool-status-line">最近在补：还在继续摸你的口味</p>
         </div>
         <div id="emptyState" class="empty-state" hidden>
           <h3 id="emptyTitle">还没刷出新东西</h3>

@@ -25,6 +25,7 @@ class SupportsEventDatabase(Protocol):
     def get_latest_event_id(self) -> int: ...
     def count_recommendations(self) -> int: ...
     def count_unread_recommendations(self) -> int: ...
+    def count_pool_candidates(self) -> int: ...
     def get_notification_candidate(
         self,
         *,
@@ -71,6 +72,7 @@ class ContinuousRefreshController:
     notification_cooldown_hours: int = 2
     check_interval_seconds: int = 60
     discovery_limit: int = 18
+    pool_target_count: int = 30
     _manual_refresh_task: asyncio.Task[None] | None = None
     _manual_refresh_state: str = "idle"
     _manual_refresh_message: str = ""
@@ -110,6 +112,12 @@ class ContinuousRefreshController:
             "last_refresh_at": last_refresh_at,
             "last_notification_at": str(state.get("last_notification_at", "")),
             "unread_count": self.database.count_unread_recommendations(),
+            "pool_available_count": self.database.count_pool_candidates(),
+            "pool_target_count": self.pool_target_count,
+            "last_replenished_count": self._int_state_value(
+                state, "last_replenished_count"
+            ),
+            "recent_pool_topics": self._list_state_value(state, "recent_pool_topics"),
             "manual_refresh_state": self._manual_refresh_state,
             "manual_refresh_message": self._manual_refresh_message,
         }
@@ -121,14 +129,14 @@ class ContinuousRefreshController:
             return {"refreshed": False, "strategies": [], "reason": "not_initialized"}
 
         profile = await self.soul_engine.get_profile()
-        strategies = self._select_refresh_strategies(state)
-        if not strategies:
+        plan = self._build_refresh_plan(state)
+        if not plan:
             return {"refreshed": False, "strategies": [], "reason": "below_threshold"}
 
-        return await self._run_refresh(
+        return await self._run_refresh_plan(
             state=state,
             profile=profile,
-            strategies=strategies,
+            plan=plan,
             reason="triggered",
         )
 
@@ -139,11 +147,15 @@ class ContinuousRefreshController:
             return {"refreshed": False, "strategies": [], "reason": "not_initialized"}
 
         profile = await self.soul_engine.get_profile()
-        strategies = ["search", "related_chain", "trending", "explore"]
-        return await self._run_refresh(
+        plan = [
+            ["search", "related_chain"],
+            ["trending"],
+            ["explore"],
+        ]
+        return await self._run_refresh_plan(
             state=state,
             profile=profile,
-            strategies=strategies,
+            plan=plan,
             reason="manual",
         )
 
@@ -203,28 +215,32 @@ class ContinuousRefreshController:
             )
         )
 
-    def _select_refresh_strategies(self, state: dict[str, object]) -> list[str]:
-        strategies: list[str] = []
-        if self._pending_signal_events_count(state) >= self.signal_event_threshold:
-            strategies.extend(["search", "related_chain"])
+    def _build_refresh_plan(self, state: dict[str, object]) -> list[list[str]]:
+        pending_events = self._pending_signal_events_count(state)
+        pool_available = self.database.count_pool_candidates()
+        pool_below_target = pool_available < self.pool_target_count
+
+        if pool_below_target:
+            return [
+                ["search", "related_chain"],
+                ["trending"],
+                ["explore"],
+            ]
+
+        plan: list[list[str]] = []
+        if pending_events >= self.signal_event_threshold:
+            plan.append(["search", "related_chain"])
         if self._is_due(
             str(state.get("last_trending_refresh_at", "")),
             hours=self.trending_refresh_hours,
         ):
-            strategies.append("trending")
+            plan.append(["trending"])
         if self._is_due(
             str(state.get("last_explore_refresh_at", "")),
             hours=self.explore_refresh_hours,
         ):
-            strategies.append("explore")
-        seen: set[str] = set()
-        ordered: list[str] = []
-        for strategy in strategies:
-            if strategy in seen:
-                continue
-            seen.add(strategy)
-            ordered.append(strategy)
-        return ordered
+            plan.append(["explore"])
+        return plan
 
     async def refresh_after_event_ingest(self) -> dict[str, object]:
         """Opportunistically refresh after new events arrive."""
@@ -250,38 +266,59 @@ class ContinuousRefreshController:
         self._manual_refresh_message = "刚给你补了一批新的。"
         self._manual_refresh_finished_at = self._now().isoformat()
 
-    async def _run_refresh(
+    async def _run_refresh_plan(
         self,
         *,
         state: dict[str, object],
         profile: Any,
-        strategies: list[str],
+        plan: list[list[str]],
         reason: str,
     ) -> dict[str, object]:
-        discovered = await self.discovery_engine.discover(
-            profile,
-            strategies=strategies,
-            limit=self.discovery_limit,
-        )
+        before_pool_count = self.database.count_pool_candidates()
+        initial_pool_below_target = before_pool_count < self.pool_target_count
+        all_discovered: list[Any] = []
+        flattened_strategies: list[str] = []
+        replenished_topics: list[str] = []
+
+        for strategies in plan:
+            current_pool_count = self.database.count_pool_candidates()
+            if initial_pool_below_target and current_pool_count >= self.pool_target_count:
+                break
+
+            discovered = await self.discovery_engine.discover(
+                profile,
+                strategies=strategies,
+                limit=max(self.discovery_limit, self.pool_target_count - current_pool_count),
+            )
+            all_discovered.extend(discovered)
+            flattened_strategies.extend(strategies)
+
+            if discovered:
+                replenished_topics.extend(self._extract_topics(discovered))
+
         recommendations = await self.recommendation_engine.generate_recommendations(
-            discovered,
+            all_discovered or None,
             profile,
             limit=10,
         )
 
         now = self._now().isoformat()
         latest_event_id = self.database.get_latest_event_id()
-        if "search" in strategies or "related_chain" in strategies:
+        if "search" in flattened_strategies or "related_chain" in flattened_strategies:
             state["last_event_refresh_at"] = now
             state["last_processed_event_id"] = latest_event_id
-        if "trending" in strategies:
+        if "trending" in flattened_strategies:
             state["last_trending_refresh_at"] = now
-        if "explore" in strategies:
+        if "explore" in flattened_strategies:
             state["last_explore_refresh_at"] = now
+        after_pool_count = self.database.count_pool_candidates()
+        state["last_replenished_count"] = max(0, after_pool_count - before_pool_count)
+        if replenished_topics:
+            state["recent_pool_topics"] = self._dedupe_topics(replenished_topics)[:3]
         self.memory_manager.save_discovery_runtime_state(state)
         return {
-            "refreshed": True,
-            "strategies": strategies,
+            "refreshed": bool(flattened_strategies),
+            "strategies": flattened_strategies,
             "reason": reason,
             "recommendation_count": len(recommendations),
         }
@@ -327,3 +364,48 @@ class ContinuousRefreshController:
     @staticmethod
     def _now() -> datetime:
         return datetime.now()
+
+    @staticmethod
+    def _list_state_value(state: dict[str, object], key: str) -> list[str]:
+        raw_value = state.get(key, [])
+        if not isinstance(raw_value, list):
+            return []
+        return [str(item).strip() for item in raw_value if str(item).strip()]
+
+    @staticmethod
+    def _extract_topics(discovered: list[Any]) -> list[str]:
+        topics: list[str] = []
+        strategy_map = {
+            "search": "相近兴趣",
+            "related_chain": "相关推荐",
+            "trending": "站内热榜",
+            "explore": "跨圈探索",
+        }
+        for item in discovered:
+            tags: Any = (
+                item.get("tags", []) if isinstance(item, dict) else getattr(item, "tags", [])
+            )
+            if isinstance(tags, list):
+                for tag in tags:
+                    text = str(tag).strip()
+                    if text:
+                        topics.append(text)
+            if isinstance(item, dict):
+                source_strategy = str(item.get("source_strategy", "")).strip()
+            else:
+                source_strategy = str(getattr(item, "source_strategy", "")).strip()
+            if source_strategy:
+                topics.append(strategy_map.get(source_strategy, source_strategy))
+        return topics
+
+    @staticmethod
+    def _dedupe_topics(topics: list[str]) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for topic in topics:
+            text = topic.strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            ordered.append(text)
+        return ordered

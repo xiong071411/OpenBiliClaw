@@ -94,6 +94,7 @@ class SchedulerConfig:
 
     enabled: bool = True
     discovery_cron: str = "0 */4 * * *"
+    pool_target_count: int = 30
 
 
 @dataclass

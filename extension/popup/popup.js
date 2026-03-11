@@ -2,6 +2,7 @@ import {
   buildFeedbackPayload,
   buildVideoUrl,
   getConnectionBadgeState,
+  getPoolStatusSummary,
   getPopupState,
   getTabButtonState,
   normalizeProfileSummary,
@@ -38,6 +39,10 @@ const elements = {
   list: document.getElementById("recommendationList"),
   refreshRecommendationsButton: document.getElementById("refreshRecommendationsButton"),
   refreshRecommendationsStatus: document.getElementById("refreshRecommendationsStatus"),
+  poolStatus: document.getElementById("poolStatus"),
+  poolAvailable: document.getElementById("poolAvailable"),
+  poolReplenished: document.getElementById("poolReplenished"),
+  poolTopics: document.getElementById("poolTopics"),
   tabRecommend: document.getElementById("tabRecommend"),
   tabProfile: document.getElementById("tabProfile"),
   tabChat: document.getElementById("tabChat"),
@@ -132,6 +137,28 @@ function hideRecommendationEmptyState() {
   if (elements.emptyState instanceof HTMLElement) {
     elements.emptyState.hidden = true;
   }
+}
+
+function renderPoolStatus(runtimeStatus) {
+  if (
+    !(elements.poolStatus instanceof HTMLElement) ||
+    !(elements.poolAvailable instanceof HTMLElement) ||
+    !(elements.poolReplenished instanceof HTMLElement) ||
+    !(elements.poolTopics instanceof HTMLElement)
+  ) {
+    return;
+  }
+
+  const summary = getPoolStatusSummary(runtimeStatus);
+  if (summary == null) {
+    elements.poolStatus.hidden = true;
+    return;
+  }
+
+  elements.poolStatus.hidden = false;
+  elements.poolAvailable.textContent = summary.available;
+  elements.poolReplenished.textContent = summary.replenished;
+  elements.poolTopics.textContent = summary.topics;
 }
 
 function renderChipList(container, items, fallback) {
@@ -426,6 +453,7 @@ async function initializeRecommendations() {
   ]);
 
   state.runtimeStatus = runtimeResult.status === "fulfilled" ? runtimeResult.value : null;
+  renderPoolStatus(state.runtimeStatus);
 
   if (recommendationResult.status === "fulfilled") {
     state.recommendations = recommendationResult.value;
@@ -459,6 +487,7 @@ async function handleManualRefresh() {
     }
     state.recommendations = result.items;
     state.runtimeStatus = await fetchRuntimeStatus().catch(() => state.runtimeStatus);
+    renderPoolStatus(state.runtimeStatus);
     renderRecommendationState(
       getPopupState({
         online: state.online,

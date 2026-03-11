@@ -24,6 +24,7 @@
 | 9.2 画像更新 | ✅ | 反馈累计到阈值后会自动触发偏好层重分析与画像重建 |
 | 体验优化：动态“老B友”语气 | ✅ | 推荐文案不再固定套模板，而是根据画像、偏好和近期反馈动态调整信息密度、温度、梗感与直给程度 |
 | M106 候选池即时换一批 | ✅ | `content_cache` 现已作为 discovery pool 使用，popup 可秒级从池子里换一批新推荐 |
+| M107 候选池容量与状态展示 | ✅ | runtime 会按 `pool_target_count` 持续补货，popup 会展示可换数量、最近补货数量和补货方向 |
 
 ## 公开 API
 
@@ -67,6 +68,7 @@ items = await engine.reshuffle_recommendations(
 - 优先按 `candidate_tier`、`relevance_score` 和最近评分时间排序
 - 如果候选还没有朋友式 `expression`，会优先使用入池时生成的 `relevance_reason`
 - 命中候选后会立即写入 `recommendations` 表，并把对应池子项标记为 `shown`
+- runtime 会把 discovery pool 持续补到 `pool_target_count` 附近，保证 popup “换一批”尽量随时有货
 
 ### Recommendation
 

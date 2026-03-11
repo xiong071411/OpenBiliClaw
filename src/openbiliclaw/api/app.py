@@ -128,6 +128,7 @@ def create_app(
                 soul_engine=soul_engine,
                 discovery_engine=discovery_engine,
                 recommendation_engine=recommendation_engine,
+                pool_target_count=config.scheduler.pool_target_count,
             )
         if dialogue is None:
             dialogue = SocraticDialogue(

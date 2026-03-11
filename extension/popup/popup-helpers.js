@@ -80,8 +80,32 @@ export function normalizeRuntimeStatus(status) {
     last_refresh_at: normalizeText(status?.last_refresh_at),
     last_notification_at: normalizeText(status?.last_notification_at),
     unread_count: Number(status?.unread_count ?? 0),
+    pool_available_count: Number(status?.pool_available_count ?? 0),
+    pool_target_count: Number(status?.pool_target_count ?? 0),
+    last_replenished_count: Number(status?.last_replenished_count ?? 0),
+    recent_pool_topics: Array.isArray(status?.recent_pool_topics)
+      ? status.recent_pool_topics.map(normalizeText).filter(Boolean)
+      : [],
     manual_refresh_state: normalizeText(status?.manual_refresh_state) || "idle",
     manual_refresh_message: normalizeText(status?.manual_refresh_message),
+  };
+}
+
+export function getPoolStatusSummary(status) {
+  const runtime = normalizeRuntimeStatus(status);
+  if (!runtime.initialized) {
+    return null;
+  }
+  return {
+    available: `当前池子里还有 ${runtime.pool_available_count} 条可换`,
+    replenished:
+      runtime.last_replenished_count > 0
+        ? `刚补进 ${runtime.last_replenished_count} 条新的`
+        : "刚补进 0 条新的",
+    topics:
+      runtime.recent_pool_topics.length > 0
+        ? `最近在补：${runtime.recent_pool_topics.join(" / ")}`
+        : "最近在补：还在继续摸你的口味",
   };
 }
 
@@ -148,4 +172,30 @@ export function getPopupState({ online, items = [], error = null, runtimeStatus 
     items: normalizedItems,
     runtime,
   };
+}
+
+export function getManualRefreshResultMessage(result, finalStatus = null) {
+  if (result?.reason === "not_initialized") {
+    return "先执行 openbiliclaw init，再回来刷新。";
+  }
+
+  if (finalStatus?.manual_refresh_state === "failed") {
+    return finalStatus.manual_refresh_message || "这次补货没跑通，稍后再试。";
+  }
+
+  if (
+    result?.reason === "already_running" ||
+    finalStatus?.manual_refresh_state === "running"
+  ) {
+    return finalStatus?.manual_refresh_message || "已经在补货了，稍后会自动更新。";
+  }
+
+  if (
+    result?.state === "running" ||
+    finalStatus?.manual_refresh_state === "success"
+  ) {
+    return finalStatus?.manual_refresh_message || "刚给你补了一批新的。";
+  }
+
+  return "这次没接到补货任务，稍后再试。";
 }

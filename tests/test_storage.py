@@ -280,25 +280,31 @@ class TestDatabase:
                 relevance_score=0.93,
                 relevance_reason="这条已经被反馈过。",
             )
-            db.conn.execute(
-
-                    "UPDATE content_cache "
-                    "SET pool_status = 'shown', recommended_at = CURRENT_TIMESTAMP "
-                    "WHERE bvid = 'BV1SHOWN'"
-
+            db.cache_content(
+                "BV1REC",
+                title="已经进过推荐表",
+                up_name="UPD",
+                source="search",
+                relevance_score=0.89,
+                relevance_reason="这条已经生成过推荐。",
             )
             db.conn.execute(
-
-                    "UPDATE content_cache "
-                    "SET pool_status = 'feedbacked', feedback_type = 'dislike', "
-                    "feedback_at = CURRENT_TIMESTAMP WHERE bvid = 'BV1FB'"
-
+                "UPDATE content_cache "
+                "SET pool_status = 'shown', recommended_at = CURRENT_TIMESTAMP "
+                "WHERE bvid = 'BV1SHOWN'"
             )
+            db.conn.execute(
+                "UPDATE content_cache "
+                "SET pool_status = 'feedbacked', feedback_type = 'dislike', "
+                "feedback_at = CURRENT_TIMESTAMP WHERE bvid = 'BV1FB'"
+            )
+            db.insert_recommendation("BV1REC", confidence=0.6)
             db.conn.commit()
 
             items = db.get_pool_candidates(limit=10)
 
             assert [item["bvid"] for item in items] == ["BV1FRESH"]
+            assert db.count_pool_candidates() == 1
 
             db.close()
 

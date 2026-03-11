@@ -28,8 +28,9 @@ class _FakeMemoryManager:
 
 
 class _FakeDatabase:
-    def __init__(self, events: list[dict[str, object]]) -> None:
+    def __init__(self, events: list[dict[str, object]], *, pool_count: int = 30) -> None:
         self.events = events
+        self.pool_count = pool_count
         self.recommendations = [
             {"id": 1, "presented": 0},
             {"id": 2, "presented": 1},
@@ -57,6 +58,9 @@ class _FakeDatabase:
 
     def count_unread_recommendations(self) -> int:
         return sum(1 for row in self.recommendations if not int(row["presented"]))
+
+    def count_pool_candidates(self) -> int:
+        return self.pool_count
 
 
 class _FakeSoulEngine:
@@ -112,7 +116,8 @@ async def test_refresh_controller_triggers_event_refresh_when_signal_threshold_r
                 {"id": 4, "event_type": "favorite"},
                 {"id": 5, "event_type": "comment"},
                 {"id": 6, "event_type": "feedback"},
-            ]
+            ],
+            pool_count=30,
         ),
         soul_engine=_FakeSoulEngine(),
         discovery_engine=_FakeDiscoveryEngine(),
@@ -145,7 +150,8 @@ async def test_refresh_controller_skips_when_threshold_not_met() -> None:
             [
                 {"id": 1, "event_type": "view"},
                 {"id": 2, "event_type": "search"},
-            ]
+            ],
+            pool_count=30,
         ),
         soul_engine=_FakeSoulEngine(),
         discovery_engine=discovery,
@@ -179,7 +185,8 @@ async def test_force_refresh_runs_even_when_threshold_not_met() -> None:
             [
                 {"id": 1, "event_type": "view"},
                 {"id": 2, "event_type": "search"},
-            ]
+            ],
+            pool_count=30,
         ),
         soul_engine=_FakeSoulEngine(),
         discovery_engine=discovery,
@@ -192,7 +199,7 @@ async def test_force_refresh_runs_even_when_threshold_not_met() -> None:
 
     assert result["refreshed"] is True
     assert result["strategies"] == ["search", "related_chain", "trending", "explore"]
-    assert len(discovery.calls) == 1
+    assert len(discovery.calls) == 3
     assert len(recommendations.calls) == 1
 
 
@@ -217,7 +224,8 @@ async def test_refresh_controller_requests_discovery_with_backfill_limit() -> No
                 {"id": 4, "event_type": "favorite"},
                 {"id": 5, "event_type": "comment"},
                 {"id": 6, "event_type": "feedback"},
-            ]
+            ],
+            pool_count=30,
         ),
         soul_engine=_FakeSoulEngine(),
         discovery_engine=discovery,
@@ -229,6 +237,69 @@ async def test_refresh_controller_requests_discovery_with_backfill_limit() -> No
     await controller.refresh_if_needed()
 
     assert discovery.calls[0][2] == 18
+
+
+async def test_refresh_controller_replenishes_until_pool_reaches_target() -> None:
+    class GrowingDiscovery(_FakeDiscoveryEngine):
+        def __init__(self, database: _FakeDatabase) -> None:
+            super().__init__()
+            self.database = database
+
+        async def discover(
+            self,
+            profile: dict[str, object],
+            strategies: list[str] | None = None,
+            limit: int = 30,
+        ) -> list[dict[str, object]]:
+            self.calls.append((profile, strategies, limit))
+            current = strategies or []
+            if current == ["search", "related_chain"]:
+                self.database.pool_count += 4
+            elif current == ["trending"]:
+                self.database.pool_count += 3
+            elif current == ["explore"]:
+                self.database.pool_count += 5
+            return [
+                {
+                    "bvid": f"BV-{'+'.join(current)}",
+                    "relevance_score": 0.8,
+                    "source_strategy": current[-1] if current else "",
+                }
+            ]
+
+    database = _FakeDatabase(
+        [
+            {"id": 1, "event_type": "view"},
+            {"id": 2, "event_type": "search"},
+            {"id": 3, "event_type": "favorite"},
+            {"id": 4, "event_type": "comment"},
+            {"id": 5, "event_type": "feedback"},
+            {"id": 6, "event_type": "view"},
+        ],
+        pool_count=20,
+    )
+    discovery = GrowingDiscovery(database)
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=database,
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=discovery,
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=30,
+        trending_refresh_hours=999,
+        explore_refresh_hours=999,
+    )
+
+    result = await controller.refresh_if_needed()
+
+    assert result["refreshed"] is True
+    assert result["strategies"] == ["search", "related_chain", "trending", "explore"]
+    assert database.pool_count >= 30
+    status = controller.get_runtime_status()
+    assert status["pool_available_count"] == 32
+    assert status["pool_target_count"] == 30
+    assert status["last_replenished_count"] == 12
+    assert status["recent_pool_topics"] == ["相关推荐", "站内热榜", "跨圈探索"]
 
 
 async def test_trigger_manual_refresh_sets_running_state() -> None:
@@ -244,7 +315,7 @@ async def test_trigger_manual_refresh_sets_running_state() -> None:
 
     controller = ContinuousRefreshController(
         memory_manager=_FakeMemoryManager(),
-        database=_FakeDatabase([{"id": 1, "event_type": "view"}]),
+        database=_FakeDatabase([{"id": 1, "event_type": "view"}], pool_count=30),
         soul_engine=_FakeSoulEngine(),
         discovery_engine=SlowDiscovery(),
         recommendation_engine=_FakeRecommendationEngine(),

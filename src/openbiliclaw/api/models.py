@@ -71,6 +71,10 @@ class RuntimeStatusResponse(BaseModel):
     last_refresh_at: str = ""
     last_notification_at: str = ""
     unread_count: int
+    pool_available_count: int = 0
+    pool_target_count: int = 0
+    last_replenished_count: int = 0
+    recent_pool_topics: list[str] = Field(default_factory=list)
     manual_refresh_state: str = "idle"
     manual_refresh_message: str = ""
 

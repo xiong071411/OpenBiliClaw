@@ -334,6 +334,11 @@ class Database:
             FROM content_cache
             WHERE COALESCE(pool_status, 'fresh') = 'fresh'
               AND COALESCE(feedback_type, '') != 'dislike'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM recommendations AS r
+                WHERE r.bvid = content_cache.bvid
+              )
             ORDER BY
                 CASE candidate_tier WHEN 'primary' THEN 0 ELSE 1 END ASC,
                 relevance_score DESC,
@@ -345,6 +350,24 @@ class Database:
             (limit,),
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def count_pool_candidates(self) -> int:
+        """Return how many fresh candidates are immediately available for reshuffle."""
+        cursor = self.conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM content_cache
+            WHERE COALESCE(pool_status, 'fresh') = 'fresh'
+              AND COALESCE(feedback_type, '') != 'dislike'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM recommendations AS r
+                WHERE r.bvid = content_cache.bvid
+              )
+            """
+        )
+        row = cursor.fetchone()
+        return int(row["count"]) if row is not None else 0
 
     def mark_pool_items_shown(self, bvids: list[str]) -> None:
         """Mark discovery-pool items as already shown in recommendations."""

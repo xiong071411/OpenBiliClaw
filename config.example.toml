@@ -69,6 +69,8 @@ headed = false
 enabled = true
 # Cron expression for discovery task
 discovery_cron = "0 */4 * * *"  # Every 4 hours
+# Keep at least this many fresh candidates ready in the discovery pool
+pool_target_count = 30
 
 [storage]
 # SQLite database path

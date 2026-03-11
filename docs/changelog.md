@@ -6,6 +6,13 @@
 
 ## M8: 插件后端 API（进行中）
 
+### 候选池容量与状态展示 — `runtime/m107-pool-status-capacity`
+
+- `scheduler.pool_target_count` 现在可以控制 discovery pool 期望保有的可换候选数量，后台刷新器会持续补货直到池子接近目标
+- `runtime-status` 新增 `pool_available_count`、`pool_target_count`、`last_replenished_count`、`recent_pool_topics`
+- popup 推荐 tab 会展示“当前池子里还有多少条可换 / 刚补进多少条新的 / 最近主要在补什么”
+- discovery pool 查询现在会排除已经进入 `recommendations` 的内容，减少“换一批还是老面孔”的情况
+
 ### 插件侧边栏模式 — `extension-sidepanel`
 
 - 扩展入口从 `action.default_popup` 切到 `side_panel.default_path`，点击扩展图标时会优先打开侧边栏

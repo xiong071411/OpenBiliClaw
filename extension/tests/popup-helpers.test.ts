@@ -5,6 +5,7 @@ import {
   buildFeedbackPayload,
   buildVideoUrl,
   getConnectionBadgeState,
+  getPoolStatusSummary,
   getPopupState,
   getTabButtonState,
   normalizeRecommendation,
@@ -121,9 +122,30 @@ test("normalizeRuntimeStatus fills stable fallback fields", () => {
     last_refresh_at: "",
     last_notification_at: "",
     unread_count: 2,
+    pool_available_count: 0,
+    pool_target_count: 0,
+    last_replenished_count: 0,
+    recent_pool_topics: [],
     manual_refresh_state: "idle",
     manual_refresh_message: "",
   });
+});
+
+test("getPoolStatusSummary builds pool inventory copy", () => {
+  assert.deepEqual(
+    getPoolStatusSummary({
+      initialized: true,
+      pool_available_count: 28,
+      pool_target_count: 30,
+      last_replenished_count: 6,
+      recent_pool_topics: ["国际时事", "宏观经济", "纪录片"],
+    }),
+    {
+      available: "当前池子里还有 28 条可换",
+      replenished: "刚补进 6 条新的",
+      topics: "最近在补：国际时事 / 宏观经济 / 纪录片",
+    },
+  );
 });
 
 test("buildFeedbackPayload builds like and dislike payloads", () => {

@@ -115,6 +115,10 @@ class TestBackendAPI:
                     "last_refresh_at": "2026-03-10T12:00:00",
                     "last_notification_at": "2026-03-10T12:30:00",
                     "unread_count": 2,
+                    "pool_available_count": 28,
+                    "pool_target_count": 30,
+                    "last_replenished_count": 6,
+                    "recent_pool_topics": ["国际时事", "宏观经济", "纪录片"],
                 }
 
         app = create_app(
@@ -135,6 +139,10 @@ class TestBackendAPI:
             "last_refresh_at": "2026-03-10T12:00:00",
             "last_notification_at": "2026-03-10T12:30:00",
             "unread_count": 2,
+            "pool_available_count": 28,
+            "pool_target_count": 30,
+            "last_replenished_count": 6,
+            "recent_pool_topics": ["国际时事", "宏观经济", "纪录片"],
             "manual_refresh_state": "idle",
             "manual_refresh_message": "",
         }
