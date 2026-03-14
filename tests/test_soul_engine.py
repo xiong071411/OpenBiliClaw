@@ -296,6 +296,10 @@ def test_record_immediate_feedback_cognition_adds_comment_update(tmp_path: Path)
     assert len(updates) == 1
     assert updates[0]["kind"] == "profile_shift"
     assert "这个方向对" in str(updates[0]["summary"])
+    assert "更明确" in str(updates[0]["impact"])
+    assert "单条明确反馈" in str(updates[0]["reasoning"])
+    assert "这个方向对，但希望更深入一点。" in str(updates[0]["evidence"])
+    assert updates[0]["source"] == "feedback"
 
 
 def test_record_immediate_feedback_cognition_adds_dislike_update(tmp_path: Path) -> None:
@@ -313,6 +317,10 @@ def test_record_immediate_feedback_cognition_adds_dislike_update(tmp_path: Path)
     assert len(updates) == 1
     assert updates[0]["kind"] == "dislike_added"
     assert "宏大叙事热榜内容" in str(updates[0]["summary"])
+    assert "避雷" in str(updates[0]["impact"])
+    assert "明确负反馈" in str(updates[0]["reasoning"])
+    assert "太浅了" in str(updates[0]["evidence"])
+    assert updates[0]["source"] == "feedback"
 
 
 def test_record_immediate_feedback_cognition_skips_like(tmp_path: Path) -> None:
@@ -452,6 +460,11 @@ async def test_learn_from_dialogue_records_immediate_cognition_for_strong_single
     assert len(cognition_updates) == 1
     assert cognition_updates[0]["kind"] == "profile_shift"
     assert "因果链" in str(cognition_updates[0]["summary"])
+    assert "更靠前" in str(cognition_updates[0]["impact"])
+    assert "聊天里主动提到" in str(cognition_updates[0]["reasoning"])
+    assert "我最近更想知道国际新闻到底是怎么一步步走成现在这样的。" in str(
+        cognition_updates[0]["evidence"]
+    )
 
 
 @pytest.mark.asyncio
@@ -700,3 +713,7 @@ async def test_process_feedback_batch_rebuilds_profile_when_preference_changes_s
     kinds = {str(item["kind"]) for item in cognition_updates}
     assert "dislike_added" in kinds
     assert "profile_shift" in kinds
+    profile_shift = next(item for item in cognition_updates if str(item["kind"]) == "profile_shift")
+    assert "画像里" in str(profile_shift["impact"])
+    assert "重复出现" in str(profile_shift["reasoning"])
+    assert "纪录片" in str(profile_shift["evidence"])
