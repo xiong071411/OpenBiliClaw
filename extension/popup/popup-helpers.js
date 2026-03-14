@@ -88,15 +88,22 @@ export function normalizeCognitionUpdateCard(item) {
       expandable: false,
     };
   }
+  const impact = normalizeText(item?.impact);
+  const reasoning = normalizeText(item?.reasoning);
+  const evidence = normalizeText(item?.evidence);
   return {
     summary: normalizeText(item?.summary),
-    impact: normalizeText(item?.impact),
-    reasoning: normalizeText(item?.reasoning),
-    evidence: normalizeText(item?.evidence),
+    impact,
+    reasoning,
+    evidence,
     source: normalizeText(item?.source),
     created_at: normalizeText(item?.created_at),
-    expandable: true,
+    expandable: Boolean(impact || reasoning || evidence),
   };
+}
+
+export function getNextExpandedCognitionIndex(currentIndex, clickedIndex) {
+  return currentIndex === clickedIndex ? null : clickedIndex;
 }
 
 export function normalizeProfileSummary(summary) {

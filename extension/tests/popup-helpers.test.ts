@@ -8,6 +8,7 @@ import {
   getCommentSubmitUiState,
   getConnectionBadgeState,
   getHintBannerState,
+  getNextExpandedCognitionIndex,
   normalizeCognitionUpdateCard,
   getRealtimePoolStatusSummary,
   getPoolStatusSummary,
@@ -457,6 +458,12 @@ test("normalizeCognitionUpdateCard falls back cleanly for legacy summary-only it
       expandable: true,
     },
   );
+});
+
+test("getNextExpandedCognitionIndex toggles the same card and switches across cards", () => {
+  assert.equal(getNextExpandedCognitionIndex(null, 0), 0);
+  assert.equal(getNextExpandedCognitionIndex(0, 0), null);
+  assert.equal(getNextExpandedCognitionIndex(0, 2), 2);
 });
 
 test("normalizeProfileSummary keeps the newer low-roleplay fallback copy", () => {

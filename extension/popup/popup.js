@@ -4,6 +4,7 @@ import {
   buildVideoUrl,
   getCommentSubmitUiState,
   getConnectionBadgeState,
+  getNextExpandedCognitionIndex,
   getHintBannerState,
   getRealtimePoolStatusSummary,
   getPoolStatusSummary,
@@ -34,6 +35,7 @@ const state = {
   recommendations: [],
   profile: null,
   profileLoaded: false,
+  expandedCognitionIndex: null,
   runtimeStatus: null,
   runtimeEvent: null,
   activityFeed: null,
@@ -303,6 +305,93 @@ function renderChipList(container, items, fallback) {
   }
 }
 
+function renderCognitionCards(container, items, fallback) {
+  if (!(container instanceof HTMLElement)) {
+    return;
+  }
+  container.replaceChildren();
+
+  if (items.length === 0) {
+    const fallbackCard = document.createElement("div");
+    fallbackCard.className = "cognition-card is-fallback";
+
+    const summary = document.createElement("p");
+    summary.className = "cognition-summary";
+    summary.textContent = fallback;
+
+    fallbackCard.append(summary);
+    container.append(fallbackCard);
+    return;
+  }
+
+  for (const [index, item] of items.entries()) {
+    const card = document.createElement("article");
+    const isExpanded = state.expandedCognitionIndex === index && item.expandable;
+    card.className = `cognition-card${isExpanded ? " is-expanded" : ""}`;
+
+    const summaryButton = document.createElement(item.expandable ? "button" : "div");
+    summaryButton.className = "cognition-toggle";
+    if (summaryButton instanceof HTMLButtonElement) {
+      summaryButton.type = "button";
+      summaryButton.setAttribute("aria-expanded", String(isExpanded));
+      summaryButton.addEventListener("click", () => {
+        state.expandedCognitionIndex = getNextExpandedCognitionIndex(
+          state.expandedCognitionIndex,
+          index,
+        );
+        renderCognitionCards(container, items, fallback);
+      });
+    }
+
+    const header = document.createElement("div");
+    header.className = "cognition-header";
+
+    const summaryText = document.createElement("p");
+    summaryText.className = "cognition-summary";
+    summaryText.textContent = item.summary;
+
+    const meta = document.createElement("span");
+    meta.className = "cognition-meta";
+    meta.textContent = item.source || "画像观察";
+
+    header.append(summaryText, meta);
+    summaryButton.append(header);
+    card.append(summaryButton);
+
+    if (item.expandable) {
+      const details = document.createElement("div");
+      details.className = "cognition-details";
+      details.hidden = !isExpanded;
+
+      const detailRows = [
+        ["这对画像的影响", item.impact],
+        ["为什么这么判断", item.reasoning],
+        ["这次依据", item.evidence],
+      ].filter(([, value]) => value);
+
+      for (const [label, value] of detailRows) {
+        const row = document.createElement("div");
+        row.className = "cognition-detail";
+
+        const labelEl = document.createElement("h4");
+        labelEl.className = "cognition-detail-label";
+        labelEl.textContent = label;
+
+        const valueEl = document.createElement("p");
+        valueEl.className = "cognition-detail-value";
+        valueEl.textContent = value;
+
+        row.append(labelEl, valueEl);
+        details.append(row);
+      }
+
+      card.append(details);
+    }
+
+    container.append(card);
+  }
+}
+
 function renderProfileSummary(summary) {
   if (
     !(elements.profileEmpty instanceof HTMLElement) ||
@@ -328,7 +417,7 @@ function renderProfileSummary(summary) {
   renderChipList(elements.profileTraits, summary.core_traits, "这部分还在慢慢补");
   renderChipList(elements.profileNeeds, summary.deep_needs, "这块还要再多看一点");
   renderChipList(elements.profileInterests, summary.top_interests, "再刷一阵，这里会更准");
-  renderChipList(
+  renderCognitionCards(
     elements.profileRecentMemory,
     summary.recent_cognition_updates,
     "阿B 还在继续观察，过一阵这里会更具体。",
@@ -617,8 +706,10 @@ async function loadProfileSummary({ force = false } = {}) {
   try {
     const summary = await fetchProfileSummary();
     state.profile = normalizeProfileSummary(summary);
+    state.expandedCognitionIndex = null;
   } catch {
     state.profile = normalizeProfileSummary({ initialized: false });
+    state.expandedCognitionIndex = null;
   }
   state.profileLoaded = true;
   renderProfileSummary(state.profile);
