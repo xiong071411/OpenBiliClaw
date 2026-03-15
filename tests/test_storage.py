@@ -387,6 +387,39 @@ class TestDatabase:
 
             db.close()
 
+    def test_get_pool_candidates_skips_recently_viewed_bvids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            db.cache_content(
+                "BV1FRESH",
+                title="新鲜候选",
+                up_name="UPA",
+                source="search",
+                relevance_score=0.91,
+            )
+            db.cache_content(
+                "BV1SEEN",
+                title="已经看过",
+                up_name="UPB",
+                source="search",
+                relevance_score=0.95,
+            )
+            db.insert_event(
+                "view",
+                title="已经看过",
+                url="https://www.bilibili.com/video/BV1SEEN",
+                metadata={"bvid": "BV1SEEN"},
+            )
+
+            items = db.get_pool_candidates(limit=10)
+
+            assert [item["bvid"] for item in items] == ["BV1FRESH"]
+            assert db.count_pool_candidates() == 1
+
+            db.close()
+
     def test_insert_and_get_recommendations(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db = Database(Path(tmpdir) / "test.db")

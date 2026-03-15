@@ -226,6 +226,42 @@ async def test_generate_recommendations_does_not_repeat_history() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_recommendations_skips_recently_viewed_content() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+        db.cache_content(
+            "BV1SEEN",
+            title="已经看过的内容",
+            up_name="UPA",
+            source="search",
+            relevance_score=0.97,
+        )
+        db.cache_content(
+            "BV1NEW",
+            title="还没看过",
+            up_name="UPB",
+            source="search",
+            relevance_score=0.82,
+        )
+        db.insert_event(
+            "view",
+            title="已经看过的内容",
+            url="https://www.bilibili.com/video/BV1SEEN",
+            metadata={"bvid": "BV1SEEN"},
+        )
+        engine = RecommendationEngine(llm=_DummyLLM(), database=db)
+
+        recommendations = await engine.generate_recommendations(
+            discovered=None,
+            profile=_build_profile(),
+            limit=1,
+        )
+
+        assert [item.content.bvid for item in recommendations] == ["BV1NEW"]
+
+
+@pytest.mark.asyncio
 async def test_generate_recommendations_populates_expression_and_updates_history() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db = Database(Path(tmpdir) / "test.db")
@@ -363,6 +399,43 @@ async def test_reshuffle_recommendations_uses_pool_reason_without_waiting_expres
 
         history = db.get_recommendations(limit=10)
         assert history[0]["expression"] == "这条会对上你最近那股想把来龙去脉搞明白的劲头。"
+
+
+@pytest.mark.asyncio
+async def test_reshuffle_recommendations_skips_recently_viewed_content() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+        db.cache_content(
+            "BV1SEEN",
+            title="已经看过的地缘政治分析",
+            up_name="观察站",
+            source="search",
+            relevance_score=0.93,
+            relevance_reason="这条本来很像你会点开的内容。",
+        )
+        db.cache_content(
+            "BV1NEW",
+            title="还没看过的纪录片",
+            up_name="纪录片研究所",
+            source="explore",
+            relevance_score=0.88,
+            relevance_reason="这条会接住你喜欢从细节里看结构的状态。",
+        )
+        db.insert_event(
+            "view",
+            title="已经看过的地缘政治分析",
+            url="https://www.bilibili.com/video/BV1SEEN",
+            metadata={"bvid": "BV1SEEN"},
+        )
+        engine = RecommendationEngine(llm=_DummyLLM(), database=db)
+
+        recommendations = await engine.reshuffle_recommendations(
+            profile=_build_profile(),
+            limit=1,
+        )
+
+        assert [item.content.bvid for item in recommendations] == ["BV1NEW"]
 
 
 @pytest.mark.asyncio

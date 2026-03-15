@@ -6,7 +6,9 @@ content cache, and recommendation history.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -18,6 +20,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 _LOCK_RETRY_ATTEMPTS = 5
 _LOCK_RETRY_SLEEP_SECONDS = 0.1
+_BVID_PATTERN = re.compile(r"(BV[0-9A-Za-z]+)")
 
 # Schema version for migrations
 _SCHEMA_VERSION = 2
@@ -357,9 +360,10 @@ class Database:
                 c.bvid ASC
             LIMIT ?
             """,
-            (limit,),
+            (max(limit * 5, 50),),
         )
-        return [dict(row) for row in cursor.fetchall()]
+        rows = [dict(row) for row in cursor.fetchall()]
+        return self._exclude_viewed_rows(rows, self.get_recent_viewed_bvids(), limit=limit)
 
     def get_pool_candidates(self, limit: int = 20) -> list[dict[str, Any]]:
         """Get fresh recommendation candidates directly from the discovery pool."""
@@ -382,15 +386,16 @@ class Database:
                 bvid ASC
             LIMIT ?
             """,
-            (limit,),
+            (max(limit * 5, 50),),
         )
-        return [dict(row) for row in cursor.fetchall()]
+        rows = [dict(row) for row in cursor.fetchall()]
+        return self._exclude_viewed_rows(rows, self.get_recent_viewed_bvids(), limit=limit)
 
     def count_pool_candidates(self) -> int:
         """Return how many fresh candidates are immediately available for reshuffle."""
         cursor = self.conn.execute(
             """
-            SELECT COUNT(*) AS count
+            SELECT bvid
             FROM content_cache
             WHERE COALESCE(pool_status, 'fresh') = 'fresh'
               AND COALESCE(feedback_type, '') != 'dislike'
@@ -401,8 +406,31 @@ class Database:
               )
             """
         )
-        row = cursor.fetchone()
-        return int(row["count"]) if row is not None else 0
+        viewed_bvids = self.get_recent_viewed_bvids()
+        return sum(
+            1
+            for row in cursor.fetchall()
+            if str(row["bvid"]).strip() and str(row["bvid"]).strip() not in viewed_bvids
+        )
+
+    def get_recent_viewed_bvids(self, limit: int = 2000) -> set[str]:
+        """Return recently viewed BVIDs from view events."""
+        cursor = self.conn.execute(
+            """
+            SELECT url, metadata
+            FROM events
+            WHERE event_type = 'view'
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        viewed_bvids: set[str] = set()
+        for row in cursor.fetchall():
+            bvid = self._extract_bvid_from_view_event(dict(row))
+            if bvid:
+                viewed_bvids.add(bvid)
+        return viewed_bvids
 
     def mark_pool_items_shown(self, bvids: list[str]) -> None:
         """Mark discovery-pool items as already shown in recommendations."""
@@ -701,3 +729,36 @@ class Database:
             self.conn.execute(
                 "ALTER TABLE content_cache ADD COLUMN style_key TEXT DEFAULT ''"
             )
+
+    @staticmethod
+    def _extract_bvid_from_view_event(row: dict[str, Any]) -> str:
+        metadata_raw = row.get("metadata", "")
+        if isinstance(metadata_raw, str) and metadata_raw:
+            try:
+                metadata = json.loads(metadata_raw)
+            except json.JSONDecodeError:
+                metadata = {}
+            if isinstance(metadata, dict):
+                bvid = str(metadata.get("bvid", "")).strip()
+                if bvid:
+                    return bvid
+
+        url = str(row.get("url", "")).strip()
+        match = _BVID_PATTERN.search(url)
+        if match:
+            return match.group(1)
+        return ""
+
+    @staticmethod
+    def _exclude_viewed_rows(
+        rows: list[dict[str, Any]],
+        viewed_bvids: set[str],
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if not viewed_bvids:
+            return rows[:limit]
+        filtered = [
+            row for row in rows if str(row.get("bvid", "")).strip() not in viewed_bvids
+        ]
+        return filtered[:limit]

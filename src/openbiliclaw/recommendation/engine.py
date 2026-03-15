@@ -99,6 +99,7 @@ class RecommendationEngine:
             if discovered is not None
             else self._load_unrecommended_content(limit=max(limit * 3, 20))
         )
+        candidates = self._exclude_recently_viewed(candidates)
         ranked = self._select_diversified_batch(candidates, limit=limit)
 
         recommendations = [
@@ -140,6 +141,7 @@ class RecommendationEngine:
         expression generation and falls back to pool relevance reasons.
         """
         candidates = self._load_pool_candidates(limit=max(limit * 3, 20))
+        candidates = self._exclude_recently_viewed(candidates)
         ranked = self._select_diversified_batch(candidates, limit=limit)
         recommendations: list[Recommendation] = []
         shown_bvids: list[str] = []
@@ -470,6 +472,15 @@ class RecommendationEngine:
             )
             for row in rows
         ]
+
+    def _exclude_recently_viewed(
+        self,
+        candidates: list[DiscoveredContent],
+    ) -> list[DiscoveredContent]:
+        viewed_bvids = self._database.get_recent_viewed_bvids()
+        if not viewed_bvids:
+            return candidates
+        return [item for item in candidates if item.bvid not in viewed_bvids]
 
     @staticmethod
     def _parse_tags(value: object) -> list[str]:
