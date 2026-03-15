@@ -330,7 +330,7 @@ def test_record_immediate_feedback_cognition_adds_dislike_update(tmp_path: Path)
     assert updates[0]["expand_hint"] == "expandable"
 
 
-def test_record_immediate_feedback_cognition_skips_like(tmp_path: Path) -> None:
+def test_record_immediate_feedback_cognition_adds_like_update(tmp_path: Path) -> None:
     memory = MemoryManager(tmp_path)
     memory.initialize()
     engine = SoulEngine(llm=FakeRegistry("{}"), memory=memory)
@@ -341,7 +341,17 @@ def test_record_immediate_feedback_cognition_skips_like(tmp_path: Path) -> None:
         note="这条不错",
     )
 
-    assert memory.load_cognition_updates() == []
+    updates = memory.load_cognition_updates()
+    assert len(updates) == 1
+    assert updates[0]["kind"] == "interest_added"
+    assert "讲透城市与建筑" in str(updates[0]["summary"])
+    assert "偏好会更明确" in str(updates[0]["impact"])
+    assert "明确正反馈" in str(updates[0]["reasoning"])
+    assert "这条不错" in str(updates[0]["evidence"])
+    assert updates[0]["source"] == "feedback"
+    assert updates[0]["context_line"] == "来自：《讲透城市与建筑》"
+    assert updates[0]["source_label"] == "推荐反馈"
+    assert updates[0]["expand_hint"] == "expandable"
 
 
 @pytest.mark.asyncio

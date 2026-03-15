@@ -126,3 +126,61 @@ cp config.example.toml config.toml
 | `OPENBILICLAW_BILIBILI_COOKIE` | 集成测试用 B 站 Cookie |
 | `GOOGLE_API_KEY` | Gemini 官方推荐 API Key 环境变量，优先级高于 `GEMINI_API_KEY` |
 | `GEMINI_API_KEY` | Gemini 官方兼容环境变量，`default_provider=gemini` 时可替代 `llm.gemini.api_key` |
+| `OPENBILICLAW_PROXY_HOST` | Docker 运行时可选宿主机代理地址，默认 `host.docker.internal` |
+| `OPENBILICLAW_PROXY_PORT` | Docker 运行时可选宿主机代理端口，默认 `7897` |
+| `OPENBILICLAW_PROXY_TIMEOUT` | Docker 运行时代理探测超时（秒），默认 `1.0` |
+
+## Docker 部署说明
+
+使用仓库根目录下的 `docker-compose.yml` 时，默认会挂载：
+
+- `openbiliclaw_config -> /app/runtime`
+- `openbiliclaw_data -> /app/runtime/data`
+- `openbiliclaw_logs -> /app/runtime/logs`
+
+这意味着：
+
+- 容器启动前不需要宿主机准备 `config.toml`
+- 首次启动时会自动在 volume 中生成 `/app/runtime/config.toml`
+- `data/` 会持久化 SQLite、画像、Cookie 和运行态文件
+- `logs/` 会持久化后端日志，便于排查服务器问题
+- 容器内运行时会把 `/app/runtime` 视为项目根目录，因此 `config-show` 中看到的路径应为 `/app/runtime/config.toml` 和 `/app/runtime/data`
+- 容器启动时会自动尝试探测 `host.docker.internal:$OPENBILICLAW_PROXY_PORT`；可达时自动注入代理，不可达时直接回退直连
+
+如果你修改了 `[general].data_dir` 或 `[logging].directory` 为自定义绝对路径，需要同步调整 Docker volume 的挂载目标路径。
+
+### Docker 最小配置示例
+
+```toml
+[general]
+language = "zh"
+data_dir = "data"
+
+[llm]
+default_provider = "openai"
+
+[llm.openai]
+api_key = "sk-..."
+model = "gpt-4o"
+
+[bilibili]
+auth_method = "cookie"
+cookie = ""
+```
+
+建议：
+
+- Docker 模式下的首选入口是 `docker exec -it openbiliclaw-backend openbiliclaw init`
+- 如果缺少 provider API Key 或 B 站 Cookie，`init` 会直接在终端里引导并写回 Docker volume
+- provider 和 API Key 会写入 `/app/runtime/config.toml`
+- B 站 cookie 会写入 `/app/runtime/data/bilibili_cookie.json`
+- 如不方便交互，可使用 `docker exec openbiliclaw-backend openbiliclaw auth login --cookie "..."`
+
+补充：
+
+- `docker compose up -d`、`build`、`down` 这类生命周期命令仍建议在项目目录执行
+- 如果不在项目目录，可以显式传 `-f /path/to/docker-compose.yml`
+- 如果你使用 Clash Verge 一类本机代理，并且对 Docker 暴露了 HTTP 代理端口，容器无需手动写 `HTTP_PROXY`
+- 非交互终端不会进入引导；服务器脚本、CI 或批量部署仍需预置 `config.toml` 和 Cookie
+- 如需手动编辑容器内配置，可使用 `docker cp` 导出 `/app/runtime/config.toml`，修改后再复制回去
+- 如需彻底清空 Docker 内状态，可执行 `docker compose down -v`

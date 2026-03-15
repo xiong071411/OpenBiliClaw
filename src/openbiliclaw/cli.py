@@ -6,6 +6,7 @@ Provides the command-line entry point using Typer.
 from __future__ import annotations
 
 import asyncio
+import sys
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
@@ -393,6 +394,20 @@ def _print_browser_status(browser: Any) -> None:
 
 def _require_runtime_config() -> None:
     """Exit with a clear message when runtime config is incomplete."""
+    error = _load_runtime_config_error()
+    if error is not None:
+        raise typer.Exit(code=1)
+
+
+def _print_runtime_config_error(error: str, hints: list[str] | None = None) -> None:
+    """Render runtime config errors consistently."""
+    console.print("[bold red]配置错误[/bold red]")
+    _print_config_guidance(hints or [])
+    console.print(f"  {error}")
+
+
+def _load_runtime_config_error(*, render: bool = True) -> str | None:
+    """Return a user-facing runtime config error and optionally print guidance."""
     from openbiliclaw.config import (
         ConfigError,
         load_config_with_diagnostics,
@@ -403,27 +418,126 @@ def _require_runtime_config() -> None:
     try:
         validate_runtime_config(config)
     except ConfigError as exc:
-        console.print("[bold red]配置错误[/bold red]")
         hints = diagnostics.messages + [
             f"{issue.field}: {issue.message}" for issue in diagnostics.issues
         ]
-        _print_config_guidance(hints)
-        console.print(f"  {exc}")
-        raise typer.Exit(code=1) from exc
+        if render:
+            _print_runtime_config_error(str(exc), hints)
+        return str(exc)
+    return None
+
+
+def _is_interactive_terminal() -> bool:
+    """Return whether the current process is attached to an interactive TTY."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _save_runtime_provider_config(provider: str, api_key: str) -> None:
+    """Persist the selected provider and API key to runtime config.toml."""
+    from openbiliclaw.config import load_config_with_diagnostics, save_config
+
+    config, diagnostics = load_config_with_diagnostics()
+    config.llm.default_provider = provider
+    provider_config = getattr(config.llm, provider)
+    if hasattr(provider_config, "api_key"):
+        provider_config.api_key = api_key.strip()
+    save_config(config, diagnostics.config_path)
+
+
+def _interactive_runtime_config_setup() -> None:
+    """Guide the user through missing LLM config before init."""
+    supported_providers = ["openai", "claude", "gemini", "deepseek", "ollama", "openrouter"]
+    _print_page_title("初始化前配置引导", "补齐 LLM 运行时配置")
+    console.print("支持的默认 provider: " + ", ".join(supported_providers))
+
+    while True:
+        provider = typer.prompt("请选择默认 LLM provider", default="gemini").strip().lower()
+        if provider not in supported_providers:
+            console.print("[bold red]不支持的 provider[/bold red]")
+            continue
+
+        api_key = ""
+        if provider != "ollama":
+            api_key = typer.prompt(
+                f"请输入 {provider} API Key",
+                prompt_suffix=": ",
+                hide_input=True,
+            )
+        _save_runtime_provider_config(provider, api_key)
+        error = _load_runtime_config_error()
+        if error is None:
+            return
+        console.print("[bold yellow]刚写入的配置仍不完整，请重新输入。[/bold yellow]")
+
+
+def _interactive_auth_setup(auth_manager: Any) -> Any:
+    """Guide the user through Bilibili auth before init."""
+    _print_page_title("初始化前认证引导", "补齐 B 站认证")
+    while True:
+        cookie_value = typer.prompt("请输入 B 站 Cookie", prompt_suffix=": ")
+        status = asyncio.run(auth_manager.validate_cookie(cookie_value))
+        if status.authenticated:
+            auth_manager.set_cookie(cookie_value)
+            console.print("[bold green]登录成功[/bold green]")
+            _print_auth_status(status)
+            return status
+
+        console.print("[bold red]认证失败[/bold red]")
+        _print_auth_status(status)
+        if not typer.confirm("Cookie 无效，是否重试？", default=True):
+            raise typer.Exit(code=1)
+
+
+def _prepare_init_runtime() -> Any:
+    """Ensure runtime config and auth are ready before init proceeds."""
+    error = _load_runtime_config_error(render=False)
+    if error is not None:
+        if not _is_interactive_terminal():
+            _print_runtime_config_error(error)
+            raise typer.Exit(code=1)
+        _interactive_runtime_config_setup()
+
+    auth_manager = _build_auth_manager()
+    status = asyncio.run(auth_manager.get_status())
+    if status.authenticated:
+        return status
+    if not _is_interactive_terminal():
+        console.print("[bold red]认证失败[/bold red]")
+        console.print("请先执行 `openbiliclaw auth login` 完成 B 站认证。")
+        raise typer.Exit(code=1)
+    return _interactive_auth_setup(auth_manager)
 
 
 @app.command()
-def start() -> None:
+def start(
+    host: str = typer.Option("127.0.0.1", "--host", help="API 监听地址"),
+    port: int = typer.Option(8420, "--port", min=1, max=65535, help="API 监听端口"),
+) -> None:
     """启动 OpenBiliClaw Agent."""
     _print_page_title("启动 OpenBiliClaw", "本地 API 服务")
     _ensure_runtime_database_healthy()
     _print_status_panel(
         "info",
         "API 服务",
-        "正在启动本地后端，默认监听 127.0.0.1:8420。",
+        f"正在启动本地后端，当前监听 {host}:{port}。",
     )
     _maybe_create_runtime_database_backup()
-    _run_api_server(host="127.0.0.1", port=8420)
+    _run_api_server(host=host, port=port)
+
+
+@app.command("serve-api")
+def serve_api(
+    host: str = typer.Option("0.0.0.0", "--host", help="API 监听地址"),
+    port: int = typer.Option(8420, "--port", min=1, max=65535, help="API 监听端口"),
+) -> None:
+    """启动容器友好的 API 服务入口."""
+    _print_page_title("启动 OpenBiliClaw", "容器 API 服务")
+    _print_status_panel(
+        "info",
+        "API 服务",
+        f"正在启动容器友好的后端入口，当前监听 {host}:{port}。",
+    )
+    _run_api_server(host=host, port=port)
 
 
 @app.command("db-repair")
@@ -444,13 +558,7 @@ def db_repair() -> None:
 @app.command()
 def init() -> None:
     """首次运行：拉取历史、生成画像并自动执行一次内容发现."""
-    _require_runtime_config()
-    auth_manager = _build_auth_manager()
-    status = asyncio.run(auth_manager.get_status())
-    if not status.authenticated:
-        console.print("[bold red]认证失败[/bold red]")
-        console.print("请先执行 `openbiliclaw auth login` 完成 B 站认证。")
-        raise typer.Exit(code=1)
+    _prepare_init_runtime()
 
     client = _build_bilibili_client()
     memory = _build_memory_manager()

@@ -390,6 +390,15 @@ class SoulEngine:
                 reasoning = "这是一次明确负反馈，先把这个方向记成近期避雷。"
                 evidence = note_text or title.strip()
                 context_line = self._build_feedback_context_line(title)
+        elif normalized_feedback == "like":
+            title_text = title.strip()
+            if title_text:
+                kind = "interest_added"
+                summary = f"阿B 记住了：像《{title_text}》这一路你大概率会继续想看。"
+                impact = "画像里对这类方向的偏好会更明确，后面会更愿意继续补。"
+                reasoning = "这是一次明确正反馈，先把这个方向记成近期偏好强化。"
+                evidence = note.strip() or title_text
+                context_line = self._build_feedback_context_line(title)
         else:
             return
 

@@ -15,6 +15,7 @@ from openbiliclaw.config import (
     _build_config,
     load_config,
     load_config_with_diagnostics,
+    save_config,
     validate_runtime_config,
 )
 
@@ -143,6 +144,34 @@ def test_load_config_with_diagnostics_creates_config_file(
     ) in diagnostics.issues
 
 
+def test_load_config_prefers_current_working_directory_for_default_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config_module, "_PROJECT_ROOT", Path("/usr/local/lib/python3.11"))
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        """
+[general]
+language = "en"
+data_dir = "runtime-data"
+
+[llm]
+default_provider = "ollama"
+
+[llm.ollama]
+model = "llama3"
+base_url = "http://localhost:11434"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config, diagnostics = load_config_with_diagnostics(ensure_default_file=False)
+
+    assert config.language == "en"
+    assert config.data_path == tmp_path / "runtime-data"
+    assert diagnostics.config_path == tmp_path / "config.toml"
+
+
 def test_validate_runtime_config_requires_api_key_for_default_provider() -> None:
     config = Config(
         llm=LLMConfig(
@@ -266,3 +295,22 @@ def test_build_config_supports_account_sync_interval() -> None:
     )
 
     assert config.scheduler.account_sync_interval_hours == 12
+
+
+def test_save_config_round_trips_runtime_changes(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config = Config()
+    config.language = "en"
+    config.data_dir = "runtime-data"
+    config.llm.default_provider = "gemini"
+    config.llm.gemini.api_key = "gemini-test-key"
+    config.llm.gemini.model = "gemini-2.5-flash"
+
+    save_config(config, config_path)
+    loaded = load_config(config_path)
+
+    assert loaded.language == "en"
+    assert loaded.data_dir == "runtime-data"
+    assert loaded.llm.default_provider == "gemini"
+    assert loaded.llm.gemini.api_key == "gemini-test-key"
+    assert loaded.llm.gemini.model == "gemini-2.5-flash"

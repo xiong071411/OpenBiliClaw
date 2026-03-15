@@ -15,6 +15,7 @@ from typing import Any
 # Default config search paths
 _CONFIG_FILENAMES = ["config.toml", "config.local.toml"]
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT_ENV = "OPENBILICLAW_PROJECT_ROOT"
 _SUPPORTED_AUTH_METHODS = {"cookie", "qrcode", "none"}
 _REMOTE_PROVIDER_FIELDS = {
     "openai": "llm.openai.api_key",
@@ -119,7 +120,7 @@ class LoggingConfig:
         """Resolved log directory path."""
         path = Path(self.directory)
         if not path.is_absolute():
-            path = _PROJECT_ROOT / path
+            path = _project_root() / path
         return path
 
     @property
@@ -145,18 +146,42 @@ class Config:
         """Resolved data directory path."""
         p = Path(self.data_dir)
         if not p.is_absolute():
-            p = _PROJECT_ROOT / p
+            p = _project_root() / p
         return p
+
+
+def _project_root() -> Path:
+    """Return the runtime project root used for config, data, and logs."""
+    env_root = os.environ.get(_PROJECT_ROOT_ENV, "").strip()
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+
+    if _looks_like_project_root(_PROJECT_ROOT):
+        return _PROJECT_ROOT
+
+    cwd = Path.cwd().resolve()
+    if any((cwd / filename).exists() for filename in [*_CONFIG_FILENAMES, "config.example.toml"]):
+        return cwd
+
+    return _PROJECT_ROOT
+
+
+def _looks_like_project_root(path: Path) -> bool:
+    """Return whether a path resembles the repository/runtime root."""
+    return any(
+        (path / marker).exists()
+        for marker in ["pyproject.toml", "config.example.toml", "config.toml"]
+    )
 
 
 def _default_config_path() -> Path:
     """Return the default config.toml path."""
-    return _PROJECT_ROOT / "config.toml"
+    return _project_root() / "config.toml"
 
 
 def _config_example_path() -> Path:
     """Return the repository config example path."""
-    return _PROJECT_ROOT / "config.example.toml"
+    return _project_root() / "config.example.toml"
 
 
 def _ensure_default_config_file(diagnostics: ConfigDiagnostics) -> None:
@@ -333,7 +358,7 @@ def load_config_with_diagnostics(
         else:
             diagnostics.config_path = _default_config_path()
         for filename in _CONFIG_FILENAMES:
-            path = _PROJECT_ROOT / filename
+            path = _project_root() / filename
             if path.exists():
                 with open(path, "rb") as f:
                     file_data = tomllib.load(f)
@@ -349,6 +374,86 @@ def load_config(config_path: str | Path | None = None) -> Config:
     """Load configuration only, without diagnostics."""
     config, _ = load_config_with_diagnostics(config_path, ensure_default_file=False)
     return config
+
+
+def save_config(config: Config, config_path: str | Path | None = None) -> Path:
+    """Persist a Config dataclass to TOML."""
+    path = Path(config_path) if config_path is not None else _default_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_render_config_toml(config), encoding="utf-8")
+    return path
+
+
+def _render_config_toml(config: Config) -> str:
+    """Render a Config dataclass into TOML."""
+    lines = [
+        "[general]",
+        f'language = {_toml_string(config.language)}',
+        f'data_dir = {_toml_string(config.data_dir)}',
+        "",
+        "[llm]",
+        f'default_provider = {_toml_string(config.llm.default_provider)}',
+        "",
+    ]
+    lines.extend(_render_provider_section("openai", config.llm.openai))
+    lines.extend(_render_provider_section("claude", config.llm.claude))
+    lines.extend(_render_provider_section("gemini", config.llm.gemini))
+    lines.extend(_render_provider_section("deepseek", config.llm.deepseek))
+    lines.extend(_render_provider_section("ollama", config.llm.ollama))
+    lines.extend(_render_provider_section("openrouter", config.llm.openrouter))
+    lines.extend(
+        [
+            "[bilibili]",
+            f'auth_method = {_toml_string(config.bilibili.auth_method)}',
+            f'cookie = {_toml_string(config.bilibili.cookie)}',
+            "",
+            "[bilibili.browser]",
+            f'executable = {_toml_string(config.bilibili.browser_executable)}',
+            f"headed = {_toml_bool(config.bilibili.browser_headed)}",
+            "",
+            "[scheduler]",
+            f"enabled = {_toml_bool(config.scheduler.enabled)}",
+            f'discovery_cron = {_toml_string(config.scheduler.discovery_cron)}',
+            f"pool_target_count = {config.scheduler.pool_target_count}",
+            f"account_sync_interval_hours = {config.scheduler.account_sync_interval_hours}",
+            "",
+            "[storage]",
+            f'db_path = {_toml_string(config.storage.db_path)}',
+            "",
+            "[logging]",
+            f'level = {_toml_string(config.logging.level)}',
+            f'file_level = {_toml_string(config.logging.file_level)}',
+            f'directory = {_toml_string(config.logging.directory)}',
+            f'filename = {_toml_string(config.logging.filename)}',
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _render_provider_section(name: str, provider: LLMProviderConfig) -> list[str]:
+    """Render one provider subsection."""
+    lines = [f"[llm.{name}]"]
+    lines.append(f'api_key = {_toml_string(provider.api_key)}')
+    lines.append(f'model = {_toml_string(provider.model)}')
+    if name in {"openai", "deepseek", "ollama", "openrouter"}:
+        lines.append(f'base_url = {_toml_string(provider.base_url)}')
+    if name == "openrouter":
+        lines.append(f'http_referer = {_toml_string(provider.http_referer)}')
+        lines.append(f'x_title = {_toml_string(provider.x_title)}')
+    lines.append("")
+    return lines
+
+
+def _toml_string(value: str) -> str:
+    """Render a TOML string literal."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _toml_bool(value: bool) -> str:
+    """Render a TOML boolean literal."""
+    return "true" if value else "false"
 
 
 def validate_runtime_config(config: Config) -> None:

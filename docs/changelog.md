@@ -18,9 +18,10 @@
 
 - 新增 `Dockerfile`、`.dockerignore` 和单服务 `docker-compose.yml`，支持 `docker compose up -d` 启动后端
 - CLI `start` 现在支持 `--host` / `--port`，同时新增 `serve-api` 作为容器友好的显式启动入口
-- 默认 compose 会挂载根目录 `config.toml`、`data/` 和 `logs/`，既适合本地单机，也可直接复用到服务器部署
-- 修复安装包运行时的根目录解析问题，容器内现在会正确读取 `/app/config.toml` 并把数据写入 `/app/data`
+- 默认 compose 现已改为 Docker named volumes，配置、数据、日志都与宿主机项目目录隔离
+- 修复安装包运行时的根目录解析问题，容器内现在会正确读取 `/app/runtime/config.toml` 并把数据写入 `/app/runtime/data`
 - 容器启动时现在会自动探测宿主机 Clash HTTP 代理；默认探测 `host.docker.internal:7897`，可达则透传代理，不可达则继续直连
+- `openbiliclaw init` 现在支持交互式引导：Docker 用户首次执行时可直接补齐默认 provider、API Key 和 B 站 Cookie，然后继续完成初始化
 
 ### 同批推荐多样性约束
 

@@ -27,6 +27,7 @@ openbiliclaw [--log-level DEBUG|INFO|WARNING|ERROR] <命令>
 | `browser content <url>` | 获取页面文本内容 | ✅ |
 | `start` | 启动本地 API 服务 | ✅ |
 | `db-repair` | 检查、备份并修复本地 SQLite 数据库 | ✅ |
+| `serve-api` | 启动容器友好的 API 服务 | ✅ |
 | `init` | 首次初始化 | ✅ |
 | `recommend` | 查看推荐 | ✅ |
 | `feedback <id> <like\|dislike\|comment>` | 对推荐提交反馈 | ✅ |
@@ -124,6 +125,30 @@ $ openbiliclaw browser content https://example.com
 ╰──────────────╯
 ```
 
+### `openbiliclaw start`
+
+启动本地 API 服务。默认监听 `127.0.0.1:8420`，也支持显式传入 host/port。
+
+```bash
+$ openbiliclaw start
+
+$ openbiliclaw start --host 0.0.0.0 --port 9000
+```
+
+适合本地直接运行或调试场景。
+
+### `openbiliclaw serve-api`
+
+启动更适合 Docker / 脚本调用的 API 服务入口。默认监听 `0.0.0.0:8420`。
+
+```bash
+$ openbiliclaw serve-api
+
+$ openbiliclaw serve-api --host 0.0.0.0 --port 8420
+```
+
+推荐容器内使用该命令作为启动入口。
+
 ### `openbiliclaw profile`
 
 展示当前灵魂画像。若画像尚未初始化，会明确提示后续执行 `openbiliclaw init`。
@@ -151,11 +176,12 @@ $ openbiliclaw profile
 
 首次运行编排命令。会顺序执行：
 
-1. 校验 B 站认证
-2. 拉取历史
-3. 写入事件层并分析偏好
-4. 生成初始画像
-5. 自动跑一次内容发现
+1. 检查运行时 LLM 配置
+2. 检查 B 站认证
+3. 拉取历史
+4. 写入事件层并分析偏好
+5. 生成初始画像
+6. 自动跑一次内容发现
 
 ```bash
 $ openbiliclaw init
@@ -170,6 +196,21 @@ $ openbiliclaw init
   画像状态: 已生成
   发现内容数: 30
 ```
+
+如果当前终端是交互式，且缺少 provider API Key 或 B 站 Cookie，`init` 会直接进入引导：
+
+```bash
+$ docker exec -it openbiliclaw-backend openbiliclaw init
+初始化前配置引导
+请选择默认 LLM provider [gemini]:
+请输入 gemini API Key:
+初始化前认证引导
+请输入 B 站 Cookie:
+```
+
+引导完成后会继续当前初始化流程，不需要再单独执行 `auth login` 或手动改配置。
+
+如果当前终端不是交互式，`init` 不会等待输入，而是直接报出明确错误；这适合服务器脚本和 CI 场景。
 
 如果 discover 阶段失败，但历史和画像阶段成功，命令会提示“部分完成”，并建议稍后手动执行：
 

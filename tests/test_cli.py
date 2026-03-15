@@ -322,9 +322,7 @@ def test_browser_content_reports_command_failure(
     assert "snapshot failed" in result.stdout
 
 
-def test_start_uses_placeholder_output(
-    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
-) -> None:
+def test_start_uses_local_api_defaults(monkeypatch: pytest.MonkeyPatch, runner: CliRunner) -> None:
     called: dict[str, object] = {}
     backup_calls: list[str] = []
 
@@ -527,6 +525,45 @@ def test_runtime_builders_share_database_instance(monkeypatch: pytest.MonkeyPatc
     assert created_memories[0].database is created_databases[0]
     assert recommendation_engine.database is created_databases[0]
     assert discovery_engine.database is created_databases[0]
+def test_start_accepts_explicit_host_and_port(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    called: dict[str, object] = {}
+
+    def fake_run_api_server(*, host: str = "127.0.0.1", port: int = 8420) -> None:
+        called["host"] = host
+        called["port"] = port
+
+    monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
+    monkeypatch.setattr(cli_module, "_run_api_server", fake_run_api_server, raising=False)
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["start", "--host", "0.0.0.0", "--port", "9000"])
+
+    assert result.exit_code == 0
+    assert called == {"host": "0.0.0.0", "port": 9000}
+    assert "0.0.0.0:9000" in result.stdout
+
+
+def test_serve_api_uses_container_defaults(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    called: dict[str, object] = {}
+
+    def fake_run_api_server(*, host: str = "127.0.0.1", port: int = 8420) -> None:
+        called["host"] = host
+        called["port"] = port
+
+    monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
+    monkeypatch.setattr(cli_module, "_run_api_server", fake_run_api_server, raising=False)
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["serve-api"])
+
+    assert result.exit_code == 0
+    assert "容器 API 服务" in result.stdout
+    assert "0.0.0.0:8420" in result.stdout
+    assert called == {"host": "0.0.0.0", "port": 8420}
 
 
 def test_discover_prints_init_guidance_when_profile_missing(
@@ -1064,6 +1101,145 @@ def test_init_reports_authentication_failure(
     assert result.exit_code == 1
     assert "认证失败" in result.stdout
     assert "auth login" in result.stdout
+
+
+def test_init_guides_missing_runtime_config_interactively(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner, tmp_path: Path
+) -> None:
+    class FakeAuthManager:
+        async def get_status(self) -> AuthStatus:
+            return AuthStatus(
+                has_cookie=True,
+                authenticated=True,
+                cookie_path=tmp_path / "bilibili_cookie.json",
+                username="alice",
+                user_id=10086,
+                message="Cookie 验证成功。",
+            )
+
+    class FakeBilibiliClient:
+        async def get_user_history(self, max_items: int = 100) -> list[dict[str, object]]:
+            return []
+
+    captured: dict[str, object] = {}
+    config_errors = iter(["llm.openai.api_key", None])
+
+    def fake_save_runtime_config(provider: str, api_key: str) -> None:
+        captured["provider"] = provider
+        captured["api_key"] = api_key
+
+    def fake_load_runtime_config_error(*, render: bool = True) -> str | None:
+        return next(config_errors)
+
+    monkeypatch.setattr(cli_module, "_is_interactive_terminal", lambda: True, raising=False)
+    monkeypatch.setattr(
+        cli_module,
+        "_save_runtime_provider_config",
+        fake_save_runtime_config,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_build_auth_manager",
+        lambda: FakeAuthManager(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_build_bilibili_client",
+        lambda: FakeBilibiliClient(),
+        raising=False,
+    )
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_load_runtime_config_error",
+        fake_load_runtime_config_error,
+        raising=False,
+    )
+
+    result = runner.invoke(app, ["init"], input="gemini\ngemini-key\n")
+
+    assert result.exit_code == 1
+    assert captured == {"provider": "gemini", "api_key": "gemini-key"}
+    assert "初始化前配置引导" in result.stdout
+    assert "历史为空" in result.stdout
+
+
+def test_init_guides_missing_auth_interactively(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner, tmp_path: Path
+) -> None:
+    class FakeAuthManager:
+        def __init__(self) -> None:
+            self.saved_cookie = ""
+
+        async def get_status(self) -> AuthStatus:
+            return AuthStatus(
+                has_cookie=False,
+                authenticated=False,
+                cookie_path=tmp_path / "bilibili_cookie.json",
+                message="未配置 B 站 Cookie。",
+            )
+
+        async def validate_cookie(self, cookie: str) -> AuthStatus:
+            return AuthStatus(
+                has_cookie=True,
+                authenticated=True,
+                cookie_path=tmp_path / "bilibili_cookie.json",
+                username="alice",
+                user_id=10086,
+                message="Cookie 验证成功。",
+            )
+
+        def set_cookie(self, cookie: str) -> None:
+            self.saved_cookie = cookie
+
+    class FakeBilibiliClient:
+        async def get_user_history(self, max_items: int = 100) -> list[dict[str, object]]:
+            return []
+
+    fake_auth = FakeAuthManager()
+    monkeypatch.setattr(cli_module, "_is_interactive_terminal", lambda: True, raising=False)
+    monkeypatch.setattr(
+        cli_module,
+        "_load_runtime_config_error",
+        lambda *, render=True: None,
+        raising=False,
+    )
+    monkeypatch.setattr(cli_module, "_build_auth_manager", lambda: fake_auth, raising=False)
+    monkeypatch.setattr(
+        cli_module,
+        "_build_bilibili_client",
+        lambda: FakeBilibiliClient(),
+        raising=False,
+    )
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["init"], input="SESSDATA=valid\n")
+
+    assert result.exit_code == 1
+    assert fake_auth.saved_cookie == "SESSDATA=valid"
+    assert "初始化前认证引导" in result.stdout
+    assert "历史为空" in result.stdout
+
+
+def test_init_reports_config_error_when_non_interactive(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    monkeypatch.setattr(cli_module, "_is_interactive_terminal", lambda: False, raising=False)
+    monkeypatch.setattr(
+        cli_module,
+        "_load_runtime_config_error",
+        lambda *, render=True: "llm.openai.api_key",
+        raising=False,
+    )
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 1
+    assert "配置错误" in result.stdout
+    assert "llm.openai.api_key" in result.stdout
 
 
 def test_init_reports_when_history_is_empty(
