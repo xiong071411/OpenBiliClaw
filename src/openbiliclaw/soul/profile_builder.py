@@ -45,10 +45,14 @@ class ProfileBuilder:
         *,
         history: list[dict[str, Any]],
         preference: dict[str, Any],
+        awareness_notes: list[dict[str, Any]],
+        active_insights: list[dict[str, Any]],
     ) -> SoulProfile:
         messages = build_soul_profile_prompt(
             history_summary=self._summarize_history(history),
             preference_summary=preference,
+            recent_awareness=awareness_notes,
+            active_insights=active_insights,
             tone_profile=build_tone_profile(
                 profile=None,
                 preference_summary=preference,
@@ -66,6 +70,9 @@ class ProfileBuilder:
         return SoulProfile(
             personality_portrait=str(payload.get("personality_portrait", "")),
             core_traits=self._as_str_list(payload.get("core_traits")),
+            cognitive_style=self._as_str_list(payload.get("cognitive_style")),
+            motivational_drivers=self._as_str_list(payload.get("motivational_drivers")),
+            current_phase=str(payload.get("current_phase", "")),
             values=self._as_str_list(payload.get("values")),
             life_stage=str(payload.get("life_stage", "")),
             deep_needs=self._as_str_list(payload.get("deep_needs")),
@@ -88,6 +95,9 @@ class ProfileBuilder:
         required_fields = (
             "personality_portrait",
             "core_traits",
+            "cognitive_style",
+            "motivational_drivers",
+            "current_phase",
             "values",
             "life_stage",
             "deep_needs",
@@ -105,7 +115,17 @@ class ProfileBuilder:
                 "LLM soul profile portrait must be at least 200 characters long."
             )
 
-        for field in ("core_traits", "values", "deep_needs"):
+        if not str(payload.get("current_phase", "")).strip():
+            raise SoulProfileBuildError("LLM soul profile field 'current_phase' must be non-empty.")
+
+        list_fields = (
+            "core_traits",
+            "cognitive_style",
+            "motivational_drivers",
+            "values",
+            "deep_needs",
+        )
+        for field in list_fields:
             if not isinstance(payload.get(field), list):
                 raise SoulProfileBuildError(f"LLM soul profile field '{field}' must be a list.")
 

@@ -853,6 +853,9 @@ class TestBackendAPI:
         class FakeProfile:
             personality_portrait = "这是一个喜欢把问题想透、信息密度偏高的用户。"
             core_traits = ["理性", "好奇", "克制", "耐心", "敏感", "深究", "自驱"]
+            cognitive_style = ["会先看结构", "对证据比较敏感", "偏好把问题讲透", "不太吃空话"]
+            motivational_drivers = ["建立判断确定性", "持续扩展理解边界", "在复杂信息里找到秩序感"]
+            current_phase = "最近更像在一边吸收高密度信息，一边整理自己的判断框架。"
             deep_needs = ["理解世界", "持续成长", "高质量独处", "智性共鸣", "掌控感", "审美沉浸"]
             preferences = type(
                 "Preferences",
@@ -898,6 +901,13 @@ class TestBackendAPI:
             "initialized": True,
             "personality_portrait": "这是一个喜欢把问题想透、信息密度偏高的用户。",
             "core_traits": ["理性", "好奇", "克制", "耐心", "敏感", "深究"],
+            "cognitive_style": ["会先看结构", "对证据比较敏感", "偏好把问题讲透", "不太吃空话"],
+            "motivational_drivers": [
+                "建立判断确定性",
+                "持续扩展理解边界",
+                "在复杂信息里找到秩序感",
+            ],
+            "current_phase": "最近更像在一边吸收高密度信息，一边整理自己的判断框架。",
             "deep_needs": ["理解世界", "持续成长", "高质量独处", "智性共鸣", "掌控感"],
             "top_interests": [
                 "国际新闻",

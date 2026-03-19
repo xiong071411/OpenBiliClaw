@@ -90,6 +90,9 @@ const elements = {
   profileCard: document.getElementById("profileCard"),
   profilePortrait: document.getElementById("profilePortrait"),
   profileTraits: document.getElementById("profileTraits"),
+  profileCognitiveStyle: document.getElementById("profileCognitiveStyle"),
+  profileMotivationalDrivers: document.getElementById("profileMotivationalDrivers"),
+  profileCurrentPhase: document.getElementById("profileCurrentPhase"),
   profileNeeds: document.getElementById("profileNeeds"),
   profileInterests: document.getElementById("profileInterests"),
   profileDislikes: document.getElementById("profileDislikes"),
@@ -485,6 +488,16 @@ function renderProfileSummary(summary) {
   elements.profileCard.hidden = false;
   elements.profilePortrait.textContent = summary.personality_portrait;
   renderChipList(elements.profileTraits, summary.core_traits, "这部分还在慢慢补");
+  renderChipList(elements.profileCognitiveStyle, summary.cognitive_style, "这层还在继续归拢");
+  renderChipList(
+    elements.profileMotivationalDrivers,
+    summary.motivational_drivers,
+    "这块还要再多看一点",
+  );
+  if (elements.profileCurrentPhase instanceof HTMLElement) {
+    elements.profileCurrentPhase.textContent =
+      summary.current_phase || "这阵子的变化还在继续看，先不急着下死结论。";
+  }
   renderChipList(elements.profileNeeds, summary.deep_needs, "这块还要再多看一点");
   renderChipList(elements.profileInterests, summary.top_interests, "再刷一阵，这里会更准");
   renderChipList(elements.profileDislikes, summary.disliked_topics, "这块还在继续确认，先别急着下死结论");
@@ -1054,6 +1067,9 @@ async function loadMoreCognitionHistory() {
       initialized: nextPage.initialized,
       personality_portrait: nextPage.personality_portrait,
       core_traits: nextPage.core_traits,
+      cognitive_style: nextPage.cognitive_style,
+      motivational_drivers: nextPage.motivational_drivers,
+      current_phase: nextPage.current_phase,
       deep_needs: nextPage.deep_needs,
       top_interests: nextPage.top_interests,
     };

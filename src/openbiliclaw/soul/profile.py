@@ -90,6 +90,9 @@ class SoulProfile:
     # Soul layer — the personality portrait
     personality_portrait: str = ""  # Long-form natural language description
     core_traits: list[str] = field(default_factory=list)
+    cognitive_style: list[str] = field(default_factory=list)
+    motivational_drivers: list[str] = field(default_factory=list)
+    current_phase: str = ""
     values: list[str] = field(default_factory=list)
     life_stage: str = ""  # Current life stage/situation
     deep_needs: list[str] = field(default_factory=list)  # Unmet psychological needs
@@ -122,6 +125,15 @@ class SoulProfile:
         if self.core_traits:
             parts.append(f"## 核心特质\n{', '.join(self.core_traits)}")
 
+        if self.cognitive_style:
+            parts.append(f"## 认知风格\n{', '.join(self.cognitive_style)}")
+
+        if self.motivational_drivers:
+            parts.append(f"## 内在驱动力\n{', '.join(self.motivational_drivers)}")
+
+        if self.current_phase:
+            parts.append(f"## 当前阶段\n{self.current_phase}")
+
         if self.deep_needs:
             parts.append(f"## 深层需求\n{', '.join(self.deep_needs)}")
 
@@ -145,6 +157,9 @@ class SoulProfile:
         return {
             "personality_portrait": self.personality_portrait,
             "core_traits": self.core_traits,
+            "cognitive_style": self.cognitive_style,
+            "motivational_drivers": self.motivational_drivers,
+            "current_phase": self.current_phase,
             "values": self.values,
             "life_stage": self.life_stage,
             "deep_needs": self.deep_needs,
@@ -162,6 +177,9 @@ class SoulProfile:
         return cls(
             personality_portrait=str(raw_data.get("personality_portrait", "")),
             core_traits=_as_str_list(raw_data.get("core_traits")),
+            cognitive_style=_as_str_list(raw_data.get("cognitive_style")),
+            motivational_drivers=_as_str_list(raw_data.get("motivational_drivers")),
+            current_phase=str(raw_data.get("current_phase", "")),
             values=_as_str_list(raw_data.get("values")),
             life_stage=str(raw_data.get("life_stage", "")),
             deep_needs=_as_str_list(raw_data.get("deep_needs")),

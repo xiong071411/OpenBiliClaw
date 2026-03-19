@@ -182,6 +182,9 @@ class ProfileSummaryResponse(BaseModel):
     initialized: bool
     personality_portrait: str = ""
     core_traits: list[str] = Field(default_factory=list)
+    cognitive_style: list[str] = Field(default_factory=list)
+    motivational_drivers: list[str] = Field(default_factory=list)
+    current_phase: str = ""
     deep_needs: list[str] = Field(default_factory=list)
     top_interests: list[str] = Field(default_factory=list)
     disliked_topics: list[str] = Field(default_factory=list)

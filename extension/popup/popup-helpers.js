@@ -129,6 +129,13 @@ export function normalizeProfileSummary(summary) {
     core_traits: Array.isArray(summary?.core_traits)
       ? summary.core_traits.map(normalizeText).filter(Boolean)
       : [],
+    cognitive_style: Array.isArray(summary?.cognitive_style)
+      ? summary.cognitive_style.map(normalizeText).filter(Boolean)
+      : [],
+    motivational_drivers: Array.isArray(summary?.motivational_drivers)
+      ? summary.motivational_drivers.map(normalizeText).filter(Boolean)
+      : [],
+    current_phase: normalizeText(summary?.current_phase),
     deep_needs: Array.isArray(summary?.deep_needs)
       ? summary.deep_needs.map(normalizeText).filter(Boolean)
       : [],

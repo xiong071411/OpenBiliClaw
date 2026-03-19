@@ -121,6 +121,8 @@ def build_soul_profile_prompt(
     *,
     history_summary: dict[str, object],
     preference_summary: dict[str, object],
+    recent_awareness: list[dict[str, object]] | None = None,
+    active_insights: list[dict[str, object]] | None = None,
     tone_profile: ToneProfile | None,
 ) -> list[dict[str, str]]:
     """Build a structured prompt for initial soul-profile generation."""
@@ -134,13 +136,20 @@ def build_soul_profile_prompt(
 2. 输出必须是严格 JSON，不要附带解释。
 3. 人格描述至少 200 个中文字符。
 4. core_traits 控制在 3 到 6 条，deep_needs 和 values 保持简洁。
-5. 不要写成心理报告、咨询记录或说明书，要像熟人总结这个人的气质和状态。
+5. 先总结这个人怎么处理信息，再总结他在内容里长期在找什么，最后总结他最近更像处于什么阶段。
+6. 不要把兴趣 topic 堆成画像主体；题材、UP 主、作品名最多只举 1 到 2 个例子，
+   而且只能当证据，不要当正文主干。
+7. 可以参考非临床的认知风格、内在驱动力、阶段状态来组织描述，但不要写理论术语，
+   不要写成心理报告、咨询记录或说明书，要像熟人总结这个人的气质和状态。
 </rules>
 
 <output_schema>
 {
   "personality_portrait": "至少 200 字的自然语言人格描述",
   "core_traits": ["理性", "好奇", "谨慎"],
+  "cognitive_style": ["会先看结构", "对证据比较敏感", "偏好把问题讲透"],
+  "motivational_drivers": ["建立判断确定性", "持续扩展理解边界"],
+  "current_phase": "最近更像在一边吸收高密度信息，一边整理自己的判断框架。",
   "values": ["真实", "成长"],
   "life_stage": "处于探索与积累阶段",
   "deep_needs": ["被理解", "持续成长"]
@@ -148,6 +157,8 @@ def build_soul_profile_prompt(
 </output_schema>
 """.strip()
     system_prompt = "\n\n".join([system_prompt, _render_tone_profile(tone_profile)])
+    normalized_awareness = recent_awareness or []
+    normalized_insights = active_insights or []
     user_prompt = "\n\n".join(
         [
             "<history_summary>",
@@ -156,6 +167,12 @@ def build_soul_profile_prompt(
             "<preference_summary>",
             json.dumps(preference_summary, ensure_ascii=False, indent=2),
             "</preference_summary>",
+            "<recent_awareness>",
+            json.dumps(normalized_awareness, ensure_ascii=False, indent=2),
+            "</recent_awareness>",
+            "<active_insights>",
+            json.dumps(normalized_insights, ensure_ascii=False, indent=2),
+            "</active_insights>",
         ]
     )
     return [

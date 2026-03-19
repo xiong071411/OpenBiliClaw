@@ -37,6 +37,7 @@
 | 账户同步事件分析 | ✅ | 后台低频同步导入的 `view/favorite/follow` 事件会复用 `analyze_events()` 进入偏好与画像链 |
 | ToneProfile | ✅ | 从 `SoulProfile`、偏好摘要和近期反馈推断 `density/warmth/playfulness/directness`，统一驱动推荐、画像和聊天语气 |
 | Cognition updates | ✅ | 在反馈刷新和聊天学习后生成 `interest_added / dislike_added / profile_shift` 结构化 cognition card，包含 `summary / context_line / source_label / expand_hint / impact / reasoning / evidence / source / created_at`，供插件提醒与画像页展开展示；即时反馈和聊天会尽量指出具体内容或本轮聊天，聚合判断则保守回退到“基于最近几条相关内容” |
+| Layered profile cognition | ✅ | `SoulProfile` 现已补充 `cognitive_style / motivational_drivers / current_phase`，画像生成会同时消费 `history + preference + awareness + insights`，避免把兴趣 topic 堆成整段画像 |
 
 ## 公开 API
 
@@ -144,10 +145,26 @@ profile = await builder.build(
         {"title": "效率系统分享", "author": "知识UP主"},
     ],
     preference=current_pref,
+    awareness_notes=[
+        {
+            "date": "2026-03-20",
+            "observation": "最近更常停在高信息密度内容里。",
+            "trend": "明显更偏向讲透结构而不是只看结论。",
+        }
+    ],
+    active_insights=[
+        {
+            "hypothesis": "用户可能在通过深度内容建立判断确定性。",
+            "confidence": 0.71,
+        }
+    ],
 )
 
 assert len(profile.personality_portrait) >= 200
 assert 3 <= len(profile.core_traits) <= 5
+assert profile.cognitive_style
+assert profile.motivational_drivers
+assert profile.current_phase
 ```
 
 ```python
@@ -241,3 +258,4 @@ tone = build_tone_profile(
 18. **“老B友”是基础人格，不是固定模板**：聊天、推荐和画像总结共用同一套语气维度，但会随着用户画像和近期反馈在信息密度、温度、梗感和直给程度上细调
 19. **认知变化只在关键时刻生成**：只有新增高权重兴趣、明确避雷方向或画像明显转向时，才会形成 `cognition update`，避免把普通波动都做成提醒
 20. **账户同步只补事件，不单独改画像**：history / favorites / following 统一先转成事件，再复用现有偏好分析与画像更新链，避免出现第二套理解逻辑
+21. **画像先写“怎么理解世界”，再写“看了什么”**：`personality_portrait` 必须先围绕认知风格、驱动力和当前阶段组织，兴趣 topic 最多只作为少量证据出现，避免退化成偏好标签润色稿

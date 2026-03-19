@@ -112,6 +112,12 @@ class SoulEngine:
         profile = await self._profile_builder.build(
             history=history,
             preference=preference_layer,
+            awareness_notes=[
+                awareness_note_to_dict(item) for item in self._load_awareness_notes()
+            ],
+            active_insights=[
+                insight_hypothesis_to_dict(item) for item in self._load_insights()
+            ],
         )
         profile.preferences = preference_layer_from_dict(preference_layer)
         soul_layer = self._memory.get_layer("soul")
@@ -243,6 +249,12 @@ class SoulEngine:
                 profile = await self._profile_builder.build(
                     history=[],
                     preference=updated_preference,
+                    awareness_notes=[
+                        awareness_note_to_dict(item) for item in self._load_awareness_notes()
+                    ],
+                    active_insights=[
+                        insight_hypothesis_to_dict(item) for item in self._load_insights()
+                    ],
                 )
                 profile.preferences = preference_layer_from_dict(updated_preference)
                 soul_layer = self._memory.get_layer("soul")
@@ -310,6 +322,12 @@ class SoulEngine:
                 profile = await self._profile_builder.build(
                     history=[],
                     preference=updated_preference,
+                    awareness_notes=[
+                        awareness_note_to_dict(item) for item in self._load_awareness_notes()
+                    ],
+                    active_insights=[
+                        insight_hypothesis_to_dict(item) for item in self._load_insights()
+                    ],
                 )
                 profile.preferences = preference_layer_from_dict(updated_preference)
                 soul_layer = self._memory.get_layer("soul")

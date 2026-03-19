@@ -82,6 +82,9 @@ async def test_build_initial_profile_reads_preference_and_saves_soul(tmp_path: P
                     * 8
                 ),
                 "core_traits": ["理性", "好奇", "克制"],
+                "cognitive_style": ["会先看结构", "偏好把问题讲透"],
+                "motivational_drivers": ["建立判断确定性", "扩大理解边界"],
+                "current_phase": "最近更像在主动吸收复杂信息，并整理自己的判断框架。",
                 "values": ["成长", "真实"],
                 "life_stage": "处于探索与积累阶段",
                 "deep_needs": ["被理解", "持续成长"],
@@ -99,8 +102,12 @@ async def test_build_initial_profile_reads_preference_and_saves_soul(tmp_path: P
     )
 
     assert profile.core_traits == ["理性", "好奇", "克制"]
+    assert profile.cognitive_style == ["会先看结构", "偏好把问题讲透"]
+    assert profile.motivational_drivers == ["建立判断确定性", "扩大理解边界"]
+    assert profile.current_phase == "最近更像在主动吸收复杂信息，并整理自己的判断框架。"
     saved = json.loads((tmp_path / "memory" / "soul.json").read_text(encoding="utf-8"))
     assert saved["core_traits"] == ["理性", "好奇", "克制"]
+    assert saved["cognitive_style"] == ["会先看结构", "偏好把问题讲透"]
     assert saved["preferences"]["interests"][0]["name"] == "科技"
 
 
@@ -115,6 +122,9 @@ async def test_get_profile_loads_saved_soul_profile(tmp_path: Path) -> None:
                 * 8
             ),
             "core_traits": ["理性", "谨慎", "自驱"],
+            "cognitive_style": ["偏好先看证据再判断"],
+            "motivational_drivers": ["保持判断稳固"],
+            "current_phase": "最近更像在稳住判断，不急着跟风。",
             "values": ["真实", "成长"],
             "life_stage": "稳定积累阶段",
             "deep_needs": ["被理解", "保持成长"],
@@ -127,6 +137,8 @@ async def test_get_profile_loads_saved_soul_profile(tmp_path: Path) -> None:
     profile = await engine.get_profile()
 
     assert profile.core_traits == ["理性", "谨慎", "自驱"]
+    assert profile.cognitive_style == ["偏好先看证据再判断"]
+    assert profile.current_phase == "最近更像在稳住判断，不急着跟风。"
     assert profile.preferences.interests[0].name == "科技"
 
 
@@ -630,6 +642,8 @@ async def test_learn_from_dialogue_rebuilds_profile_after_candidate_reaches_thre
         *,
         history: list[dict[str, object]],
         preference: dict[str, object],
+        awareness_notes: list[dict[str, object]],
+        active_insights: list[dict[str, object]],
     ) -> object:
         from openbiliclaw.soul.profile import SoulProfile
 
@@ -637,6 +651,9 @@ async def test_learn_from_dialogue_rebuilds_profile_after_candidate_reaches_thre
             {
                 "personality_portrait": "这是一个会主动追问世界运行逻辑的人。" * 20,
                 "core_traits": ["理性", "主动"],
+                "cognitive_style": ["会先看结构", "喜欢顺着因果继续追问"],
+                "motivational_drivers": ["理解复杂世界"],
+                "current_phase": "最近更像在主动搭建解释复杂事件的判断框架。",
                 "values": ["真实"],
                 "life_stage": "持续探索",
                 "deep_needs": ["理解复杂世界"],
@@ -719,6 +736,8 @@ async def test_process_feedback_batch_rebuilds_profile_when_preference_changes_s
         *,
         history: list[dict[str, object]],
         preference: dict[str, object],
+        awareness_notes: list[dict[str, object]],
+        active_insights: list[dict[str, object]],
     ) -> object:
         from openbiliclaw.soul.profile import SoulProfile
 
@@ -727,6 +746,9 @@ async def test_process_feedback_batch_rebuilds_profile_when_preference_changes_s
         return SoulProfile(
             personality_portrait="这个人最近明显从科技内容转向更具体的人文叙事与纪录片表达。" * 8,
             core_traits=["理性", "耐心", "好奇"],
+            cognitive_style=["偏好从具体材料里建立判断", "会先看脉络再下结论"],
+            motivational_drivers=["看见更深的脉络", "确认新的关注方向"],
+            current_phase="最近更像从科技效率感转向更具体的人文叙事和结构观察。",
             values=["真实", "成长"],
             life_stage="处于结构调整阶段",
             deep_needs=["被理解", "看见更深的脉络"],
