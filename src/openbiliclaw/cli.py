@@ -642,23 +642,88 @@ def init() -> None:
     soul_engine = _build_soul_engine()
 
     _print_page_title("初始化 OpenBiliClaw", "首次运行引导")
-    _print_section_title("1/4 拉取历史")
-    history = asyncio.run(client.get_user_history(max_items=200))
+    _print_section_title("1/5 拉取浏览历史")
+    history = asyncio.run(client.get_user_history(max_items=500))
     if not history:
         _print_status_panel("warning", "历史为空", "当前无法从 B 站历史中生成初始画像。")
         raise typer.Exit(code=1)
+    console.print(f"  [green]{len(history)}[/green] 条浏览历史")
 
+    _print_section_title("2/5 拉取收藏夹与关注列表")
+    favorites_data: list[dict[str, Any]] = []
+    try:
+        fav_folders = asyncio.run(
+            client.get_all_favorites(max_folders=20, max_items_per_folder=200)
+        )
+        for folder in fav_folders:
+            folder_title = folder.folder.title if hasattr(folder, "folder") else "未知"
+            for item in folder.items if hasattr(folder, "items") else []:
+                favorites_data.append({
+                    "title": getattr(item, "title", str(item)),
+                    "upper": getattr(item, "upper", ""),
+                    "folder": folder_title,
+                })
+        console.print(f"  [green]{len(favorites_data)}[/green] 个收藏")
+    except Exception:
+        console.print("  [yellow]收藏夹拉取失败，跳过[/yellow]")
+
+    following_data: list[dict[str, Any]] = []
+    try:
+        for page in range(1, 6):
+            page_users = asyncio.run(client.get_following(page=page, page_size=50))
+            if not page_users:
+                break
+            for user in page_users:
+                following_data.append({
+                    "name": getattr(user, "uname", str(user)),
+                    "sign": getattr(user, "sign", ""),
+                })
+            if len(page_users) < 50:
+                break
+        console.print(f"  [green]{len(following_data)}[/green] 个关注")
+    except Exception:
+        console.print("  [yellow]关注列表拉取失败，跳过[/yellow]")
+
+    # Build events from all data sources
     events = [_history_item_to_event(item) for item in history]
+    for fav in favorites_data:
+        events.append({
+            "event_type": "favorite",
+            "title": str(fav.get("title", "")),
+            "metadata": {
+                "folder": str(fav.get("folder", "")),
+                "upper": str(fav.get("upper", "")),
+            },
+        })
     for event in events:
         asyncio.run(memory.propagate_event(event))
 
-    _print_section_title("2/4 分析偏好")
+    _print_section_title("3/5 分析偏好")
+    console.print(f"  总信号量: [green]{len(events)}[/green] 条事件")
     asyncio.run(soul_engine.analyze_events(events))
 
-    _print_section_title("3/4 生成画像")
-    profile_data = asyncio.run(soul_engine.build_initial_profile(history))
+    _print_section_title("4/5 生成画像")
+    # Merge favorites and following into history for profile builder
+    combined_history: list[dict[str, Any]] = list(history)
+    if favorites_data:
+        combined_history.append({
+            "title": "[收藏夹汇总]",
+            "_favorites": favorites_data,
+            "_favorites_summary": f"共 {len(favorites_data)} 个收藏，"
+            + "涵盖: " + ", ".join(
+                set(f.get("folder", "") for f in favorites_data[:30] if f.get("folder"))
+            ),
+        })
+    if following_data:
+        combined_history.append({
+            "title": "[关注列表汇总]",
+            "_following": following_data,
+            "_following_summary": f"共关注 {len(following_data)} 人，"
+            + "包括: " + ", ".join(f["name"] for f in following_data[:20]),
+        })
+    profile_data = asyncio.run(soul_engine.build_initial_profile(combined_history))
 
-    _print_section_title("4/4 发现内容")
+    _print_section_title("5/5 发现内容")
     discovered_count = 0
     discovery_error = False
     try:
@@ -682,7 +747,10 @@ def init() -> None:
     _print_key_value_table(
         "初始化摘要",
         [
-            ("历史条数", str(len(history))),
+            ("浏览历史", str(len(history))),
+            ("收藏", str(len(favorites_data))),
+            ("关注", str(len(following_data))),
+            ("总事件数", str(len(events))),
             ("画像状态", "已生成"),
             ("发现内容数", str(discovered_count)),
         ],
