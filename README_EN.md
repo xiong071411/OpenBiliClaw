@@ -100,33 +100,17 @@ curl -fsSL https://raw.githubusercontent.com/OpenBiliClaw/OpenBiliClaw/main/scri
 **Paste to an AI coding agent (Claude Code / Codex CLI / OpenClaw / Cursor etc.):**
 
 ```text
-Please run the command below via Bash to deploy the OpenBiliClaw backend, then parse the output:
-
-curl -fsSL https://raw.githubusercontent.com/OpenBiliClaw/OpenBiliClaw/main/scripts/install.sh | bash
-
-Parsing rules:
-1. Find every "BOOTSTRAP_STATUS:" line; the final one's JSON carries the result
-2. details.health_url is the health check URL — curl it to confirm HTTP 200
-3. details.missing is a string array telling you which credentials are still needed
-4. The script prints "Checkout: <absolute path>" at the end — record that path, I'll refer to it as <CHECKOUT_DIR>
-
-If details.missing is non-empty (e.g. contains "llm.gemini.api_key" or "bilibili.cookie"), ask me for the matching values, then run this command (replace <CHECKOUT_DIR> with the path you recorded above):
-
-python3 <CHECKOUT_DIR>/scripts/agent_bootstrap.py --project-dir <CHECKOUT_DIR> --llm-api-key "..." --bilibili-cookie "..." --skip-start
-
-Curl the health_url again after filling in secrets, then report back: deployment mode, reused items, health check status, anything still missing.
+Run `curl -fsSL https://raw.githubusercontent.com/OpenBiliClaw/OpenBiliClaw/main/scripts/install.sh | bash` via Bash, then follow the "OpenBiliClaw install" Status / Missing / Next action block the script prints at the end. If it asks for missing credentials, ask me for them, run the exact fix command the script suggested, and report the result.
 ```
 
-Works on macOS, Linux and WSL2 (native Windows is not supported — install WSL2). The only prerequisites are `git` and `python3` (3.11+).
+Works on macOS, Linux and WSL2 (native Windows is not supported — install WSL2). The only prerequisites are `git` and `python3` (3.11+). The script will:
 
-Both paths will:
 1. Clone the repo (default `~/OpenBiliClaw`, override with `INSTALL_DIR=/path`)
 2. Auto-detect an existing install under `~/workspace/OpenBiliClaw`, `~/OpenBiliClaw`, `~/projects/OpenBiliClaw` or `~/code/OpenBiliClaw` and reuse its LLM API keys + Bilibili cookie
-3. Start the backend and run a health check
-4. If credentials are still missing, tell you exactly what to supply and how
+3. Start the backend, run a health check, and print a self-contained **Status / Missing / Next action** block for the agent to consume
 
-> ⚠️ Do NOT ask the AI to WebFetch `agent-install.md` — the WebFetch tool hands the document to an internal small model which may summarize and drop critical flags or commands. Running `curl | bash` against `install.sh` is the reliable path.
-> Full machine contract and JSON event reference: [docs/agent-install.md](docs/agent-install.md) (agent-facing) and [docs/agent-deployment.md](docs/agent-deployment.md) (human reference). The bootstrap script uses only the Python stdlib and never reads stdin, so it works with any AI coding agent — including those without an interactive TTY.
+> ⚠️ Do NOT ask the AI to WebFetch `docs/agent-install.md` — the WebFetch tool hands markdown to an internal small model which may summarize and drop critical flags or commands. Agents only need to read the final block `install.sh` prints to stdout.
+> Human reference: [docs/agent-install.md](docs/agent-install.md) (machine contract) and [docs/agent-deployment.md](docs/agent-deployment.md) (long-form troubleshooting). The bootstrap script uses only the Python stdlib and never reads stdin, so it works with any AI coding agent — including those without an interactive TTY.
 
 ### Manual installation
 

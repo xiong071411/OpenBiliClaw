@@ -151,6 +151,15 @@ ensure_checkout() {
     git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR"
 }
 
+BOOTSTRAP_LOG=""
+
+cleanup_bootstrap_log() {
+    if [ -n "$BOOTSTRAP_LOG" ] && [ -f "$BOOTSTRAP_LOG" ]; then
+        rm -f "$BOOTSTRAP_LOG"
+    fi
+}
+trap cleanup_bootstrap_log EXIT
+
 run_bootstrap() {
     local bootstrap="$INSTALL_DIR/scripts/agent_bootstrap.py"
     if [ ! -f "$bootstrap" ]; then
@@ -172,32 +181,127 @@ run_bootstrap() {
         args+=(--skip-start)
     fi
 
+    BOOTSTRAP_LOG=$(mktemp -t openbiliclaw-bootstrap.XXXXXX)
     log "Running bootstrap: python3 $bootstrap ${args[*]}"
-    python3 "$bootstrap" "${args[@]}"
+
+    # Stream stdout to the terminal AND capture it for post-run parsing.
+    # Use PIPESTATUS so `set -e` still sees the real bootstrap exit code.
+    set +e
+    python3 "$bootstrap" "${args[@]}" 2>&1 | tee "$BOOTSTRAP_LOG"
+    local rc=${PIPESTATUS[0]}
+    set -e
+
+    if [ "$rc" -ne 0 ]; then
+        err "Bootstrap exited with code $rc."
+        err "The log above contains [bootstrap] lines and BOOTSTRAP_STATUS JSON events; the 'error' event tells you which step failed."
+        err "Once the underlying issue is fixed, re-run this installer."
+        exit "$rc"
+    fi
 }
 
-print_next_steps() {
-    echo ""
-    ok "OpenBiliClaw install complete"
-    echo ""
-    echo "  Checkout:    $INSTALL_DIR"
-    if [ -n "$REUSE_FROM" ]; then
-        echo "  Reused from: $REUSE_FROM"
+# Print a definitive, agent-friendly summary. This is the ONLY block an AI
+# agent needs to read to decide what to do next — no external docs required.
+print_install_summary() {
+    local summary
+    summary=$(python3 - "$BOOTSTRAP_LOG" "$INSTALL_DIR" "$PORT" "$HOST" "$REUSE_FROM" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+log_path, install_dir, port, host, reuse_from = sys.argv[1:6]
+final = None
+for raw in Path(log_path).read_text(encoding="utf-8", errors="replace").splitlines():
+    marker = "BOOTSTRAP_STATUS:"
+    if marker in raw:
+        try:
+            final = json.loads(raw.split(marker, 1)[1].strip())
+        except json.JSONDecodeError:
+            pass
+
+if final is None:
+    print("STATUS=unknown")
+    print("HEALTH_URL=")
+    print("MISSING=")
+    sys.exit(0)
+
+details = final.get("details") or {}
+missing = details.get("missing") or []
+print(f"STATUS={final.get('status', 'unknown')}")
+print(f"HEALTH_URL={details.get('health_url', '')}")
+print(f"MISSING={','.join(missing)}")
+PY
+)
+    # Parse the three KEY=VALUE lines back into shell variables.
+    local status health_url missing
+    status=$(echo "$summary" | awk -F= '/^STATUS=/{sub(/^STATUS=/, ""); print; exit}')
+    health_url=$(echo "$summary" | awk -F= '/^HEALTH_URL=/{sub(/^HEALTH_URL=/, ""); print; exit}')
+    missing=$(echo "$summary" | awk -F= '/^MISSING=/{sub(/^MISSING=/, ""); print; exit}')
+
+    if [ -z "$health_url" ]; then
+        health_url="http://${HOST}:${PORT}/api/health"
     fi
-    echo "  Health URL:  http://${HOST}:${PORT}/api/health"
+
     echo ""
-    echo "Next steps:"
-    echo "  cd $INSTALL_DIR"
-    echo "  curl http://${HOST}:${PORT}/api/health            # confirm backend is up"
-    echo "  uv run openbiliclaw init                          # first-time init (history, profile, discovery)"
-    echo "  uv run openbiliclaw recommend                     # get recommendations"
+    echo "================================================================"
+    if [ "$status" = "complete" ]; then
+        printf '%s OpenBiliClaw install complete%s\n' "$C_GREEN" "$C_RESET"
+    elif [ "$status" = "running_with_missing_secrets" ] || [ "$status" = "needs_secrets" ]; then
+        printf '%s OpenBiliClaw install partial (credentials still missing)%s\n' "$C_YELLOW" "$C_RESET"
+    else
+        printf '%s OpenBiliClaw install status: %s%s\n' "$C_YELLOW" "$status" "$C_RESET"
+    fi
+    echo "================================================================"
+    echo "Status:      $status"
+    echo "Checkout:    $INSTALL_DIR"
+    if [ -n "$REUSE_FROM" ]; then
+        echo "Reused from: $REUSE_FROM"
+    fi
+    echo "Health URL:  $health_url"
+    if [ -n "$missing" ]; then
+        echo "Missing:     $missing"
+    else
+        echo "Missing:     (none)"
+    fi
     echo ""
-    echo "If the bootstrap reported missing credentials, supply them with:"
-    echo "  python3 scripts/agent_bootstrap.py --project-dir . \\"
-    echo "      --llm-api-key \"\$YOUR_KEY\" --bilibili-cookie \"\$YOUR_COOKIE\" --skip-start \\"
-    echo "      --port $PORT --host $HOST"
+
+    if [ -n "$missing" ]; then
+        echo "Next action (required — credentials are missing):"
+        echo ""
+        echo "  1. Ask the user for the missing values listed above:"
+        case "$missing" in
+            *llm.*api_key*) echo "     - LLM API key for the default provider" ;;
+        esac
+        case "$missing" in
+            *bilibili.cookie*) echo "     - Bilibili cookie (user should log into https://www.bilibili.com and copy the full cookie string from DevTools)" ;;
+        esac
+        echo ""
+        echo "  2. Run this command with the values the user provided"
+        echo "     (fill the placeholders; omit flags you do not need):"
+        echo ""
+        echo "     python3 $INSTALL_DIR/scripts/agent_bootstrap.py \\"
+        echo "         --project-dir $INSTALL_DIR \\"
+        echo "         --llm-api-key '<VALUE>' \\"
+        echo "         --bilibili-cookie '<VALUE>' \\"
+        echo "         --skip-start \\"
+        echo "         --port $PORT --host $HOST"
+        echo ""
+        echo "  3. Curl $health_url again to confirm the backend is still healthy."
+        echo "  4. Report the final state to the user."
+    else
+        echo "Next action (optional follow-ups):"
+        echo ""
+        echo "  - Confirm the backend is healthy:"
+        echo "      curl -sS $health_url"
+        echo "  - Kick off first-time init (fetches Bilibili history, builds soul profile, seeds discovery pool):"
+        echo "      cd $INSTALL_DIR && uv run openbiliclaw init"
+        echo "  - Then see recommendations:"
+        echo "      cd $INSTALL_DIR && uv run openbiliclaw recommend"
+    fi
     echo ""
-    echo "Full agent contract: $INSTALL_DIR/docs/agent-install.md"
+    echo "Reference docs (for humans, NOT required by the agent):"
+    echo "  - $INSTALL_DIR/docs/agent-install.md     (machine contract)"
+    echo "  - $INSTALL_DIR/docs/agent-deployment.md  (long-form troubleshooting)"
+    echo "================================================================"
 }
 
 main() {
@@ -210,7 +314,7 @@ main() {
     auto_detect_reuse_source
     ensure_checkout
     run_bootstrap
-    print_next_steps
+    print_install_summary
 }
 
 main "$@"
