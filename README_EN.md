@@ -89,7 +89,46 @@ OpenBiliClaw/
 
 ## 🚀 Quick Start
 
-### Installation
+### ⚡ Quick Install
+
+**One terminal command (recommended):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OpenBiliClaw/OpenBiliClaw/main/scripts/install.sh | bash
+```
+
+**Paste to an AI coding agent (Claude Code / Codex CLI / OpenClaw / Cursor etc.):**
+
+```text
+Please run the command below via Bash to deploy the OpenBiliClaw backend, then parse the output:
+
+curl -fsSL https://raw.githubusercontent.com/OpenBiliClaw/OpenBiliClaw/main/scripts/install.sh | bash
+
+Parsing rules:
+1. Find every "BOOTSTRAP_STATUS:" line; the final one's JSON carries the result
+2. details.health_url is the health check URL — curl it to confirm HTTP 200
+3. details.missing is a string array telling you which credentials are still needed
+4. The script prints "Checkout: <absolute path>" at the end — record that path, I'll refer to it as <CHECKOUT_DIR>
+
+If details.missing is non-empty (e.g. contains "llm.gemini.api_key" or "bilibili.cookie"), ask me for the matching values, then run this command (replace <CHECKOUT_DIR> with the path you recorded above):
+
+python3 <CHECKOUT_DIR>/scripts/agent_bootstrap.py --project-dir <CHECKOUT_DIR> --llm-api-key "..." --bilibili-cookie "..." --skip-start
+
+Curl the health_url again after filling in secrets, then report back: deployment mode, reused items, health check status, anything still missing.
+```
+
+Works on macOS, Linux and WSL2 (native Windows is not supported — install WSL2). The only prerequisites are `git` and `python3` (3.11+).
+
+Both paths will:
+1. Clone the repo (default `~/OpenBiliClaw`, override with `INSTALL_DIR=/path`)
+2. Auto-detect an existing install under `~/workspace/OpenBiliClaw`, `~/OpenBiliClaw`, `~/projects/OpenBiliClaw` or `~/code/OpenBiliClaw` and reuse its LLM API keys + Bilibili cookie
+3. Start the backend and run a health check
+4. If credentials are still missing, tell you exactly what to supply and how
+
+> ⚠️ Do NOT ask the AI to WebFetch `agent-install.md` — the WebFetch tool hands the document to an internal small model which may summarize and drop critical flags or commands. Running `curl | bash` against `install.sh` is the reliable path.
+> Full machine contract and JSON event reference: [docs/agent-install.md](docs/agent-install.md) (agent-facing) and [docs/agent-deployment.md](docs/agent-deployment.md) (human reference). The bootstrap script uses only the Python stdlib and never reads stdin, so it works with any AI coding agent — including those without an interactive TTY.
+
+### Manual installation
 
 ```bash
 # Clone
@@ -105,7 +144,7 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-### Configuration
+### Manual configuration
 
 ```bash
 # Copy config template

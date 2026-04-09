@@ -11,6 +11,9 @@
 - [变更日志](changelog.md) — 各里程碑交付记录
 - [手动端到端联调](manual-e2e.md) — CLI、插件与 SQLite 的真实联调步骤
 - [OpenClaw 接入最短指南](openclaw-quickstart.md) — Docker 优先、本地兜底的安装、初始化、skill 发现与 CLI bridge 自检
+- [Agent 机器契约 (短)](agent-install.md) — 给 AI 智能体 WebFetch 的短契约,配合 README 的短粘贴语句
+- [Agent 部署详细说明](agent-deployment.md) — 给人看的详细版本 + 所有 JSON 事件/错误码/排查表
+- [Docker 部署指南](docker-deployment.md) — 手动 Docker / docker compose 部署步骤
 
 ## 模块文档
 

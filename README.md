@@ -91,7 +91,46 @@ OpenBiliClaw/
 
 ## 🚀 快速开始
 
-### 安装
+### ⚡ Quick Install
+
+**终端一条命令(推荐):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OpenBiliClaw/OpenBiliClaw/main/scripts/install.sh | bash
+```
+
+**复制粘贴给 AI 智能体(Claude Code / Codex CLI / OpenClaw / Cursor 等):**
+
+```text
+请用 Bash 执行下面这条命令帮我部署 OpenBiliClaw 后端,执行完后解析输出:
+
+curl -fsSL https://raw.githubusercontent.com/OpenBiliClaw/OpenBiliClaw/main/scripts/install.sh | bash
+
+解析规则:
+1. 找出所有 "BOOTSTRAP_STATUS:" 开头的行,取最后一条的 JSON
+2. details.health_url 是健康检查地址(请用 curl 访问确认 200)
+3. details.missing 是字符串数组,告诉你还差什么凭据
+4. 脚本最后会打印 "Checkout: <绝对路径>",把这个路径记下来,后续称它为 <CHECKOUT_DIR>
+
+如果 details.missing 非空(例如包含 "llm.gemini.api_key" 或 "bilibili.cookie"),向我索取对应值,然后用这条命令补齐(把 <CHECKOUT_DIR> 替换成上面记下的路径):
+
+python3 <CHECKOUT_DIR>/scripts/agent_bootstrap.py --project-dir <CHECKOUT_DIR> --llm-api-key "..." --bilibili-cookie "..." --skip-start
+
+补齐后再 curl 一次 health_url 确认仍然 200,然后向我汇报:使用的模式、复用了哪些凭据、健康检查结果、是否还差东西。
+```
+
+支持 macOS / Linux / WSL2(Windows 请先装 WSL2)。依赖只有 `git` 和 `python3`(3.11+)。
+
+两条路径都会:
+1. 自动克隆仓库(默认到 `~/OpenBiliClaw`,用 `INSTALL_DIR=/path` 可自定义)
+2. 自动在 `~/workspace/OpenBiliClaw` / `~/OpenBiliClaw` / `~/projects/OpenBiliClaw` / `~/code/OpenBiliClaw` 里找已有安装,把它的 LLM API Key 和 B 站 Cookie 复用过来
+3. 起后端服务,做健康检查
+4. 如果还缺凭据,清楚地告诉你还差什么、怎么补
+
+> ⚠️ 不要让 AI 用 WebFetch 去拉 agent-install.md — WebFetch 会把文档交给内部小模型"总结",可能丢掉关键 flag 和命令细节。直接 `curl | bash` 调 install.sh 是可靠的做法。
+> 详细契约与 JSON 事件/错误码见 [docs/agent-install.md](docs/agent-install.md)(机器契约)和 [docs/agent-deployment.md](docs/agent-deployment.md)(人类详细说明)。
+
+### 手动安装
 
 ```bash
 # 克隆项目
@@ -107,7 +146,7 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-### 配置
+### 手动配置
 
 ```bash
 # 复制配置模板
