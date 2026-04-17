@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from .bootstrap import build_openclaw_adapter
 from .errors import AdapterOperationError, AdapterValidationError
-from .schemas import FeedbackRequest
+from .schemas import ChatRequest, FeedbackRequest
 from .skill import build_openclaw_skills
 
 if TYPE_CHECKING:
@@ -25,7 +25,12 @@ _SKILL_PACK_PATH = (
 _RUNTIME_STREAM_URL = "ws://127.0.0.1:8420/api/runtime-stream"
 
 # Event types that the ``listen`` command forwards to stdout.
-_LISTEN_EVENT_TYPES = frozenset({"delight.candidate"})
+#
+# ``delight.candidate`` — proactive surprise recommendation push.
+# ``interest.probe``    — the agent has a new speculative interest hypothesis
+#                         it wants the user to confirm; payload mirrors the
+#                         response of ``next-probe``.
+_LISTEN_EVENT_TYPES = frozenset({"delight.candidate", "interest.probe"})
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -35,9 +40,25 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("sync-account")
     subparsers.add_parser("get-profile")
     subparsers.add_parser("get-delight")
+    subparsers.add_parser("next-probe")
     subparsers.add_parser("runtime-status")
     subparsers.add_parser("doctor")
     subparsers.add_parser("emit-skill-descriptors")
+
+    chat_parser = subparsers.add_parser(
+        "chat",
+        help="Send one Socratic dialogue turn and print the agent's reply as JSON.",
+    )
+    chat_parser.add_argument(
+        "--message",
+        required=True,
+        help="User message to send to the Socratic dialogue.",
+    )
+    chat_parser.add_argument(
+        "--session",
+        default="openclaw",
+        help="Dialogue session label (default: 'openclaw').",
+    )
 
     listen_parser = subparsers.add_parser(
         "listen",
@@ -128,6 +149,14 @@ async def _run_command(args: argparse.Namespace, adapter: Any) -> dict[str, obje
                 note=args.note,
             )
             result = await adapter.submit_feedback(request)
+        elif args.command == "chat":
+            chat_request = ChatRequest(
+                message=args.message,
+                session=getattr(args, "session", "openclaw"),
+            )
+            result = await adapter.chat(chat_request)
+        elif args.command == "next-probe":
+            result = await adapter.get_next_probe()
         else:  # pragma: no cover - argparse guarantees command validity
             raise AdapterValidationError(f"Unsupported command: {args.command}")
     except AdapterValidationError as exc:

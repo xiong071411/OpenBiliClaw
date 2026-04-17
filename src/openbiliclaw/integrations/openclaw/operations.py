@@ -9,10 +9,14 @@ from typing import Any, Protocol
 
 from .errors import AdapterOperationError
 from .schemas import (
+    ChatRequest,
+    ChatResponse,
     DelightItem,
     DelightResponse,
     FeedbackRequest,
     FeedbackResponse,
+    InterestProbeItem,
+    InterestProbeResponse,
     ProfileResponse,
     RecommendationItem,
     RecommendationResponse,
@@ -32,6 +36,7 @@ class SupportsOpenClawServices(Protocol):
     runtime_controller: Any
     account_sync_service: Any
     recommendation_engine: Any
+    llm_service: Any
 
 
 @dataclass(slots=True)
@@ -257,6 +262,112 @@ class OpenClawAdapter:
             )
         except Exception as exc:  # pragma: no cover - defensive adapter boundary
             raise AdapterOperationError("Failed to get delight candidate.") from exc
+
+    async def chat(self, request: ChatRequest) -> ChatResponse:
+        """Run one Socratic dialogue turn and return the agent's reply.
+
+        The agent's reply already flows back into the soul engine through
+        ``SocraticDialogue``'s internal ``learn_from_dialogue`` hook, so the
+        caller does not need to persist anything separately — the user's
+        answer becomes signal the next time the profile is rebuilt.
+        """
+        try:
+            from openbiliclaw.soul.dialogue import SocraticDialogue
+
+            soul_engine = self.services.soul_engine
+            llm_service = getattr(self.services, "llm_service", None)
+            llm_provider = (
+                getattr(soul_engine, "_llm", None)
+                or getattr(llm_service, "_registry", None)
+                if llm_service is not None
+                else getattr(soul_engine, "_llm", None)
+            )
+            dialogue = SocraticDialogue(
+                llm=llm_provider,
+                soul_engine=soul_engine,
+                llm_service=llm_service,
+                session=request.session,
+            )
+            reply = await dialogue.respond(request.message)
+        except Exception as exc:  # pragma: no cover - defensive adapter boundary
+            raise AdapterOperationError("Failed to run Socratic dialogue turn.") from exc
+        return ChatResponse(reply=str(reply), session=request.session)
+
+    async def get_next_probe(self) -> InterestProbeResponse:
+        """Return the next speculative-interest hypothesis to ask the user about.
+
+        Picks the active speculation with the lowest confirmation_count (i.e.
+        the hypothesis that still needs the most validation). Returns ``None``
+        when the speculator has no active candidates — which means the agent
+        currently has no pending interest question to ask.
+        """
+        try:
+            soul_engine = self.services.soul_engine
+            speculator = getattr(soul_engine, "_speculator", None)
+            get_active = getattr(speculator, "get_active_speculations", None)
+            if not callable(get_active):
+                return InterestProbeResponse(probe=None)
+            specs = list(get_active())
+            if not specs:
+                return InterestProbeResponse(probe=None)
+            specs.sort(
+                key=lambda s: (
+                    int(getattr(s, "confirmation_count", 0) or 0),
+                    -float(getattr(s, "weight", 0.0) or 0.0),
+                )
+            )
+            top = specs[0]
+            domain = str(getattr(top, "domain", "")).strip()
+            if not domain:
+                return InterestProbeResponse(probe=None)
+            category = str(getattr(top, "category", "")).strip()
+            reason = str(getattr(top, "reason", "")).strip()
+            confidence = self._to_float(getattr(top, "confidence", 0.0))
+            weight = self._to_float(getattr(top, "weight", 0.0))
+            specifics = [
+                str(getattr(item, "name", "")).strip()
+                for item in getattr(top, "specifics", [])
+                if str(getattr(item, "name", "")).strip()
+            ][:5]
+            question = self._build_probe_question(
+                domain=domain,
+                reason=reason,
+                specifics=specifics,
+            )
+            return InterestProbeResponse(
+                probe=InterestProbeItem(
+                    domain=domain,
+                    category=category,
+                    reason=reason,
+                    confidence=confidence,
+                    weight=weight,
+                    specifics=specifics,
+                    question=question,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive adapter boundary
+            raise AdapterOperationError("Failed to read next interest probe.") from exc
+
+    @staticmethod
+    def _build_probe_question(
+        *,
+        domain: str,
+        reason: str,
+        specifics: list[str],
+    ) -> str:
+        """Template a ready-to-ask probe question from a speculation."""
+        specific_hint = ""
+        if specifics:
+            specific_hint = "（比如：" + "、".join(specifics[:3]) + "）"
+        if reason:
+            return (
+                f"我从你最近的轨迹里嗅到你可能对【{domain}】{specific_hint}感兴趣"
+                f"——{reason} 这个方向你自己认不认？"
+            )
+        return (
+            f"我感觉你可能对【{domain}】{specific_hint}有潜在兴趣，"
+            f"这个方向你自己认不认？"
+        )
 
     async def get_runtime_status(self) -> RuntimeStatusResponse:
         """Return the merged runtime and account sync summary."""

@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
 from .errors import AdapterOperationError, AdapterValidationError
-from .schemas import FeedbackRequest
+from .schemas import ChatRequest, FeedbackRequest
 
 
 @dataclass(slots=True)
@@ -98,6 +98,20 @@ def build_openclaw_skills(adapter: Any) -> list[OpenClawSkillDescriptor]:
         del payload
         return await _run_handler(adapter.get_runtime_status)
 
+    async def chat_handler(payload: dict[str, object]) -> dict[str, object]:
+        async def action() -> Any:
+            request = ChatRequest(
+                message=str(payload.get("message", "")),
+                session=str(payload.get("session", "openclaw")),
+            )
+            return await adapter.chat(request)
+
+        return await _run_handler(action)
+
+    async def get_next_probe_handler(payload: dict[str, object]) -> dict[str, object]:
+        del payload
+        return await _run_handler(adapter.get_next_probe)
+
     return [
         OpenClawSkillDescriptor(
             name="openbiliclaw_sync_account",
@@ -148,5 +162,33 @@ def build_openclaw_skills(adapter: Any) -> list[OpenClawSkillDescriptor]:
             description="Read the current OpenBiliClaw runtime status summary.",
             input_schema={"type": "object", "properties": {}},
             handler=get_runtime_status_handler,
+        ),
+        OpenClawSkillDescriptor(
+            name="openbiliclaw_chat",
+            description=(
+                "Send one Socratic dialogue turn to OpenBiliClaw and receive "
+                "the agent's reply. The dialogue probes deeper into the user's "
+                "motivations and refines the soul profile automatically."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "minLength": 1},
+                    "session": {"type": "string"},
+                },
+                "required": ["message"],
+            },
+            handler=chat_handler,
+        ),
+        OpenClawSkillDescriptor(
+            name="openbiliclaw_next_probe",
+            description=(
+                "Get the next speculative-interest hypothesis that the agent "
+                "wants the user to confirm or reject. Returns a ready-to-ask "
+                "question plus raw hypothesis data. Use chat to relay the "
+                "user's answer back into the learning loop."
+            ),
+            input_schema={"type": "object", "properties": {}},
+            handler=get_next_probe_handler,
         ),
     ]

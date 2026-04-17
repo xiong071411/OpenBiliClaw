@@ -464,6 +464,7 @@ class ContinuousRefreshController:
                 limit=_MAX_DISCOVERY_BACKFILL_PER_REFRESH,
             )
             await self._publish_delight_if_available()
+            await self._publish_interest_probe_if_available()
 
         now = self._now().isoformat()
         latest_event_id = self.database.get_latest_event_id()
@@ -529,6 +530,59 @@ class ContinuousRefreshController:
                 "delight_score": candidate.get("delight_score", 0.0),
                 "delight_hook": candidate.get("delight_hook", ""),
                 "cover_url": candidate.get("cover_url", ""),
+            }
+        )
+
+    async def _publish_interest_probe_if_available(self) -> None:
+        """Push the top speculative-interest hypothesis via WebSocket.
+
+        Fires an ``interest.probe`` event when the speculator has an active
+        hypothesis that the agent should ask the user to confirm.
+        """
+        speculator = getattr(self.soul_engine, "_speculator", None)
+        get_active = getattr(speculator, "get_active_speculations", None)
+        if not callable(get_active):
+            return
+        specs = list(get_active())
+        if not specs:
+            return
+        specs.sort(
+            key=lambda s: (
+                int(getattr(s, "confirmation_count", 0) or 0),
+                -float(getattr(s, "weight", 0.0) or 0.0),
+            )
+        )
+        top = specs[0]
+        domain = str(getattr(top, "domain", "")).strip()
+        if not domain:
+            return
+        reason = str(getattr(top, "reason", "")).strip()
+        specifics = [
+            str(getattr(item, "name", "")).strip()
+            for item in getattr(top, "specifics", [])
+            if str(getattr(item, "name", "")).strip()
+        ][:5]
+        specific_hint = ""
+        if specifics:
+            specific_hint = "（比如：" + "、".join(specifics[:3]) + "）"
+        question = (
+            f"我从你最近的轨迹里嗅到你可能对【{domain}】{specific_hint}感兴趣"
+            f"——{reason} 这个方向你自己认不认？"
+            if reason
+            else f"我感觉你可能对【{domain}】{specific_hint}有潜在兴趣，这个方向你自己认不认？"
+        )
+        await self._publish_event(
+            {
+                "type": "interest.probe",
+                "phase": "ready",
+                "message": "有一个猜测兴趣方向想确认",
+                "domain": domain,
+                "category": str(getattr(top, "category", "")),
+                "reason": reason,
+                "confidence": float(getattr(top, "confidence", 0.0) or 0.0),
+                "weight": float(getattr(top, "weight", 0.0) or 0.0),
+                "specifics": specifics,
+                "question": question,
             }
         )
 

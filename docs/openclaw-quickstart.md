@@ -135,10 +135,14 @@ uv run python -m openbiliclaw.integrations.openclaw.cli <command> [flags]
 
 - `sync-account`
 - `get-profile`
+- `get-delight` — 检查是否有惊喜推荐
+- `next-probe` — 获取下一个待确认的猜测兴趣方向
+- `chat --message "..." [--session openclaw]` — 苏格拉底式对话，一问一答，自动回写画像
 - `runtime-status`
 - `recommend --limit 5`
 - `recommend --limit 5 --refresh-if-needed`
 - `submit-feedback --recommendation-id 7 --feedback-type like`
+- `listen` — 长连接推送 (`delight.candidate` + `interest.probe`)
 - `doctor`
 - `emit-skill-descriptors`
 
@@ -181,7 +185,24 @@ uv run python -m openbiliclaw.integrations.openclaw.cli recommend --limit 3
 uv run python -m openbiliclaw.integrations.openclaw.cli get-profile
 ```
 
-### 2. 取推荐
+### 2. 确认猜测兴趣（主动追问）
+
+先看有没有待确认的猜测兴趣方向：
+
+```bash
+uv run python -m openbiliclaw.integrations.openclaw.cli next-probe
+```
+
+如果返回了一条假设，OpenClaw 应把 `question` 字段展示给用户，然后把用户的回答通过 `chat` 回传：
+
+```bash
+uv run python -m openbiliclaw.integrations.openclaw.cli chat \
+  --message "嗯对，最近在看很多参数化设计的东西"
+```
+
+苏格拉底式对话支持多轮——每次 `chat` 都会返回一个新的追问/回应，并且对话内容会自动回写进灵魂画像。
+
+### 3. 取推荐
 
 优先走快路径：
 
@@ -189,7 +210,7 @@ uv run python -m openbiliclaw.integrations.openclaw.cli get-profile
 uv run python -m openbiliclaw.integrations.openclaw.cli recommend --limit 3
 ```
 
-### 3. 写反馈
+### 4. 写反馈
 
 ```bash
 uv run python -m openbiliclaw.integrations.openclaw.cli submit-feedback \
@@ -206,13 +227,13 @@ uv run python -m openbiliclaw.integrations.openclaw.cli submit-feedback \
   --note "方向对，但我想看更深一点。"
 ```
 
-### 4. 查看运行时状态
+### 5. 查看运行时状态
 
 ```bash
 uv run python -m openbiliclaw.integrations.openclaw.cli runtime-status
 ```
 
-### 5. 低频做账户同步
+### 6. 低频做账户同步
 
 ```bash
 uv run python -m openbiliclaw.integrations.openclaw.cli sync-account

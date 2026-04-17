@@ -18,9 +18,12 @@ from openbiliclaw.integrations.openclaw.bootstrap import (
 from openbiliclaw.integrations.openclaw.errors import AdapterValidationError
 from openbiliclaw.integrations.openclaw.operations import OpenClawAdapter
 from openbiliclaw.integrations.openclaw.schemas import (
+    ChatRequest,
+    ChatResponse,
     DelightItem,
     DelightResponse,
     FeedbackRequest,
+    InterestProbeResponse,
     ProfileResponse,
     RecommendationItem,
     RecommendationResponse,
@@ -166,6 +169,50 @@ def test_feedback_request_normalizes_valid_payload() -> None:
     assert payload.note == "很对胃口"
 
 
+class _FakeSpeculativeInterest:
+    """Minimal stand-in for ``speculator.SpeculativeInterest``."""
+
+    def __init__(
+        self,
+        domain: str = "建筑美学",
+        category: str = "人文",
+        reason: str = "你最近看了很多关于结构和空间的内容。",
+        confidence: float = 0.45,
+        weight: float = 0.4,
+        confirmation_count: int = 0,
+        specifics: list[object] | None = None,
+    ) -> None:
+        self.domain = domain
+        self.category = category
+        self.reason = reason
+        self.confidence = confidence
+        self.weight = weight
+        self.confirmation_count = confirmation_count
+        self.specifics = specifics or []
+
+
+class _FakeSpeculativeSpecific:
+    def __init__(self, name: str = "") -> None:
+        self.name = name
+
+
+class _FakeSpeculator:
+    def __init__(self, specs: list[_FakeSpeculativeInterest] | None = None) -> None:
+        self._specs = specs if specs is not None else [_FakeSpeculativeInterest()]
+
+    def get_active_speculations(self) -> list[_FakeSpeculativeInterest]:
+        return list(self._specs)
+
+
+class _FakeLLMService:
+    """Minimal LLM service that returns a canned Socratic reply."""
+
+    async def complete_socratic_dialogue(
+        self, *, user_message: str, history: list[dict[str, str]] | None = None,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(content="你说的这个方向我有个猜测——你是不是其实更在意底层结构而不只是结论？")
+
+
 class _FakeSoulEngine:
     def __init__(self) -> None:
         self.profile = SoulProfile(
@@ -181,9 +228,16 @@ class _FakeSoulEngine:
         )
         self.feedback_batches = 0
         self.immediate_calls: list[tuple[str, str, str]] = []
+        self._speculator = _FakeSpeculator()
+        self._llm = None  # Socratic dialogue falls through to llm_service
 
     async def get_profile(self) -> SoulProfile:
         return self.profile
+
+    async def learn_from_dialogue(
+        self, *, user_message: str, assistant_reply: str, session: str,
+    ) -> None:
+        pass  # no-op for tests
 
     def record_immediate_feedback_cognition(
         self,
@@ -340,6 +394,7 @@ def _build_adapter() -> tuple[
     runtime_controller = _FakeRuntimeController()
     account_sync_service = _FakeAccountSyncService()
     recommendation_engine = _FakeRecommendationEngine()
+    llm_service = _FakeLLMService()
     services = SimpleNamespace(
         soul_engine=soul_engine,
         memory_manager=memory_manager,
@@ -347,6 +402,7 @@ def _build_adapter() -> tuple[
         runtime_controller=runtime_controller,
         account_sync_service=account_sync_service,
         recommendation_engine=recommendation_engine,
+        llm_service=llm_service,
     )
     return (
         OpenClawAdapter(services=services),
@@ -659,3 +715,84 @@ def test_build_openclaw_adapter_returns_ready_adapter(monkeypatch) -> None:
 
     assert isinstance(adapter, OpenClawAdapter)
     assert adapter.services is fake_services
+
+
+@pytest.mark.asyncio
+async def test_chat_delegates_to_socratic_dialogue() -> None:
+    adapter, soul_engine, *_ = _build_adapter()
+
+    result = await adapter.chat(
+        ChatRequest(message="我最近对建筑很感兴趣", session="test")
+    )
+
+    assert isinstance(result, ChatResponse)
+    assert "底层结构" in result.reply
+    assert result.session == "test"
+
+
+@pytest.mark.asyncio
+async def test_chat_rejects_empty_message() -> None:
+    from openbiliclaw.integrations.openclaw.errors import AdapterValidationError
+
+    with pytest.raises(AdapterValidationError):
+        ChatRequest(message="   ", session="test")
+
+
+@pytest.mark.asyncio
+async def test_get_next_probe_returns_top_speculation() -> None:
+    adapter, soul_engine, *_ = _build_adapter()
+
+    result = await adapter.get_next_probe()
+
+    assert isinstance(result, InterestProbeResponse)
+    assert result.probe is not None
+    assert result.probe.domain == "建筑美学"
+    assert result.probe.category == "人文"
+    assert "建筑美学" in result.probe.question
+    assert "认不认" in result.probe.question
+
+
+@pytest.mark.asyncio
+async def test_get_next_probe_returns_none_when_no_speculations() -> None:
+    adapter, soul_engine, *_ = _build_adapter()
+    soul_engine._speculator = _FakeSpeculator(specs=[])
+
+    result = await adapter.get_next_probe()
+
+    assert result.probe is None
+
+
+@pytest.mark.asyncio
+async def test_get_next_probe_picks_lowest_confirmation_count() -> None:
+    adapter, soul_engine, *_ = _build_adapter()
+    soul_engine._speculator = _FakeSpeculator(specs=[
+        _FakeSpeculativeInterest(domain="量子物理", confirmation_count=2, weight=0.9),
+        _FakeSpeculativeInterest(domain="分子料理", confirmation_count=0, weight=0.3),
+    ])
+
+    result = await adapter.get_next_probe()
+
+    assert result.probe is not None
+    assert result.probe.domain == "分子料理"
+
+
+@pytest.mark.asyncio
+async def test_get_next_probe_includes_specifics_in_question() -> None:
+    adapter, soul_engine, *_ = _build_adapter()
+    soul_engine._speculator = _FakeSpeculator(specs=[
+        _FakeSpeculativeInterest(
+            domain="建筑美学",
+            reason="结构和空间让你着迷。",
+            specifics=[
+                _FakeSpeculativeSpecific(name="参数化设计"),
+                _FakeSpeculativeSpecific(name="混凝土美学"),
+            ],
+        ),
+    ])
+
+    result = await adapter.get_next_probe()
+
+    assert result.probe is not None
+    assert "参数化设计" in result.probe.question
+    assert "混凝土美学" in result.probe.question
+    assert result.probe.specifics == ["参数化设计", "混凝土美学"]

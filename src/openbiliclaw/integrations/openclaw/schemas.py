@@ -111,3 +111,50 @@ class DelightResponse:
     """Proactive delight recommendation result returned to OpenClaw."""
 
     item: DelightItem | None = None
+
+
+@dataclass(slots=True)
+class ChatRequest:
+    """Normalized chat payload received from OpenClaw."""
+
+    message: str
+    session: str = "openclaw"
+
+    def __post_init__(self) -> None:
+        self.message = self.message.strip()
+        self.session = self.session.strip() or "openclaw"
+        if not self.message:
+            raise AdapterValidationError("chat message must not be empty.")
+
+
+@dataclass(slots=True)
+class ChatResponse:
+    """Socratic dialogue reply returned to OpenClaw."""
+
+    reply: str
+    session: str = "openclaw"
+
+
+@dataclass(slots=True)
+class InterestProbeItem:
+    """One speculative interest hypothesis the agent wants the user to confirm.
+
+    ``question`` is a ready-to-ask prompt OpenClaw can pose to the user as-is;
+    ``domain`` / ``category`` / ``reason`` / ``confidence`` / ``specifics``
+    expose the raw hypothesis so the agent can rephrase if it prefers.
+    """
+
+    domain: str
+    category: str = ""
+    reason: str = ""
+    confidence: float = 0.0
+    weight: float = 0.0
+    specifics: list[str] = field(default_factory=list)
+    question: str = ""
+
+
+@dataclass(slots=True)
+class InterestProbeResponse:
+    """Next interest-confirmation probe returned to OpenClaw."""
+
+    probe: InterestProbeItem | None = None

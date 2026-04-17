@@ -7,9 +7,12 @@ from pathlib import Path
 
 from openbiliclaw.integrations.openclaw.errors import AdapterValidationError
 from openbiliclaw.integrations.openclaw.schemas import (
+    ChatResponse,
     DelightItem,
     DelightResponse,
     FeedbackResponse,
+    InterestProbeItem,
+    InterestProbeResponse,
     ProfileResponse,
     RecommendationItem,
     RecommendationResponse,
@@ -93,6 +96,27 @@ class _FakeCliAdapter:
             last_refresh_at="2026-03-15T12:00:00+08:00",
             last_account_sync_at="2026-03-15T12:05:00+08:00",
             last_account_sync_error="",
+        )
+
+    async def chat(self, request) -> ChatResponse:  # noqa: ANN001
+        self.calls.append(("chat", request.message, request.session))
+        return ChatResponse(
+            reply="你说的这个方向我有个猜测——你是不是更在意底层结构？",
+            session=request.session,
+        )
+
+    async def get_next_probe(self) -> InterestProbeResponse:
+        self.calls.append(("get_next_probe",))
+        return InterestProbeResponse(
+            probe=InterestProbeItem(
+                domain="建筑美学",
+                category="人文",
+                reason="你最近看了很多关于结构和空间的内容。",
+                confidence=0.45,
+                weight=0.4,
+                specifics=["参数化设计"],
+                question="我从你最近的轨迹里嗅到你可能对【建筑美学】（比如：参数化设计）感兴趣——你最近看了很多关于结构和空间的内容。 这个方向你自己认不认？",
+            )
         )
 
 
@@ -198,7 +222,7 @@ def test_doctor_cli_reports_skill_pack_and_registered_skill_names(capsys) -> Non
                 "skills/openbiliclaw-adapter/SKILL.md"
             ),
             "skill_pack_exists": True,
-            "skill_count": 6,
+            "skill_count": 8,
             "skill_names": [
                 "openbiliclaw_sync_account",
                 "openbiliclaw_get_profile",
@@ -206,6 +230,8 @@ def test_doctor_cli_reports_skill_pack_and_registered_skill_names(capsys) -> Non
                 "openbiliclaw_submit_feedback",
                 "openbiliclaw_get_delight",
                 "openbiliclaw_get_runtime_status",
+                "openbiliclaw_chat",
+                "openbiliclaw_next_probe",
             ],
             "cli_module": "openbiliclaw.integrations.openclaw.cli",
         },
@@ -283,3 +309,61 @@ def test_workspace_skill_pack_exists_and_mentions_cli_bridge() -> None:
     assert "recommend --limit" in content
     assert "get-delight" in content
     assert "listen" in content
+
+
+def test_chat_cli_emits_json_and_returns_zero(capsys) -> None:
+    from openbiliclaw.integrations.openclaw.cli import main
+
+    adapter = _FakeCliAdapter()
+
+    exit_code = main(
+        ["chat", "--message", "我最近对建筑很感兴趣"],
+        adapter=adapter,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["ok"] is True
+    assert "底层结构" in payload["data"]["reply"]
+    assert payload["data"]["session"] == "openclaw"
+    assert adapter.calls == [("chat", "我最近对建筑很感兴趣", "openclaw")]
+
+
+def test_chat_cli_accepts_custom_session(capsys) -> None:
+    from openbiliclaw.integrations.openclaw.cli import main
+
+    adapter = _FakeCliAdapter()
+
+    exit_code = main(
+        ["chat", "--message", "你好", "--session", "my-session"],
+        adapter=adapter,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["data"]["session"] == "my-session"
+
+
+def test_next_probe_cli_emits_json_and_returns_zero(capsys) -> None:
+    from openbiliclaw.integrations.openclaw.cli import main
+
+    adapter = _FakeCliAdapter()
+
+    exit_code = main(["next-probe"], adapter=adapter)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["ok"] is True
+    assert payload["data"]["probe"]["domain"] == "建筑美学"
+    assert "认不认" in payload["data"]["probe"]["question"]
+    assert adapter.calls == [("get_next_probe",)]
+
+
+def test_listen_default_events_include_interest_probe() -> None:
+    from openbiliclaw.integrations.openclaw.cli import _LISTEN_EVENT_TYPES
+
+    assert "interest.probe" in _LISTEN_EVENT_TYPES
+    assert "delight.candidate" in _LISTEN_EVENT_TYPES

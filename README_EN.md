@@ -148,12 +148,13 @@ This repo ships a [workspace skill](skills/openbiliclaw-adapter/SKILL.md). Point
 
 ### What you get after integration
 
+- ✨ **Proactive recommendations** — the system continuously discovers content in the background; when it finds a high-scoring surprise, it pushes to OpenClaw via WebSocket — **you don't have to ask**
+- 🔮 **Proactive interest probing** — the system guesses you might be into a new domain, generates a hypothesis and a question, and has OpenClaw come ask you "does this direction resonate?" — your answer automatically refines the profile
+- 💬 **Socratic dialogue** — not just interest confirmation; OpenClaw can have deep conversations: probing motivations, proposing hypotheses, confirming understanding — the more you talk, the better it knows you
 - 📖 **Read the current soul profile** — MBTI, core traits, deep needs, interest domains
 - 🎯 **Fetch personalized recommendations on demand** — with explanations, confidence scores, and topic labels
 - 💬 **Write feedback back into the learning loop** — `like` / `dislike` / `comment` instantly update the profile and pool scoring
-- ✨ **Receive delight pushes** — poll or WebSocket stream; the runtime proactively surfaces content it thinks will delight you
 - 🔄 **Sync Bilibili account signals** — pull history / favorites / following and feed them into the memory system
-- 🩺 **Self-check & runtime diagnostics** — `doctor` / `runtime-status` for fast connectivity checks
 
 ### One-sentence integration prompt
 
@@ -163,32 +164,50 @@ Paste the following into OpenClaw (or Claude Code / Codex CLI / Cursor) — it w
 Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/openclaw-quickstart.md to integrate this repository into OpenClaw (use Bash `curl` to fetch the document, NOT WebFetch — WebFetch summarises markdown and drops critical commands).
 ```
 
-### Usage example
+### Usage examples
 
-Once integrated, just talk to OpenClaw in natural language — it dispatches skills for you. Example:
+After integration, it's not just "you ask, it answers" — **the system comes to you**. Here are the two core scenarios:
 
-> **You**: "Recommend three Bilibili videos worth watching today, skip the anime stuff."
+#### Scenario 1: System proactively pushes a surprise recommendation
+
+OpenClaw is running `listen` in the background. After a refresh cycle, the system finds a high-scoring piece of content:
+
+> **OpenClaw** (receives WebSocket `delight.candidate`, comes to you proactively):
 >
-> **OpenClaw** (internally runs):
-> ```bash
-> uv run python -m openbiliclaw.integrations.openclaw.cli recommend --limit 3
-> ```
-> Parses the returned JSON, filters out anime topics, and replies:
->
-> > Here are 3 picks, all aligned with what you've been chewing on for the past two weeks:
-> > 1. **"Why You Can't Actually Lie Flat Even Back in a Small Town"** — the Minsky moment of county economies. You've been deep in geopolitics and macro debt; this one dissects how land finance and the debt cycle mesh together using cold, hard reasoning. `[BV1KMwuzdEcB]`
-> > 2. **"Infinite Xiao Liang's Online Creature ID #59"** — no tolerance for BS. You've been tense from staring at LLM logic; Xiao Liang picks apart filtered fake videos with biology, stress-relief without dumbing down. `[BV1PRDxBuET9]`
-> > 3. ……
+> > Just found something you might unexpectedly enjoy:
+> > **"Why You Can't Actually Lie Flat Even Back in a Small Town"** — the Minsky moment of county economies. You've been deep in geopolitics and macro debt; this one dissects how land finance and the debt cycle mesh together. `[BV1KMwuzdEcB]`
 > >
-> > Tell me which one lands and I'll tag the feedback.
+> > Want to check it out?
 >
-> **You**: "The first one nailed it."
+> **You**: "That one nailed it."
 >
-> **OpenClaw** (internally runs):
-> ```bash
-> uv run python -m openbiliclaw.integrations.openclaw.cli submit-feedback \
->   --recommendation-id 4268 --feedback-type like
-> ```
+> **OpenClaw** (internally runs `submit-feedback --recommendation-id 4268 --feedback-type like`)
+
+You never asked for a recommendation — the system surfaced it on its own.
+
+#### Scenario 2: System proactively asks about your interests
+
+OpenClaw receives an `interest.probe` event (or pulls `next-probe`) and finds a speculative-interest hypothesis waiting for confirmation:
+
+> **OpenClaw** (comes to you proactively):
+>
+> > I've been picking up signals that you might be into **architectural aesthetics** (e.g., parametric design, concrete minimalism) — you've been watching a lot of content about structure and space lately. Does this direction resonate with you?
+>
+> **You**: "Yeah, I've been looking at a lot of parametric design stuff. Tadao Ando's exposed concrete aesthetic really gets me."
+>
+> **OpenClaw** (internally runs `chat --message "Yeah, I've been looking at…"`, returns a Socratic follow-up):
+>
+> > Here's my hypothesis — you're not just interested in buildings, you're drawn to how minimal elements create maximum tension. Ando's approach to concrete is the same aesthetic drive as your obsession with "making the gears mesh" when you analyze LLM architectures. Am I close?
+
+The dialogue automatically feeds back into the soul profile — the next discovery cycle will incorporate architectural aesthetics as a real interest and start searching in that direction.
+
+#### Scenario 3: You can also just ask for recommendations
+
+Of course, the traditional "you ask → it answers" flow works too:
+
+> **You**: "Recommend three Bilibili videos worth watching today."
+>
+> **OpenClaw** (internally runs `recommend --limit 3`, formats and replies)
 
 The whole loop stays local — OpenClaw just calls the CLI bridge; your profile and data never leave the SQLite file on your disk.
 

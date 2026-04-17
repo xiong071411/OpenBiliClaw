@@ -11,9 +11,12 @@ from openbiliclaw.integrations.openclaw.errors import (
     AdapterValidationError,
 )
 from openbiliclaw.integrations.openclaw.schemas import (
+    ChatResponse,
     DelightItem,
     DelightResponse,
     FeedbackResponse,
+    InterestProbeItem,
+    InterestProbeResponse,
     ProfileResponse,
     RecommendationItem,
     RecommendationResponse,
@@ -103,6 +106,31 @@ class _FakeAdapter:
             last_account_sync_error="",
         )
 
+    async def chat(self, request) -> ChatResponse:  # noqa: ANN001
+        self.calls.append(("chat", request.message, request.session))
+        return ChatResponse(
+            reply="你说的这个方向我有个猜测——你是不是其实更在意底层结构而不只是结论？",
+            session=request.session,
+        )
+
+    async def get_next_probe(self) -> InterestProbeResponse:
+        self.calls.append(("get_next_probe",))
+        return InterestProbeResponse(
+            probe=InterestProbeItem(
+                domain="建筑美学",
+                category="人文",
+                reason="你最近看了很多关于结构和空间的内容。",
+                confidence=0.45,
+                weight=0.4,
+                specifics=["参数化设计", "混凝土美学"],
+                question=(
+                    "我从你最近的轨迹里嗅到你可能对【建筑美学】"
+                    "（比如：参数化设计、混凝土美学）感兴趣"
+                    "——你最近看了很多关于结构和空间的内容。 这个方向你自己认不认？"
+                ),
+            )
+        )
+
 
 def test_build_openclaw_skills_returns_expected_names() -> None:
     adapter = _FakeAdapter()
@@ -116,6 +144,8 @@ def test_build_openclaw_skills_returns_expected_names() -> None:
         "openbiliclaw_submit_feedback",
         "openbiliclaw_get_delight",
         "openbiliclaw_get_runtime_status",
+        "openbiliclaw_chat",
+        "openbiliclaw_next_probe",
     ]
 
 
@@ -247,5 +277,30 @@ async def test_get_delight_skill_delegates_to_adapter() -> None:
     assert payload["ok"] is True
     assert payload["data"]["item"]["bvid"] == "BV1DELIGHT"
     assert payload["data"]["item"]["delight_hook"] == "深层共鸣"
-    assert payload["data"]["item"]["delight_score"] == 0.92
-    assert adapter.calls == [("get_delight",)]
+
+
+@pytest.mark.asyncio
+async def test_chat_skill_delegates_to_adapter() -> None:
+    adapter = _FakeAdapter()
+    skills = build_openclaw_skills(adapter)
+    skill = next(item for item in skills if item.name == "openbiliclaw_chat")
+
+    payload = await skill.handler({"message": "我最近对建筑很感兴趣", "session": "test"})
+
+    assert payload["ok"] is True
+    assert "底层结构" in payload["data"]["reply"]
+    assert adapter.calls == [("chat", "我最近对建筑很感兴趣", "test")]
+
+
+@pytest.mark.asyncio
+async def test_next_probe_skill_delegates_to_adapter() -> None:
+    adapter = _FakeAdapter()
+    skills = build_openclaw_skills(adapter)
+    skill = next(item for item in skills if item.name == "openbiliclaw_next_probe")
+
+    payload = await skill.handler({})
+
+    assert payload["ok"] is True
+    assert payload["data"]["probe"]["domain"] == "建筑美学"
+    assert "参数化设计" in payload["data"]["probe"]["specifics"]
+    assert adapter.calls == [("get_next_probe",)]

@@ -66,15 +66,17 @@ Supported commands:
 - `sync-account`
 - `get-profile`
 - `get-delight` — check for a proactive surprise recommendation
+- `next-probe` — get the next speculative-interest hypothesis to ask the user about
+- `chat --message "..." [--session openclaw]` — send one Socratic dialogue turn, returns agent reply
 - `runtime-status`
 - `recommend --limit 5`
 - `recommend --limit 5 --refresh-if-needed`
 - `submit-feedback --recommendation-id 7 --feedback-type like --note "很对胃口"`
-- `listen` — long-running WebSocket stream for real-time delight push (see below)
+- `listen` — long-running WebSocket stream for real-time push events (see below)
 
-## Proactive Delight Push (WebSocket)
+## Proactive Push (WebSocket)
 
-Instead of polling `get-delight`, OpenClaw can receive real-time push notifications via WebSocket:
+Instead of polling `get-delight` / `next-probe`, OpenClaw can receive real-time push notifications via WebSocket:
 
 ```bash
 uv run python -m openbiliclaw.integrations.openclaw.cli listen
@@ -83,26 +85,49 @@ uv run python -m openbiliclaw.integrations.openclaw.cli listen
 This connects to the runtime stream and outputs one JSON line per event:
 
 ```json
-{"ok": true, "data": {"status": "connected", "ws_url": "ws://127.0.0.1:8420/api/runtime-stream", "event_types": ["delight.candidate"]}}
+{"ok": true, "data": {"status": "connected", "ws_url": "ws://127.0.0.1:8420/api/runtime-stream", "event_types": ["delight.candidate", "interest.probe"]}}
 {"ok": true, "data": {"type": "delight.candidate", "bvid": "BV1xxx", "title": "...", "delight_reason": "...", "delight_score": 0.92, "delight_hook": "深层共鸣"}}
+{"ok": true, "data": {"type": "interest.probe", "domain": "建筑美学", "reason": "...", "question": "我从你最近的轨迹里嗅到你可能对【建筑美学】感兴趣——... 这个方向你自己认不认？"}}
 ```
 
-The command auto-reconnects on disconnection. Press Ctrl-C to stop.
+Default event types: `delight.candidate` (surprise recommendation) and `interest.probe` (interest hypothesis to confirm). The command auto-reconnects on disconnection. Press Ctrl-C to stop.
 
 Options:
 - `--ws-url <url>` — override the WebSocket endpoint
-- `--events <types>` — comma-separated event types to listen for (default: `delight.candidate`)
+- `--events <types>` — comma-separated event types to forward (default: `delight.candidate,interest.probe`)
+
+## Socratic Dialogue & Interest Probing
+
+OpenClaw can proactively ask the user to clarify or confirm their interests, then send the answer back into the learning loop.
+
+### Get the next interest hypothesis
+
+```bash
+uv run python -m openbiliclaw.integrations.openclaw.cli next-probe
+```
+
+Returns a ready-to-ask `question` plus raw hypothesis data (`domain`, `reason`, `specifics`, `confidence`). If no active hypothesis exists, `probe` is `null`.
+
+### Relay the user's answer via Socratic dialogue
+
+```bash
+uv run python -m openbiliclaw.integrations.openclaw.cli chat \
+  --message "嗯对，最近在看很多参数化设计的东西"
+```
+
+The agent replies in Socratic style (probing deeper, proposing hypotheses) and the dialogue automatically feeds back into the soul engine to refine the user's profile.
 
 ## Daily Loop
 
 Use this order for routine work:
 
 1. `get-profile`
-2. `recommend --limit <n>`
-3. `submit-feedback`
-4. `runtime-status`
-5. `get-delight` or `listen` for proactive surprise recommendations
-6. `sync-account` when long-term signals need refreshing
+2. `next-probe` — if a hypothesis is pending, ask the user and relay via `chat`
+3. `recommend --limit <n>`
+4. `submit-feedback`
+5. `runtime-status`
+6. `get-delight` or `listen` for proactive surprise recommendations and interest probes
+7. `sync-account` when long-term signals need refreshing
 
 ## Working Rules
 
@@ -135,6 +160,15 @@ uv run python -m openbiliclaw.integrations.openclaw.cli submit-feedback \
 
 ```bash
 uv run python -m openbiliclaw.integrations.openclaw.cli get-delight
+```
+
+```bash
+uv run python -m openbiliclaw.integrations.openclaw.cli next-probe
+```
+
+```bash
+uv run python -m openbiliclaw.integrations.openclaw.cli chat \
+  --message "嗯对，最近在看很多参数化设计的东西"
 ```
 
 ```bash
