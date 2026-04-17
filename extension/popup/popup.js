@@ -2,6 +2,7 @@ import {
   getActivityCardState,
   buildFeedbackPayload,
   buildNextCognitionHistoryState,
+  buildContentUrl,
   buildVideoUrl,
   formatRelativeTimestamp,
   getCommentSubmitUiState,
@@ -1115,7 +1116,8 @@ async function openRecommendation(bvid, context = {}) {
     topic_label: context.topic_label || "",
     up_name: context.up_name || "",
   });
-  await chrome.tabs.create({ url: buildVideoUrl(bvid) });
+  const url = buildContentUrl(context) || buildVideoUrl(bvid);
+  await chrome.tabs.create({ url });
 }
 
 function createActionButton(label, className, onClick) {
