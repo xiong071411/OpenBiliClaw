@@ -13,6 +13,7 @@
     ],
     "host_permissions": [
         "*://*.bilibili.com/*",
+        "*://*.xiaohongshu.com/*",
         "http://127.0.0.1:8420/*",
         "http://localhost:8420/*"
     ],
@@ -25,7 +26,16 @@
                 "*://*.bilibili.com/*"
             ],
             "js": [
-                "dist/content/collector.js"
+                "dist/content/bilibili.js"
+            ],
+            "run_at": "document_idle"
+        },
+        {
+            "matches": [
+                "*://*.xiaohongshu.com/*"
+            ],
+            "js": [
+                "dist/content/xiaohongshu.js"
             ],
             "run_at": "document_idle"
         }

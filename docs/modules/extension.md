@@ -4,7 +4,7 @@
 
 `extension/` 是 Chrome 插件子项目，负责：
 
-- 在 B 站页面采集行为事件
+- 在 B 站 / 小红书等支持的站点采集行为事件（平台无关内核 + 平台适配器）
 - 通过 background service worker 缓冲并上报到本地后端
 - 在 side panel 中展示连接状态、推荐结果、画像和聊天入口
 
@@ -20,6 +20,7 @@
 | 认知变化历史分页 | ✅ | 画像 tab 的认知卡片支持展开详情，并可下拉或点击按钮继续查看更早的变化记录 |
 | 认知卡片上下文澄清 | ✅ | 画像 tab 的认知卡片默认态现在固定展示“结论 + 上下文 + 状态提示”，用户可直接看出这是对哪条内容/哪轮聊天/哪组聚合信号形成的判断，以及这张卡片是否还能展开 |
 | 画像多层认知展示 | ✅ | 画像 tab 现已把“你怎么处理信息 / 你在内容里长期在找什么 / 这阵子更像在经历什么”单独拆开，不再只显示一段画像 prose 加兴趣 chips |
+| 多源行为采集（MVP） | ✅ | content script 拆成「平台无关 kernel + 平台适配器」，新增小红书适配器。manifest 覆盖 `*.xiaohongshu.com`，事件携带 `source_platform` 字段；MVP 仅采 snapshot / click / scroll / search，like/collect 延后 |
 
 ## 目录结构
 
@@ -36,10 +37,15 @@ extension/
 │   │   ├── buffer.ts
 │   │   └── service-worker.ts
 │   ├── content/
-│   │   └── collector.ts
+│   │   ├── kernel.ts          # 平台无关的 DOM 观察 + 事件派发
+│   │   ├── bilibili.ts        # B 站 entry point，挂载 bilibiliAdapter
+│   │   └── xiaohongshu.ts     # 小红书 entry point，挂载 xiaohongshuAdapter
 │   └── shared/
-│       ├── behavior.ts
-│       └── types.ts
+│       ├── behavior.ts        # createBehaviorEvent / DOM snapshot kernel
+│       ├── types.ts           # BehaviorEvent + PlatformAdapter 接口
+│       └── platforms/
+│           ├── bilibili.ts    # bvid 提取、卡片选择器、动作关键字
+│           └── xiaohongshu.ts # note_id 提取、卡片选择器
 └── tests/
     ├── collector-helpers.test.ts
     ├── dist-module-specifiers.test.ts

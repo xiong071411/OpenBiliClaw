@@ -462,6 +462,7 @@ def create_app(
     async def ingest_events(payload: BehaviorEventBatchIn) -> EventIngestResponse:
         accepted = 0
         for item in payload.events:
+            source_platform = (item.source_platform or "bilibili").strip() or "bilibili"
             event = {
                 "event_type": item.type,
                 "url": item.url,
@@ -470,6 +471,7 @@ def create_app(
                 "metadata": {
                     **item.metadata,
                     "timestamp": item.timestamp,
+                    "source_platform": source_platform,
                 },
             }
             await ctx.memory_manager.propagate_event(event)

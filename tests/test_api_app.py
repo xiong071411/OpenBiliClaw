@@ -277,6 +277,56 @@ class TestBackendAPI:
         assert memory.events[0]["event_type"] == "click"
         assert memory.events[0]["url"] == "https://www.bilibili.com/video/BV1TEST"
         assert memory.events[0]["metadata"]["timestamp"] == 1710000000000
+        # Legacy payload without source_platform defaults to bilibili so the
+        # existing extension build keeps working across the upgrade.
+        assert memory.events[0]["metadata"]["source_platform"] == "bilibili"
+
+    def test_events_endpoint_preserves_source_platform(self) -> None:
+        from fastapi.testclient import TestClient
+
+        class FakeMemoryManager:
+            def __init__(self) -> None:
+                self.events: list[dict[str, object]] = []
+
+            async def propagate_event(self, event: dict[str, object]) -> None:
+                self.events.append(event)
+
+        memory = FakeMemoryManager()
+        app = create_app(memory_manager=memory)
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/events",
+            json={
+                "events": [
+                    {
+                        "type": "click",
+                        "url": "https://www.xiaohongshu.com/explore/69dea966000000001a0280ad",
+                        "title": "测试笔记",
+                        "timestamp": 1710000000000,
+                        "source_platform": "xiaohongshu",
+                        "context": {"pageType": "note"},
+                        "metadata": {"note_id": "69dea966000000001a0280ad"},
+                    },
+                    {
+                        "type": "scroll",
+                        "url": "https://www.xiaohongshu.com/explore",
+                        "title": "",
+                        "timestamp": 1710000000001,
+                        "source_platform": "   ",
+                        "context": {"pageType": "home"},
+                        "metadata": {},
+                    },
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["accepted"] == 2
+        assert memory.events[0]["metadata"]["source_platform"] == "xiaohongshu"
+        assert memory.events[0]["metadata"]["note_id"] == "69dea966000000001a0280ad"
+        # Blank source_platform (whitespace only) falls back to bilibili.
+        assert memory.events[1]["metadata"]["source_platform"] == "bilibili"
 
     def test_events_endpoint_handles_extension_cors_preflight(self) -> None:
         from fastapi.testclient import TestClient

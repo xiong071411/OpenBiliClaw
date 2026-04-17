@@ -12,6 +12,7 @@ class BehaviorEventIn(BaseModel):
     url: str = ""
     title: str = ""
     timestamp: int
+    source_platform: str = "bilibili"
     context: dict[str, object] = Field(default_factory=dict)
     metadata: dict[str, object] = Field(default_factory=dict)
 
