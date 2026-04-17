@@ -125,11 +125,31 @@ test("extractNoteId pulls 24-char hex id from xhs urls", () => {
   assert.equal(extractNoteId("https://www.bilibili.com/video/BV1AB411c7mD"), null);
 });
 
-test("xiaohongshuAdapter skips video + strong-signal actions in MVP", () => {
+test("xiaohongshuAdapter wires source platform and skips video observation", () => {
   assert.equal(xiaohongshuAdapter.sourcePlatform, "xiaohongshu");
   assert.equal(xiaohongshuAdapter.videoSelector, null);
+});
+
+test("xiaohongshuAdapter.inferActionType recognizes like/favorite/comment", () => {
   assert.equal(
     xiaohongshuAdapter.inferActionType({ text: "点赞", ariaLabel: null, className: "" }),
+    "like",
+  );
+  assert.equal(
+    xiaohongshuAdapter.inferActionType({ text: "", ariaLabel: "收藏", className: "" }),
+    "favorite",
+  );
+  assert.equal(
+    xiaohongshuAdapter.inferActionType({ text: "评论", ariaLabel: null, className: "" }),
+    "comment",
+  );
+  // xhs has no coin button — text should not trigger a match.
+  assert.equal(
+    xiaohongshuAdapter.inferActionType({ text: "投币", ariaLabel: null, className: "" }),
+    null,
+  );
+  assert.equal(
+    xiaohongshuAdapter.inferActionType({ text: "分享", ariaLabel: null, className: "" }),
     null,
   );
 });

@@ -38,12 +38,17 @@ function normalizeText(value: string | null | undefined): string {
 }
 
 function inferXiaohongshuActionType(hint: ActionHint): string | null {
-  // MVP: strong-signal actions (like/collect/comment) are intentionally
-  // ignored on xhs because the DOM is unstable. Revisit when we add
-  // per-platform DOM fixtures.
+  // xhs shares the Chinese action vocabulary with bilibili — we match on
+  // text/aria-label first and fall back to className tokens for icon-only
+  // buttons. There is no "投币" on xhs, so coin is intentionally absent.
   const text = `${normalizeText(hint.text)} ${normalizeText(hint.ariaLabel)} ${hint.className}`
     .toLowerCase();
   if (!text) return null;
+  if (text.includes("点赞") || text.includes("like")) return "like";
+  if (text.includes("收藏") || text.includes("collect") || text.includes("favorite")) {
+    return "favorite";
+  }
+  if (text.includes("评论") || text.includes("comment")) return "comment";
   return null;
 }
 
