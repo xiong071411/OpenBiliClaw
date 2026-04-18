@@ -116,11 +116,11 @@
   <text x="935" y="73" text-anchor="middle" fill="#8b949e" font-size="9">search / ranking</text>
   <line x1="835" y1="70" x2="878" y2="60" stroke="#58a6ff" stroke-width="1" marker-end="url(#arrow)" stroke-dasharray="4,3"/>
 
-  <!-- ── External: XHS Sidecar (NEW) ── -->
+  <!-- ── External: XHS via Extension ── -->
   <rect x="1000" y="30" width="120" height="70" rx="10" fill="#161b22" stroke="#da3633" stroke-width="2"/>
-  <text x="1060" y="50" text-anchor="middle" fill="#da3633" font-size="11" font-weight="600">XHS Sidecar</text>
-  <text x="1060" y="68" text-anchor="middle" fill="#8b949e" font-size="8">POST /xhs/detail</text>
-  <text x="1060" y="80" text-anchor="middle" fill="#8b949e" font-size="8">GPL隔离 · HTTP</text>
+  <text x="1060" y="50" text-anchor="middle" fill="#da3633" font-size="11" font-weight="600">XHS Extension</text>
+  <text x="1060" y="68" text-anchor="middle" fill="#8b949e" font-size="8">DOM 元数据提取</text>
+  <text x="1060" y="80" text-anchor="middle" fill="#8b949e" font-size="8">零后端爬取</text>
 
   <!-- ══════════════════════════════════════════ -->
   <!-- 4 Strategy Detail Lanes                   -->
@@ -788,10 +788,16 @@
   <line x1="860" y1="60" x2="775" y2="100" stroke="#f0883e" stroke-width="1" stroke-dasharray="4,3"/>
 
   <!-- Bilibili (bottom right) -->
-  <rect x="860" y="290" width="200" height="60" rx="10" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
-  <text x="960" y="315" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="600">Bilibili API</text>
-  <text x="960" y="333" text-anchor="middle" fill="#8b949e" font-size="9">/ MockBilibiliClient</text>
-  <line x1="860" y1="310" x2="775" y2="280" stroke="#58a6ff" stroke-width="1" stroke-dasharray="4,3"/>
+  <rect x="860" y="240" width="200" height="55" rx="10" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
+  <text x="960" y="263" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="600">Bilibili API</text>
+  <text x="960" y="283" text-anchor="middle" fill="#8b949e" font-size="9">/ MockBilibiliClient</text>
+  <line x1="860" y1="268" x2="775" y2="240" stroke="#58a6ff" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- XHS via Extension (bottom right) -->
+  <rect x="860" y="310" width="200" height="55" rx="10" fill="#161b22" stroke="#da3633" stroke-width="2"/>
+  <text x="960" y="333" text-anchor="middle" fill="#da3633" font-size="13" font-weight="600">XHS Extension</text>
+  <text x="960" y="348" text-anchor="middle" fill="#8b949e" font-size="9">DOM 提取 → API → content_cache</text>
+  <line x1="860" y1="335" x2="775" y2="300" stroke="#da3633" stroke-width="1" stroke-dasharray="4,3"/>
 </svg>
 </div>
 
@@ -897,24 +903,24 @@
   <text x="640" y="167" text-anchor="middle" fill="#c9d1d9" font-size="9">daily_creator_budget = 10</text>
   <text x="640" y="184" text-anchor="middle" fill="#8b949e" font-size="9">GET /next-task · POST /task-result</text>
 
-  <!-- XHS Adapter -->
+  <!-- XHS Adapter (stub) + Extension DOM extraction -->
   <rect x="500" y="220" width="280" height="100" rx="8" fill="#161b22" stroke="#da3633" stroke-width="2"/>
-  <text x="640" y="243" text-anchor="middle" fill="#da3633" font-size="13" font-weight="600">XiaohongshuAdapter</text>
+  <text x="640" y="243" text-anchor="middle" fill="#da3633" font-size="13" font-weight="600">XiaohongshuAdapter (stub)</text>
   <line x1="515" y1="253" x2="765" y2="253" stroke="#30363d" stroke-width="1"/>
-  <text x="640" y="270" text-anchor="middle" fill="#c9d1d9" font-size="9">strategy = "enrich" → POST /xhs/detail</text>
-  <text x="640" y="287" text-anchor="middle" fill="#c9d1d9" font-size="9">并发上限 2 · 单 URL 失败不影响批次</text>
-  <text x="640" y="304" text-anchor="middle" fill="#8b949e" font-size="9">作品标题/作者昵称/作品链接 → DiscoveredContent</text>
+  <text x="640" y="270" text-anchor="middle" fill="#c9d1d9" font-size="9">fetch() = no-op — 内容通过 API 入池</text>
+  <text x="640" y="287" text-anchor="middle" fill="#c9d1d9" font-size="9">注册占位：registry.has("xiaohongshu") = true</text>
+  <text x="640" y="304" text-anchor="middle" fill="#8b949e" font-size="9">真正的数据路径：扩展 DOM → API → content_cache</text>
 
-  <!-- Sidecar -->
-  <rect x="820" y="220" width="280" height="100" rx="8" fill="#2a0d0d" stroke="#da3633" stroke-width="2.5"/>
-  <text x="960" y="243" text-anchor="middle" fill="#da3633" font-size="13" font-weight="700">XHS-Downloader Sidecar</text>
+  <!-- Extension DOM extraction (replaces sidecar) -->
+  <rect x="820" y="220" width="280" height="100" rx="8" fill="#0d2818" stroke="#3fb950" stroke-width="2.5"/>
+  <text x="960" y="243" text-anchor="middle" fill="#3fb950" font-size="13" font-weight="700">扩展 DOM 元数据提取</text>
   <line x1="835" y1="253" x2="1085" y2="253" stroke="#30363d" stroke-width="1"/>
-  <text x="960" y="270" text-anchor="middle" fill="#c9d1d9" font-size="9">GPL-3.0 隔离容器 · Docker port 5556</text>
-  <text x="960" y="287" text-anchor="middle" fill="#c9d1d9" font-size="9">POST /xhs/detail → XHS.extract()</text>
-  <text x="960" y="304" text-anchor="middle" fill="#8b949e" font-size="9">主后端不 import xhs 代码 → HTTP 聚合</text>
+  <text x="960" y="270" text-anchor="middle" fill="#c9d1d9" font-size="9">extractNoteMetadataFromAnchor()</text>
+  <text x="960" y="287" text-anchor="middle" fill="#c9d1d9" font-size="9">title / author / cover_url 从卡片 DOM 提取</text>
+  <text x="960" y="304" text-anchor="middle" fill="#8b949e" font-size="9">零额外请求 · 零后端爬取 · 零风控风险</text>
 
-  <line x1="780" y1="270" x2="818" y2="270" stroke="#da3633" stroke-width="2" marker-end="url(#axhs-red)"/>
-  <text x="800" y="263" fill="#da3633" font-size="8">HTTP</text>
+  <line x1="780" y1="270" x2="818" y2="270" stroke="#3fb950" stroke-width="2" marker-end="url(#axhs-green)"/>
+  <text x="800" y="263" fill="#3fb950" font-size="8">DOM</text>
 
   <!-- Content Cache (pool) -->
   <rect x="500" y="350" width="280" height="60" rx="8" fill="#1a1a24" stroke="#8b949e" stroke-width="2"/>
@@ -945,7 +951,7 @@
   <rect x="500" y="510" width="280" height="100" rx="8" fill="#161b22" stroke="#484f58" stroke-width="1"/>
   <text x="640" y="533" text-anchor="middle" fill="#c9d1d9" font-size="12" font-weight="600">[sources.xiaohongshu] 配置</text>
   <line x1="515" y1="543" x2="765" y2="543" stroke="#30363d" stroke-width="1"/>
-  <text x="640" y="563" text-anchor="middle" fill="#8b949e" font-size="9">sidecar_url = "http://xhs-sidecar:5556"</text>
+  <text x="640" y="563" text-anchor="middle" fill="#8b949e" font-size="9">(无 sidecar — 扩展直接提取元数据)</text>
   <text x="640" y="578" text-anchor="middle" fill="#8b949e" font-size="9">daily_search_budget = 20 · daily_creator_budget = 10</text>
   <text x="640" y="593" text-anchor="middle" fill="#8b949e" font-size="9">task_interval_seconds = 45</text>
 
@@ -955,7 +961,7 @@
   <line x1="835" y1="543" x2="1085" y2="543" stroke="#30363d" stroke-width="1"/>
   <text x="960" y="560" text-anchor="middle" fill="#c9d1d9" font-size="9">✓ 后端不搜索/不爬取 xhs</text>
   <text x="960" y="575" text-anchor="middle" fill="#c9d1d9" font-size="9">✓ 所有发现在用户真实浏览器中完成</text>
-  <text x="960" y="590" text-anchor="middle" fill="#c9d1d9" font-size="9">✓ GPL 代码 HTTP 隔离（不 import）</text>
+  <text x="960" y="590" text-anchor="middle" fill="#c9d1d9" font-size="9">✓ 扩展直接从 DOM 提取元数据（零额外请求）</text>
   <text x="960" y="605" text-anchor="middle" fill="#c9d1d9" font-size="9">✓ 严禁自动滚动 · 每日预算限制</text>
 
   <!-- Bottom summary stats -->
