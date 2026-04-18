@@ -119,6 +119,19 @@ cp config.example.toml config.toml
 >
 > `127.0.0.1` 与 `localhost` 并非总是等价：macOS 上 Chrome 常只绑定 IPv6 `::1:9222`，而 Python urllib 默认走 IPv4。用 `localhost` 最稳妥（`getaddrinfo` 会同时尝试两边）。
 
+### `[sources.xiaohongshu]`
+
+小红书专用配置。详情富化通过 GPL 隔离的 xhs-downloader sidecar 容器完成（`POST /xhs/detail`），主后端不导入任何 xhs 代码。内容发现交给扩展在真实登录态的浏览器中完成，后端不做主动爬取。
+
+| 键 | 类型 | 默认值 | 说明 |
+|----|------|--------|------|
+| `sidecar_url` | string | `""` | xhs-downloader sidecar 的 HTTP 地址。留空禁用小红书源。Docker compose 自动注入 `OPENBILICLAW_XHS_SIDECAR_URL` 环境变量 |
+| `daily_search_budget` | int | `20` | 每天后端允许入队的 Soul 驱动搜索任务数上限 |
+| `daily_creator_budget` | int | `10` | 每天每位订阅创作者的抓取任务上限 |
+| `task_interval_seconds` | int | `45` | 扩展分发器两次任务之间的最小间隔（秒） |
+
+> **安全设计要点：** 后端从不直接调用小红书搜索 / Feed API。所有"主动发现"（关键词搜索、创作者主页浏览）都在用户自己的浏览器中以后台标签页形式执行，由扩展代理完成。被动发现则利用用户正常浏览时已经加载的卡片 URL，零额外请求。
+
 ### `[scheduler]`
 
 | 键 | 类型 | 默认值 | 说明 |
