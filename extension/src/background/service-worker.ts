@@ -10,6 +10,12 @@
 
 import { enqueueBufferedEvent, shouldFlushImmediately } from "./buffer.js";
 import {
+  startXhsTaskPolling,
+  handleXhsTaskAlarm,
+  handleTaskResult,
+  type XhsTaskResult,
+} from "./xhs-task-dispatcher.js";
+import {
   openExtensionUi,
   buildChromeNotificationOptions,
   buildCognitionNotificationId,
@@ -228,11 +234,13 @@ function ensureFlushAlarm(): void {
 chrome.runtime.onInstalled.addListener(() => {
   ensureFlushAlarm();
   connectRuntimeStream();
+  startXhsTaskPolling();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   ensureFlushAlarm();
   connectRuntimeStream();
+  startXhsTaskPolling();
 });
 
 chrome.action.onClicked.addListener((tab) => {
@@ -259,6 +267,10 @@ chrome.runtime.onMessage.addListener((message) => {
     void postXhsObservedUrls(message.data as Record<string, unknown>);
     return;
   }
+  if (message.action === "XHS_TASK_RESULT") {
+    handleTaskResult(message.data as XhsTaskResult);
+    return;
+  }
   if (message.action !== "BEHAVIOR_EVENT") return;
 
   eventBuffer = enqueueBufferedEvent(eventBuffer, message.data as BehaviorEvent, BUFFER_MAX_SIZE);
@@ -269,6 +281,7 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  handleXhsTaskAlarm(alarm.name);
   if (alarm.name === FLUSH_ALARM_NAME) {
     if (eventBuffer.length > 0) {
       void flushEvents();
