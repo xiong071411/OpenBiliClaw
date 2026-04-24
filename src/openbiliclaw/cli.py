@@ -781,7 +781,10 @@ def init() -> None:
 
     _print_section_title("2/4 分析偏好")
     console.print(f"  总信号量: [green]{len(events)}[/green] 条事件")
-    asyncio.run(soul_engine.analyze_events(events))
+    # Chunk the event list so multiple analysis calls run concurrently
+    # instead of serialising a single max-thinking call over ~800 events.
+    # ``merge_preferences`` folds the partial results back together.
+    asyncio.run(soul_engine.analyze_events(events, event_chunk_size=200))
 
     _print_section_title("3/4 生成画像")
     # Merge favorites and following into history for profile builder

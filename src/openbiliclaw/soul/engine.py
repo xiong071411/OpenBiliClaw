@@ -126,7 +126,12 @@ class SoulEngine:
         """Access the ProfileUpdatePipeline for direct signal ingestion."""
         return self._pipeline
 
-    async def analyze_events(self, events: list[dict[str, Any]]) -> None:
+    async def analyze_events(
+        self,
+        events: list[dict[str, Any]],
+        *,
+        event_chunk_size: int = 0,
+    ) -> None:
         """Analyze new behavioral events and update all memory layers.
 
         This is the primary entry point for processing new user behavior.
@@ -135,15 +140,24 @@ class SoulEngine:
 
         Args:
             events: List of behavioral event dicts from the collector.
+            event_chunk_size: When > 0, split the event list into chunks
+                of this size and analyse each chunk in parallel. Useful
+                for the init bootstrap where a single max-thinking call
+                on ~800 events would block for ~6 minutes.
         """
         import time as _time
 
-        logger.info("analyze_events start: events=%d", len(events))
+        logger.info(
+            "analyze_events start: events=%d chunk_size=%d",
+            len(events),
+            event_chunk_size,
+        )
         t0 = _time.monotonic()
         preference_layer = self._memory.get_layer("preference")
         updated_preference = await self._preference_analyzer.analyze_events(
             events=events,
             existing_preference=preference_layer.data,
+            event_chunk_size=event_chunk_size,
         )
         preference_layer.data.clear()
         preference_layer.data.update(updated_preference)
