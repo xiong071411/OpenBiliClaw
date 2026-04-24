@@ -59,6 +59,11 @@ class LLMProviderConfig:
     base_url: str = ""
     http_referer: str = ""
     x_title: str = ""
+    # DeepSeek v4 thinking-mode control. Empty string disables; otherwise
+    # pass "high" or "max" to request that reasoning intensity. Ignored by
+    # providers that do not accept the ``thinking`` / ``reasoning_effort``
+    # request fields.
+    reasoning_effort: str = ""
 
 
 @dataclass
@@ -141,6 +146,7 @@ class XiaohongshuSourceConfig:
     user's browser via the Chrome extension (passive collection +
     background-tab tasks). No sidecar or backend crawling needed.
     """
+
     # Max Soul-driven search tasks the backend may enqueue per day.
     daily_search_budget: int = 30
     # Max creator-subscription fetch tasks per day.
@@ -598,6 +604,8 @@ def _render_provider_section(name: str, provider: LLMProviderConfig) -> list[str
     lines.append(f"model = {_toml_string(provider.model)}")
     if name in {"openai", "deepseek", "ollama", "openrouter"}:
         lines.append(f"base_url = {_toml_string(provider.base_url)}")
+    if name == "deepseek" and provider.reasoning_effort:
+        lines.append(f"reasoning_effort = {_toml_string(provider.reasoning_effort)}")
     if name == "openrouter":
         lines.append(f"http_referer = {_toml_string(provider.http_referer)}")
         lines.append(f"x_title = {_toml_string(provider.x_title)}")

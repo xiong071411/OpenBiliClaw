@@ -35,8 +35,13 @@ model = "gemini-2.5-flash"
 [llm.deepseek]
 # 若 default_provider = "deepseek"，api_key 必填
 api_key = ""
-model = "deepseek-chat"
+# 可选模型：deepseek-v4-flash（默认） / deepseek-v4-pro
+# 旧名 deepseek-chat / deepseek-reasoner 将于 2026/07/24 弃用
+model = "deepseek-v4-flash"
 base_url = "https://api.deepseek.com"
+# v4 模型支持 thinking 模式：设置 "high" 或 "max" 开启，空字符串关闭。
+# 开启后会自动附带 thinking={"type": "enabled"} 请求字段。
+reasoning_effort = "max"
 
 [llm.ollama]
 # Local model via Ollama（本地运行，不要求 api_key）

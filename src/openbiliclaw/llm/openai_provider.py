@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 class OpenAIProvider(LLMProvider):
     """OpenAI and compatible API provider."""
+
     _MAX_RETRIES = 3
     _BASE_RETRY_DELAY = 0.25
 
@@ -67,6 +68,9 @@ class OpenAIProvider(LLMProvider):
         extra_headers = self._extra_headers()
         if extra_headers:
             kwargs["extra_headers"] = extra_headers
+        extra_body = self._extra_body()
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
         response = await self._request_with_retry(**kwargs)
         choice = response.choices[0]
@@ -135,14 +139,45 @@ class OpenAIProvider(LLMProvider):
         """Return optional provider-specific request headers."""
         return {}
 
+    def _extra_body(self) -> dict[str, Any]:
+        """Return optional provider-specific request body fields.
+
+        Used for non-standard keys like DeepSeek's ``thinking`` and
+        ``reasoning_effort``. Keys returned here are passed verbatim via
+        ``extra_body`` of the OpenAI SDK.
+        """
+        return {}
+
 
 class DeepSeekProvider(OpenAIProvider):
-    """DeepSeek provider (OpenAI-compatible API)."""
+    """DeepSeek provider (OpenAI-compatible API).
 
-    def __init__(self, api_key: str, model: str = "deepseek-chat") -> None:
+    Supports the v4 ``thinking`` mode via ``reasoning_effort``. When
+    ``reasoning_effort`` is set (``"high"`` or ``"max"``), requests are
+    sent with ``thinking={"type": "enabled"}`` and the requested effort
+    level as top-level body fields (the DeepSeek API accepts both
+    schemas).
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "deepseek-v4-flash",
+        *,
+        reasoning_effort: str = "",
+    ) -> None:
         super().__init__(
             api_key=api_key,
             model=model,
             base_url="https://api.deepseek.com",
             provider_name="deepseek",
         )
+        self._reasoning_effort = reasoning_effort.strip()
+
+    def _extra_body(self) -> dict[str, Any]:
+        if not self._reasoning_effort:
+            return {}
+        return {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": self._reasoning_effort,
+        }
