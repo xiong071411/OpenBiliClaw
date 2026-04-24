@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
@@ -680,10 +681,21 @@ class ContentDiscoveryEngine:
         if not uncached_indices:
             return scores
 
+        total_batches = (len(uncached_indices) + batch_size - 1) // batch_size
+        logger.info(
+            "eval_batch start: source=%s items=%d batches=%d (cached=%d)",
+            source_context or "mixed",
+            len(uncached_indices),
+            total_batches,
+            len(contents) - len(uncached_indices),
+        )
         # Process uncached items in batches
-        for batch_start in range(0, len(uncached_indices), batch_size):
+        for batch_idx, batch_start in enumerate(
+            range(0, len(uncached_indices), batch_size), start=1
+        ):
             batch_indices = uncached_indices[batch_start : batch_start + batch_size]
             batch_contents = [contents[i] for i in batch_indices]
+            t0 = time.monotonic()
             batch_scores = await self._evaluate_batch(
                 batch_contents,
                 profile,
@@ -691,6 +703,17 @@ class ContentDiscoveryEngine:
             )
             for idx, batch_score in zip(batch_indices, batch_scores, strict=True):
                 scores[idx] = batch_score
+            elapsed = time.monotonic() - t0
+            kept = sum(1 for s in batch_scores if s > 0)
+            logger.info(
+                "eval_batch %d/%d done: source=%s size=%d elapsed=%.1fs kept=%d",
+                batch_idx,
+                total_batches,
+                source_context or "mixed",
+                len(batch_indices),
+                elapsed,
+                kept,
+            )
 
         return scores
 
@@ -827,9 +850,33 @@ class ContentDiscoveryEngine:
             # on ``bilibili_request_concurrency`` + ``search_budget_total``
             # to bound IP-level pressure; the default phase split is
             # safer but adds ~search_wall_time before others start.
-            tasks = [s.discover(profile, limit=limit) for s in strategies]
-            gathered = await asyncio.gather(*tasks, return_exceptions=True)
+            names = [s.name for s in strategies]
+            logger.info("discover start (fully_parallel): strategies=%s limit=%d", names, limit)
+            t0 = time.monotonic()
+
+            async def _timed(strategy: DiscoveryStrategy) -> list[DiscoveredContent]:
+                s_t0 = time.monotonic()
+                logger.info("strategy %s: dispatch", strategy.name)
+                try:
+                    result = await strategy.discover(profile, limit=limit)
+                finally:
+                    logger.info(
+                        "strategy %s: done in %.1fs",
+                        strategy.name,
+                        time.monotonic() - s_t0,
+                    )
+                return result
+
+            gathered = await asyncio.gather(
+                *(_timed(s) for s in strategies), return_exceptions=True
+            )
             results.extend(self._collect_strategy_results(strategies, gathered))
+            logger.info(
+                "discover done (fully_parallel): strategies=%s total_elapsed=%.1fs results=%d",
+                names,
+                time.monotonic() - t0,
+                len(results),
+            )
         else:
             # Split strategies into two phases to avoid B站 IP-level
             # search rate-limiting. Search runs first (Phase 1) with a
