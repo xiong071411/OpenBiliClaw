@@ -55,9 +55,9 @@ def _tone_context_line(source_platform_mix: dict[str, float] | None) -> str:
         return f"请保持“{friend}”基调：懂 {display} 语境，像熟人聊天，不像客服。"
     top = [
         platform
-        for platform, _ in sorted(
-            source_platform_mix.items(), key=lambda kv: kv[1], reverse=True
-        )[:3]
+        for platform, _ in sorted(source_platform_mix.items(), key=lambda kv: kv[1], reverse=True)[
+            :3
+        ]
     ]
     display_list = " / ".join(_platform_display_name(p) for p in top)
     return (
@@ -353,17 +353,23 @@ def build_role_delta_prompt(
 }
 </output_schema>
 """.strip()
-    user_prompt = "\n\n".join([
-        "<current_state>",
-        json.dumps({
-            "life_stage": current_life_stage,
-            "current_phase": current_phase,
-        }, ensure_ascii=False, indent=2),
-        "</current_state>",
-        "<recent_evidence>",
-        json.dumps(evidence[:20], ensure_ascii=False, indent=2),
-        "</recent_evidence>",
-    ])
+    user_prompt = "\n\n".join(
+        [
+            "<current_state>",
+            json.dumps(
+                {
+                    "life_stage": current_life_stage,
+                    "current_phase": current_phase,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            "</current_state>",
+            "<recent_evidence>",
+            json.dumps(evidence[:20], ensure_ascii=False, indent=2),
+            "</recent_evidence>",
+        ]
+    )
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
@@ -400,17 +406,23 @@ def build_values_delta_prompt(
 }
 </output_schema>
 """.strip()
-    user_prompt = "\n\n".join([
-        "<current_state>",
-        json.dumps({
-            "values": current_values,
-            "motivational_drivers": current_drivers,
-        }, ensure_ascii=False, indent=2),
-        "</current_state>",
-        "<recent_evidence>",
-        json.dumps(evidence[:20], ensure_ascii=False, indent=2),
-        "</recent_evidence>",
-    ])
+    user_prompt = "\n\n".join(
+        [
+            "<current_state>",
+            json.dumps(
+                {
+                    "values": current_values,
+                    "motivational_drivers": current_drivers,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            "</current_state>",
+            "<recent_evidence>",
+            json.dumps(evidence[:20], ensure_ascii=False, indent=2),
+            "</recent_evidence>",
+        ]
+    )
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
@@ -453,18 +465,24 @@ def build_core_delta_prompt(
 }
 </output_schema>
 """.strip()
-    user_prompt = "\n\n".join([
-        "<current_state>",
-        json.dumps({
-            "core_traits": current_traits,
-            "deep_needs": current_needs,
-            "mbti": current_mbti,
-        }, ensure_ascii=False, indent=2),
-        "</current_state>",
-        "<recent_evidence>",
-        json.dumps(evidence[:20], ensure_ascii=False, indent=2),
-        "</recent_evidence>",
-    ])
+    user_prompt = "\n\n".join(
+        [
+            "<current_state>",
+            json.dumps(
+                {
+                    "core_traits": current_traits,
+                    "deep_needs": current_needs,
+                    "mbti": current_mbti,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            "</current_state>",
+            "<recent_evidence>",
+            json.dumps(evidence[:20], ensure_ascii=False, indent=2),
+            "</recent_evidence>",
+        ]
+    )
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
@@ -598,9 +616,15 @@ def build_search_queries_prompt(
 7. query 的内容风格必须多样化，不要全部偏向"深度/学术/原理"。
    应该混合使用不同风格词，如 盘点/推荐/日常/吐槽/测评/入门/体验/挑战/合集 等，
    整组 query 中带"深度/原理/解析/机制"等学术向关键词的不得超过 2 个。
-8. 如果 profile_summary.style 里 depth_preference 偏低、preferred_duration 偏短，
-   或 humor_preference 偏高，就进一步减少"原理/解析/机制"这类硬入口，
-   优先使用更轻、更好点开的形式词；不要把"理解力强"误翻译成"必须更学术"。
+8. 多样性双向保护：
+   - 如果 depth_preference 偏低、preferred_duration 偏短，或 humor_preference 偏高，
+     就进一步减少"原理/解析/机制"这类硬入口，优先使用更轻、更好点开的形式词；
+     不要把"理解力强"误翻译成"必须更学术"。
+   - 反过来，如果 depth_preference 偏高、preferred_duration 偏长，
+     但 humor_preference >= 0.4、exploration_openness >= 0.6，
+     或 cognitive_style 里有"兼顾/调节/穿插轻松"这类描述，
+     仍要至少保证 30% query 用 "盘点/合集/吐槽/日常/挑战/体验/vlog" 这类放松形式词，
+     不能因为画像深就只发硬 query；用户硬不代表 24 小时都想看硬内容。
 6. 所有 query 的核心主题词（第一个实词）必须两两不同，
    禁止同一概念换皮出现多次。
 </rules>
@@ -766,33 +790,31 @@ def build_content_evaluation_prompt(
     """
     source_hint = ""
     if source_context:
-        source_hint = (
-            "\n<discovery_context>\n"
-            f"{source_context}\n"
-            "</discovery_context>\n\n"
-        )
+        source_hint = f"\n<discovery_context>\n{source_context}\n</discovery_context>\n\n"
 
     system_prompt = (
         "<task>\n"
         + source_hint
-        + "你要评估一个 " + _platform_content_label(source_platform) + "与这个用户画像的匹配度。\n"
+        + "你要评估一个 "
+        + _platform_content_label(source_platform)
+        + "与这个用户画像的匹配度。\n"
         "</task>\n\n"
         "<rules>\n"
         "1. 输出必须是严格 JSON，不要附带解释。\n"
         "2. score 范围必须在 0 到 1 之间。\n"
         "3. reason 只写一句中文，解释为什么这个人会喜欢或不喜欢这个内容。\n"
-        "4. 不要只说\"因为热门\"或\"因为看过类似的\"，要结合用户画像。\n"
+        '4. 不要只说"因为热门"或"因为看过类似的"，要结合用户画像。\n'
         "5. 根据发现路径调整评判宽容度：search 要求高度匹配；"
         "trending 来源的内容已经过大众验证，只要不在用户讨厌列表中且内容质量过关，基础分应 ≥ 0.6，若还能和画像产生关联则给更高分；"
         "related_chain 允许适度偏移；explore 允许主题陌生，但内容仍需具备可看性和吸引力，"
         "不能仅因为心理需求抽象匹配就给高分，过于学术、艰深、小众的内容应适当降分。\n"
         "6. topic_group 是该内容所属的粗粒度主题分类，用于推荐去重。"
         "要求：2-4 个中文词，抽象到能覆盖同类内容，"
-        "例如\"强化学习\"而非\"强化学习ppo算法源码级讲解\"，"
-        "\"城市建筑\"而非\"上海外滩建筑群纪录片\"。"
+        '例如"强化学习"而非"强化学习ppo算法源码级讲解"，'
+        '"城市建筑"而非"上海外滩建筑群纪录片"。'
         "同一主题的不同切面必须归为同一个 topic_group。"
-        "语义相同的主题必须用同一个词——\"AI\" \"人工智能\" \"机器学习\" 统一写成 \"人工智能\"，"
-        "\"RL\" \"强化学习\" 统一写成 \"强化学习\"。\n"
+        '语义相同的主题必须用同一个词——"AI" "人工智能" "机器学习" 统一写成 "人工智能"，'
+        '"RL" "强化学习" 统一写成 "强化学习"。\n'
         "7. style_key 从以下 11 个选项中选一个，描述该内容的呈现风格：\n"
         "   game_strategy（游戏攻略/机制解析）/ news_brief（新闻资讯/时事快评）/ "
         "practical_guide（教程/入门/实操指南）/ story_doc（纪录片/故事/人物传记）/ "
@@ -841,16 +863,14 @@ def build_batch_content_evaluation_prompt(
     """
     source_hint = ""
     if source_context:
-        source_hint = (
-            "\n<discovery_context>\n"
-            f"{source_context}\n"
-            "</discovery_context>\n\n"
-        )
+        source_hint = f"\n<discovery_context>\n{source_context}\n</discovery_context>\n\n"
 
     system_prompt = (
         "<task>\n"
         + source_hint
-        + "你要批量评估多个 " + _platform_content_label(source_platform) + "与这个用户画像的匹配度。\n"
+        + "你要批量评估多个 "
+        + _platform_content_label(source_platform)
+        + "与这个用户画像的匹配度。\n"
         "</task>\n\n"
         "<rules>\n"
         "1. 输出必须是严格 JSON 数组，不要附带解释。\n"
@@ -865,9 +885,17 @@ def build_batch_content_evaluation_prompt(
         "6. style_key 从 11 个选项中选：game_strategy / news_brief / "
         "practical_guide / story_doc / visual_showcase / tech_analysis / "
         "deep_dive / fun_variety / lifestyle / review_roundup / light_chat\n"
-        "7. 如果 profile_summary.style 显示 depth_preference 不高、preferred_duration 偏短，"
+        "7. 评分要尊重画像里的多样性诉求，双向保护：\n"
+        "   - 如果 depth_preference 不高、preferred_duration 偏短，"
         "或 humor_preference 偏高，不要把学术艰深、入口很高的内容误判成高匹配；"
         "讲法轻松但不空的内容同样可以高分。\n"
+        "   - 反过来，如果 depth_preference 偏高、preferred_duration 偏长，"
+        "但 humor_preference >= 0.4、exploration_openness >= 0.6，"
+        '或 cognitive_style 里写明 "兼顾/调节/穿插轻松" 这类双轨倾向，'
+        "说明用户也需要轻内容做心理调节、喘气。这时 fun_variety / light_chat / "
+        "lifestyle / story_doc / visual_showcase 风格的内容只要本身可看（话题清晰、"
+        'UP 主观察角度有意思），不要因为"不够深"就一律压到 0.5 以下，'
+        "应当给到 0.6-0.75，与画像中的娱乐/二次元/生活类兴趣标签保持权重一致。\n"
         "</rules>\n\n"
         "<output_schema>\n"
         "[\n"
@@ -904,10 +932,12 @@ def build_recommendation_expression_prompt(
     """Build a structured prompt for friend-style recommendation expression."""
     _friend = _platform_friend_label(source_platform)
     _content = _platform_content_label(source_platform)
-    system_prompt = """
+    system_prompt = (
+        """
 <task>
 你要像一个真正懂这个人的{friend}一样，给出一段推荐这条 {content}的话。
-</task>""".replace("{friend}", _friend).replace("{content}", _content) + """
+</task>""".replace("{friend}", _friend).replace("{content}", _content)
+        + """
 
 <rules>
 1. 输出必须是严格 JSON，不要附带解释。
@@ -937,6 +967,7 @@ def build_recommendation_expression_prompt(
 }
 </output_schema>
 """.strip()
+    )
     system_prompt = "\n\n".join(
         [system_prompt, _render_tone_profile(tone_profile, {source_platform: 1.0})]
     )
@@ -1215,21 +1246,23 @@ def build_speculation_generation_prompt(
         "<specifics_rules>\n"
         "每个 domain 必须附带 2-4 个 specifics，代表该方向下可搜索到内容的具体话题。\n"
         "specifics 不是 domain 的同义词，而是更窄的切入点。\n"
-        "例如 domain=\"建筑美学\" → specifics=[\"现代主义建筑纪录片\", \"中式园林设计\", \"包豪斯风格解读\"]\n"
+        '例如 domain="建筑美学" → specifics=["现代主义建筑纪录片", "中式园林设计", "包豪斯风格解读"]\n'
         "</specifics_rules>"
     )
 
     exclude_list = sorted(set(existing_speculations + cooldown_domains + confirmed_domains))
     exclude_text = "以下方向不要重复：" + "、".join(exclude_list) if exclude_list else "无排除项"
-    user_prompt = "\n\n".join([
-        "<user_profile>",
-        profile_summary,
-        "</user_profile>",
-        "<exclude_domains>",
-        exclude_text,
-        "</exclude_domains>",
-        f"请生成 {count} 个猜测兴趣方向。",
-    ])
+    user_prompt = "\n\n".join(
+        [
+            "<user_profile>",
+            profile_summary,
+            "</user_profile>",
+            "<exclude_domains>",
+            exclude_text,
+            "</exclude_domains>",
+            f"请生成 {count} 个猜测兴趣方向。",
+        ]
+    )
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
