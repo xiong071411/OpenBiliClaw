@@ -134,7 +134,13 @@ class SchedulerConfig:
     speculation_max_active: int = 5
     speculation_max_primary_interests: int = 15
     speculation_max_secondary_interests: int = 60
-    auto_update_enabled: bool = True
+    # Default off. The auto-updater pulls from GitHub releases and
+    # restarts the backend when a newer version is detected, but it has
+    # historically caused restart loops when the local
+    # ``openbiliclaw.__version__`` drifts from the published release
+    # tag. Opt-in only — set ``true`` in config.toml after the release
+    # pipeline is reliable.
+    auto_update_enabled: bool = False
     auto_update_check_interval_hours: int = 6
 
 

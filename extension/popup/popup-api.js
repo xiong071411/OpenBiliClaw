@@ -130,7 +130,10 @@ export async function reportRecommendationClick(payload) {
 
 export async function sendChatMessage(message) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 35_000);
+  // Bumped from 35s to 150s. Backend's chat dialogue can take ~120s under
+  // deepseek reasoning_effort=max; we give a small headroom for HTTP
+  // round-trip + serialization beyond the backend's own 120s wait_for.
+  const timeout = setTimeout(() => controller.abort(), 150_000);
   try {
     return await requestJson("/chat", {
       method: "POST",

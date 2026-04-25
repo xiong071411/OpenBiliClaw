@@ -867,7 +867,11 @@ def create_app(
             concurrency.chat_active = True
             await asyncio.sleep(3)  # Let RPM window drain
         try:
-            reply = await asyncio.wait_for(ctx.dialogue.respond(message), timeout=30)
+            # Bumped from 30s to 120s — deepseek with reasoning_effort=max
+            # routinely takes 60-90s for one dialogue turn, so a 30s budget
+            # truncated essentially every reply. Extension's AbortController
+            # is sized to be generous enough to cover this end-to-end.
+            reply = await asyncio.wait_for(ctx.dialogue.respond(message), timeout=120)
         except TimeoutError:
             reply = "后台正忙，等一下再聊。"
         except Exception:
