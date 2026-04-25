@@ -744,17 +744,27 @@ def init() -> None:
 
     _print_page_title("初始化 OpenBiliClaw", "首次运行引导")
 
-    # Fetch all data sources in a single event loop to avoid httpx session closure
+    # Fetch all data sources in a single event loop to avoid httpx session closure.
+    # Init signal mix:
+    #   - 300 most-recent watch history items (truncated; older history
+    #     decays into noise quickly)
+    #   - the entire favorites set across every folder (high-signal user
+    #     curation; bigger folders are fine — they go through chunked
+    #     analyze_events anyway)
+    #   - the entire following list (high-signal subscription intent)
     async def _fetch_all_data() -> tuple[
         list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]
     ]:
-        hist = await client.get_user_history(max_items=500)
+        hist = await client.get_user_history(max_items=300)
 
         favs: list[dict[str, Any]] = []
         try:
             fav_folders = await client.get_all_favorites(
-                max_folders=20,
-                max_items_per_folder=200,
+                max_folders=200,
+                # ``2000`` is well above any realistic folder size — the
+                # API client itself stops paging when the folder is
+                # exhausted.
+                max_items_per_folder=2000,
             )
             for folder in fav_folders:
                 folder_title = folder.folder.title if hasattr(folder, "folder") else "未知"
@@ -771,8 +781,10 @@ def init() -> None:
 
         follows: list[dict[str, Any]] = []
         try:
-            for page in range(1, 6):
-                page_users = await client.get_following(page=page, page_size=50)
+            page = 1
+            page_size = 50
+            while True:
+                page_users = await client.get_following(page=page, page_size=page_size)
                 if not page_users:
                     break
                 for user in page_users:
@@ -782,8 +794,9 @@ def init() -> None:
                             "sign": getattr(user, "sign", ""),
                         }
                     )
-                if len(page_users) < 50:
+                if len(page_users) < page_size:
                     break
+                page += 1
         except Exception as exc:
             console.print(f"  [yellow]关注列表拉取失败: {exc}[/yellow]")
 
