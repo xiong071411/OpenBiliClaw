@@ -64,8 +64,15 @@ class DelightWeights:
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_DELIGHT_THRESHOLD: float = 0.70
-CONSERVATIVE_DELIGHT_THRESHOLD: float = 0.80
+# Delight threshold:
+# 0.70 was empirically too high — the typical achievable score on a
+# real pool of 600+ items capped around 0.67 (cosine similarity rarely
+# exceeds 0.7-0.8, so the 30%+25% embedding-driven contribution caps
+# below 0.45, requiring nearly perfect novelty/quality/exploration to
+# clear 0.70).  0.65 is the practical sweet spot — it gates "really
+# resonates" without making the feature structurally unreachable.
+DEFAULT_DELIGHT_THRESHOLD: float = 0.65
+CONSERVATIVE_DELIGHT_THRESHOLD: float = 0.75
 _LOW_EXPLORATION_OPENNESS: float = 0.3
 _DEFAULT_WEIGHTS = DelightWeights()
 

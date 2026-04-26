@@ -1463,8 +1463,28 @@ class Database:
         self,
         *,
         min_delight_score: float = 0.85,
+        limit: int = 1,
     ) -> dict[str, Any] | None:
-        """Return one un-notified pool item with the highest delight_score."""
+        """Return one un-notified pool item with the highest delight_score.
+
+        Backwards-compatible: ``limit=1`` returns a single dict (or None);
+        callers that want multiple candidates (for example to filter
+        disliked topics in Python) should call
+        ``get_delight_candidates`` instead.
+        """
+        rows = self.get_delight_candidates(
+            min_delight_score=min_delight_score,
+            limit=max(1, int(limit)),
+        )
+        return rows[0] if rows else None
+
+    def get_delight_candidates(
+        self,
+        *,
+        min_delight_score: float = 0.85,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return up to ``limit`` un-notified delight candidates ordered by score."""
         cursor = self.conn.execute(
             """
             SELECT *
@@ -1475,14 +1495,11 @@ class Database:
               AND COALESCE(delight_hook, '') != ''
               AND COALESCE(pool_status, 'fresh') IN ('fresh', 'shown', 'suppressed')
             ORDER BY delight_score DESC, relevance_score DESC, discovered_at DESC
-            LIMIT 1
+            LIMIT ?
             """,
-            (min_delight_score,),
+            (min_delight_score, max(1, int(limit))),
         )
-        row = cursor.fetchone()
-        if row is None:
-            return None
-        return dict(row)
+        return [dict(row) for row in cursor.fetchall()]
 
     def mark_delight_notified(self, bvid: str) -> None:
         """Mark one content item as delight-notified."""

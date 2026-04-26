@@ -55,6 +55,12 @@ class SupportsEventDatabase(Protocol):
         *,
         min_delight_score: float = DEFAULT_DELIGHT_THRESHOLD,
     ) -> dict[str, Any] | None: ...
+    def get_delight_candidates(
+        self,
+        *,
+        min_delight_score: float = DEFAULT_DELIGHT_THRESHOLD,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]: ...
     def mark_delight_notified(self, bvid: str) -> None: ...
     def count_delight_candidates(
         self,
@@ -298,7 +304,12 @@ class ContinuousRefreshController:
         self.memory_manager.save_discovery_runtime_state(state)
 
     def get_pending_delight(self) -> dict[str, object] | None:
-        """Return one proactive delight candidate for browser notification."""
+        """Return one proactive delight candidate for browser notification.
+
+        Honors the user's ``disliked_topics`` (from the preference layer)
+        as a hard filter — a video whose title contains a disliked topic
+        phrase is skipped even if its delight_score otherwise qualifies.
+        """
         state = self.memory_manager.load_discovery_runtime_state()
         last_delight_at = self._parse_iso_datetime(
             str(state.get("last_delight_notification_at", ""))
@@ -307,7 +318,27 @@ class ContinuousRefreshController:
             hours=self.delight_cooldown_hours
         ):
             return None
-        candidate = self.database.get_delight_candidate(min_delight_score=DEFAULT_DELIGHT_THRESHOLD)
+
+        # Pull a small batch and filter disliked topics in Python — there
+        # are typically only a handful of high-score candidates and a
+        # very short disliked list, so the overhead is negligible.
+        candidates = self.database.get_delight_candidates(
+            min_delight_score=DEFAULT_DELIGHT_THRESHOLD,
+            limit=20,
+        )
+        if not candidates:
+            return None
+
+        disliked_phrases = self._load_disliked_topic_phrases()
+        candidate: dict[str, Any] | None = None
+        for row in candidates:
+            title = str(row.get("title", "")).lower()
+            tags_raw = str(row.get("tags", "")).lower()
+            haystack = f"{title} {tags_raw}"
+            if any(phrase in haystack for phrase in disliked_phrases if phrase):
+                continue
+            candidate = row
+            break
         if candidate is None:
             return None
         return {
@@ -318,6 +349,27 @@ class ContinuousRefreshController:
             "delight_hook": str(candidate.get("delight_hook", "")),
             "cover_url": str(candidate.get("cover_url", "")),
         }
+
+    def _load_disliked_topic_phrases(self) -> list[str]:
+        """Return lowercased disliked-topic substrings from the preference layer.
+
+        Returns an empty list if the layer is missing or the field is
+        unset.  Phrases are used as case-insensitive substring matches
+        against title + tags, so generic entries like '低质内容' won't
+        match anything concrete (which is fine — they're meant for the
+        evaluator, not the proactive push filter).
+        """
+        try:
+            layer = self.memory_manager.get_layer("preference")
+        except Exception:
+            return []
+        data = getattr(layer, "data", None)
+        if not isinstance(data, dict):
+            return []
+        raw = data.get("disliked_topics")
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip().lower() for item in raw if str(item).strip()]
 
     def mark_delight_sent(self, bvid: str) -> None:
         """Persist delight notification delivery markers."""
