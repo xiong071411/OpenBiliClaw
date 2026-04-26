@@ -65,13 +65,14 @@ const state = {
   runtimeEvent: null,
   activityFeed: null,
   activityExpanded: false,
-  // Queue of pending delight recommendations. The banner shows queue[0]
-  // and a "1/N" counter when more than one is queued; user actions
-  // (看看 / 不感兴趣 / × / 聊一聊 完成) shift the head off so the next
-  // one slides in. ``activeDelight`` (singular) is kept as a synced
-  // alias of queue[0] for backwards compatibility with helpers that
-  // reference the single-item shape (mergeDelightCandidate, etc.).
+  // Queue of pending delight recommendations. Banner shows
+  // queue[delightCurrentIndex] with ‹/› navigation between siblings.
+  // User actions (看看 / 不感兴趣 / × / 聊一聊 完成) remove the
+  // current item; the index then clamps to the new length.
+  // ``activeDelight`` is kept as a synced alias of the current item for
+  // helpers like mergeDelightCandidate.
   activeDelights: [],
+  delightCurrentIndex: 0,
   activeDelight: null,
   delightHighlightBvid: "",
   dismissedDelightBvids: [],
@@ -261,18 +262,28 @@ function rememberDismissedDelight(bvid) {
 }
 
 // ── Delight queue helpers ──────────────────────────────────────────
-// state.activeDelights is the queue. state.activeDelight is the head
-// (queue[0]) — we keep both in sync so existing helpers like
-// mergeDelightCandidate keep working on the head item.
+// state.activeDelights is the queue, state.delightCurrentIndex is the
+// pointer into it. state.activeDelight is a synced alias of the
+// currently-shown item for helpers that operate on a single item.
+
+function clampDelightIndex() {
+  const len = state.activeDelights.length;
+  if (len === 0) {
+    state.delightCurrentIndex = 0;
+    return;
+  }
+  if (state.delightCurrentIndex < 0) state.delightCurrentIndex = 0;
+  if (state.delightCurrentIndex >= len) state.delightCurrentIndex = len - 1;
+}
 
 function syncDelightHead() {
-  state.activeDelight = state.activeDelights[0] ?? null;
+  clampDelightIndex();
+  state.activeDelight = state.activeDelights[state.delightCurrentIndex] ?? null;
 }
 
 function pushDelightCandidate(candidate) {
   if (!candidate || !candidate.bvid) return;
   if (state.dismissedDelightBvids.includes(candidate.bvid)) return;
-  // Merge if already queued (same bvid arriving twice — refresh fields).
   const existingIdx = state.activeDelights.findIndex(
     (d) => d?.bvid === candidate.bvid,
   );
@@ -295,19 +306,38 @@ function pushDelightCandidate(candidate) {
   syncDelightHead();
 }
 
-function shiftDelightQueue() {
-  state.activeDelights.shift();
+// Remove the currently-shown delight from the queue. If user wasn't on
+// the head, drop the item at the current index; the next item slides
+// into its place. After a removal the index points to whatever now
+// occupies that slot (or to length-1 if we just removed the last).
+function removeCurrentDelight() {
+  if (state.activeDelights.length === 0) return;
+  state.activeDelights.splice(state.delightCurrentIndex, 1);
+  // Keep the same index — it now points to the next item, or
+  // clampDelightIndex() will pin it to the last when we removed the tail.
+  syncDelightHead();
+}
+
+// Backwards-compatible name used by some action handlers.
+const shiftDelightQueue = removeCurrentDelight;
+
+function navigateDelight(delta) {
+  if (state.activeDelights.length <= 1) return;
+  state.delightCurrentIndex += delta;
+  clampDelightIndex();
   syncDelightHead();
 }
 
 function updateDelightHead(updates) {
+  const idx = state.delightCurrentIndex;
   if (state.activeDelights.length === 0) return;
-  state.activeDelights[0] = { ...state.activeDelights[0], ...updates };
+  state.activeDelights[idx] = { ...state.activeDelights[idx], ...updates };
   syncDelightHead();
 }
 
 function clearDelightQueue() {
   state.activeDelights = [];
+  state.delightCurrentIndex = 0;
   syncDelightHead();
 }
 
@@ -903,12 +933,46 @@ function buildDelightCard(delight) {
   dismiss.addEventListener("click", () => dismissMessageByBvid(delight.bvid));
   item.append(dismiss);
 
-  // Hook badge + title
-  const header = document.createElement("div");
-  header.className = "message-domain";
-  const hook = delight.delight_hook ? `\u2728 ${delight.delight_hook} \u00B7 ` : "\u2728 ";
-  header.textContent = `${hook}${delight.title || ""}`;
-  item.append(header);
+  // Top row: thumbnail + (hook badge + title)
+  const top = document.createElement("div");
+  top.className = "message-delight-top";
+
+  const thumb = document.createElement("span");
+  thumb.className = "message-delight-thumb";
+  if (delight.cover_url) {
+    const image = document.createElement("img");
+    image.src = delight.cover_url;
+    image.alt = "";
+    image.referrerPolicy = "no-referrer";
+    image.addEventListener("error", () => {
+      image.remove();
+      thumb.classList.add("is-fallback");
+      thumb.textContent = "\u2728";
+    });
+    thumb.append(image);
+  } else {
+    thumb.classList.add("is-fallback");
+    thumb.textContent = "\u2728";
+  }
+  top.append(thumb);
+
+  const textCol = document.createElement("div");
+  textCol.className = "message-delight-text";
+
+  if (delight.delight_hook) {
+    const hookBadge = document.createElement("span");
+    hookBadge.className = "message-delight-hook";
+    hookBadge.textContent = `\u2728 ${delight.delight_hook}`;
+    textCol.append(hookBadge);
+  }
+
+  const title = document.createElement("div");
+  title.className = "message-delight-title";
+  title.textContent = delight.title || "";
+  textCol.append(title);
+
+  top.append(textCol);
+  item.append(top);
 
   // Reason
   if (delight.delight_reason) {
@@ -1945,8 +2009,9 @@ function renderDelightSlot() {
     return;
   }
 
-  const head = state.activeDelights[0];
   const queueLength = state.activeDelights.length;
+  const currentIdx = state.delightCurrentIndex;
+  const head = state.activeDelights[currentIdx];
   const uiState = getDelightUiState(head, {
     highlightBvid: state.delightHighlightBvid,
   });
@@ -2011,10 +2076,35 @@ function renderDelightSlot() {
   kicker.textContent = `✨ ${delight.delight_hook || "惊喜推荐"}`;
   kickerLine.append(kicker);
   if (queueLength > 1) {
+    const prevBtn = document.createElement("button");
+    prevBtn.type = "button";
+    prevBtn.className = "delight-banner-nav";
+    prevBtn.textContent = "\u2039";  // ‹
+    prevBtn.title = "上一条";
+    prevBtn.disabled = currentIdx <= 0;
+    prevBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      navigateDelight(-1);
+      renderDelightSlot();
+    });
+
     const counter = document.createElement("span");
     counter.className = "delight-banner-counter";
-    counter.textContent = `1/${queueLength}`;
-    kickerLine.append(counter);
+    counter.textContent = `${currentIdx + 1}/${queueLength}`;
+
+    const nextBtn = document.createElement("button");
+    nextBtn.type = "button";
+    nextBtn.className = "delight-banner-nav";
+    nextBtn.textContent = "\u203A";  // ›
+    nextBtn.title = "下一条";
+    nextBtn.disabled = currentIdx >= queueLength - 1;
+    nextBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      navigateDelight(1);
+      renderDelightSlot();
+    });
+
+    kickerLine.append(prevBtn, counter, nextBtn);
   }
 
   const titleText = document.createElement("span");

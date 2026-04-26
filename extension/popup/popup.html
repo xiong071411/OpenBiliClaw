@@ -616,6 +616,83 @@
       background: rgba(0, 0, 0, 0.04);
     }
 
+    .delight-banner-nav {
+      width: 18px;
+      height: 18px;
+      border: 0;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.04);
+      color: var(--text-secondary);
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .delight-banner-nav:hover:not(:disabled) {
+      background: rgba(0, 0, 0, 0.1);
+      color: var(--text-main);
+    }
+    .delight-banner-nav:disabled {
+      opacity: 0.3;
+      cursor: default;
+    }
+
+    /* Inbox delight card — thumbnail + title row */
+    .message-delight-top {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      margin-bottom: 6px;
+    }
+    .message-delight-thumb {
+      flex-shrink: 0;
+      width: 56px;
+      height: 56px;
+      border-radius: 10px;
+      overflow: hidden;
+      background: linear-gradient(135deg, rgba(168, 85, 247, 0.18), rgba(90, 169, 255, 0.18));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(255, 255, 255, 0.6);
+    }
+    .message-delight-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .message-delight-thumb.is-fallback {
+      font-size: 20px;
+      color: #6b21a8;
+    }
+    .message-delight-text {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .message-delight-hook {
+      font-size: 10px;
+      font-weight: 700;
+      color: #6b21a8;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: rgba(168, 85, 247, 0.12);
+      align-self: flex-start;
+    }
+    .message-delight-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #4c1d95;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
     .delight-banner-title {
       min-width: 0;
       font-size: 12px;
