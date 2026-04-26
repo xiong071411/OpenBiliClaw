@@ -739,44 +739,54 @@ def create_app(
 
     @app.post("/api/delight/trigger")
     async def trigger_delight(payload: dict[str, Any] | None = None) -> Any:
-        """Manually push N delight candidates via WebSocket for testing.
+        """Manually push N distinct delight candidates via WebSocket.
 
-        Body: ``{"count": 3}``. Bypasses the 4-hour cooldown gate by
-        clearing ``last_delight_notification_at`` after each push, so
-        consecutive candidates surface immediately. Each pushed bvid is
-        still marked notified, so this consumes real candidates from
-        the pool.
+        Body: ``{"count": 3}``. For testing the queue UI: pulls the top N
+        un-notified candidates from the pool and publishes a
+        ``delight.candidate`` event for each one in succession, **without**
+        marking any as notified. That way you can re-trigger the same
+        batch repeatedly while iterating on the popup-side queue, and
+        the popup's own ``/api/delight/pending`` calls still see them
+        afterwards.
+
+        Cooldown is cleared at the end so the proactive-push loop
+        isn't gated.
         """
         count = 1
         if isinstance(payload, dict):
             try:
-                count = max(1, int(payload.get("count", 1)))
+                count = max(1, min(20, int(payload.get("count", 1))))
             except (ValueError, TypeError):
                 count = 1
-        controller = ctx.runtime_controller
-        publish = getattr(controller, "_publish_delight_if_available", None)
-        if not callable(publish):
-            raise HTTPException(status_code=503, detail="Delight publisher unavailable")
-        memory_manager = getattr(controller, "memory_manager", None)
+
+        from openbiliclaw.recommendation.delight import DEFAULT_DELIGHT_THRESHOLD
+
+        candidates = ctx.database.get_delight_candidates(
+            min_delight_score=DEFAULT_DELIGHT_THRESHOLD,
+            limit=count,
+        )
         pushed: list[str] = []
-        for _ in range(count):
-            # Reset cooldown timer so the next call doesn't bail out
-            if memory_manager is not None:
-                state = memory_manager.load_discovery_runtime_state()
-                state.pop("last_delight_notification_at", None)
-                memory_manager.save_discovery_runtime_state(state)
-            # Snapshot candidate so we can record what got pushed
-            get_pending = getattr(controller, "get_pending_delight", None)
-            candidate = get_pending() if callable(get_pending) else None
-            if candidate is None:
-                break
-            await publish()
-            mark_sent = getattr(controller, "mark_delight_sent", None)
-            if callable(mark_sent):
-                mark_sent(str(candidate.get("bvid", "")))
-            pushed.append(str(candidate.get("bvid", "")))
-        # Clear cooldown one last time so manual trigger doesn't leave the
-        # pipeline gated.
+        for row in candidates:
+            payload_event = {
+                "type": "delight.candidate",
+                "phase": "ready",
+                "message": "发现了一条你可能会意外喜欢的内容",
+                "bvid": str(row.get("bvid", "")),
+                "title": str(row.get("title", "")),
+                "delight_reason": str(row.get("delight_reason", "")),
+                "delight_score": float(row.get("delight_score", 0.0) or 0.0),
+                "delight_hook": str(row.get("delight_hook", "")),
+                "cover_url": str(row.get("cover_url", "")),
+                "content_url": str(row.get("content_url", "")),
+                "source_platform": str(row.get("source_platform", "bilibili")),
+            }
+            with suppress(Exception):
+                await ctx.event_hub.publish(payload_event)
+            pushed.append(payload_event["bvid"])
+
+        # Clear cooldown so the regular push loop isn't gated after manual
+        # trigger.
+        memory_manager = getattr(ctx.runtime_controller, "memory_manager", None)
         if memory_manager is not None:
             state = memory_manager.load_discovery_runtime_state()
             state.pop("last_delight_notification_at", None)
