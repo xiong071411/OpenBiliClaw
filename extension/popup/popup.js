@@ -36,6 +36,7 @@ import {
   fetchProfileSummary,
   fetchRecommendations,
   fetchRuntimeStatus,
+  markDelightSent,
   reportRecommendationClick,
   reshuffleRecommendations,
   refreshRecommendations,
@@ -257,10 +258,20 @@ function renderPoolStatus(runtimeStatus) {
 }
 
 function rememberDismissedDelight(bvid) {
-  if (!bvid || state.dismissedDelightBvids.includes(bvid)) {
+  if (!bvid) {
     return;
   }
-  state.dismissedDelightBvids = [...state.dismissedDelightBvids, bvid];
+  if (!state.dismissedDelightBvids.includes(bvid)) {
+    state.dismissedDelightBvids = [...state.dismissedDelightBvids, bvid];
+  }
+  // Persist on the backend so popup reloads + future
+  // /api/delight/pending-batch fetches honour the dismissal too.
+  // Otherwise an in-memory dismiss is lost the moment the popup
+  // closes, and the same bvid pops back up next time.
+  markDelightSent(bvid).catch(() => {
+    // Silent fail — the in-memory dismissal still works for this
+    // session even if the network ack doesn't go through.
+  });
 }
 
 // ── Delight queue helpers ──────────────────────────────────────────
@@ -1179,6 +1190,9 @@ function expandDelightChat(itemEl, delight) {
 function dismissMessageByBvid(bvid, removeFromDom = true) {
   state.messages = state.messages.filter((m) => m.bvid !== bvid);
   updateMessageBadge();
+  // Mirror the dismiss on the backend so the same bvid doesn't
+  // re-surface via /api/delight/pending-batch on next popup reload.
+  rememberDismissedDelight(bvid);
   if (removeFromDom) {
     const item = elements.messagesList?.querySelector(`[data-bvid="${CSS.escape(bvid)}"]`);
     if (item) item.remove();

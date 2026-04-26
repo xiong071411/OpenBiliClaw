@@ -79,6 +79,14 @@ export async function fetchPendingDelightBatch(limit = 20) {
   return Array.isArray(payload?.items) ? payload.items : [];
 }
 
+export async function markDelightSent(bvid) {
+  return requestJson("/delight/sent", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bvid }),
+  });
+}
+
 export async function acknowledgeNotificationSent(bvid) {
   return requestJson("/notifications/sent", {
     method: "POST",
