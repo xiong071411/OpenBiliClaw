@@ -333,6 +333,17 @@ OpenBiliClaw/
 - [CLI Reference](docs/modules/cli.md) · [Config Reference](docs/modules/config.md)
 - [Contributing Guide](docs/contributing.md)
 
+## 📜 Release History
+
+| Version | Date | Key changes |
+|---|---|---|
+| **[v0.3.0](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.0)** | 2026-04-28 | General-purpose multi-source architecture (Xiaohongshu / Web adapters in production) · local Ollama embedding fallback · reshuffle 5x faster · cross-source topic quota |
+| [v0.2.1](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/v0.2.1) | 2026-04-17 | OpenClaw integration (Socratic chat + interest probes) · Bilibili API resilience hardening |
+| [v0.2.0](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/v0.2.0) | 2026-04-16 | macOS .app launch fix · multi-objective recommendation critique · pool hard cap · five-dimension PoolCurator |
+| [v0.1.0](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/v0.1.0) | 2026-04-13 | Initial release — end-to-end soul / discovery / recommendation pipeline |
+
+Full milestone history: [docs/changelog.md](docs/changelog.md) · All releases: [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)
+
 ## 🗺️ Roadmap
 
 OpenBiliClaw aims to be your **personalized entry point to the entire web**. Started on Bilibili, v0.3.0 shipped Xiaohongshu and generic-Web adapters; next:

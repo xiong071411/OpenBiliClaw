@@ -397,6 +397,17 @@ OpenBiliClaw/
 - [CLI 参考](docs/modules/cli.md) · [配置参考](docs/modules/config.md)
 - [开发指南](docs/contributing.md) — 如何参与贡献
 
+## 📜 更新日志
+
+| 版本 | 日期 | 主要变更 |
+|---|---|---|
+| **[v0.3.0](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.0)** | 2026-04-28 | 通用多源架构（xhs/web 适配器投产）· 本地 Ollama embedding 兜底 · reshuffle 5x 提速 · 跨源主题配额 |
+| [v0.2.1](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/v0.2.1) | 2026-04-17 | OpenClaw 集成（苏格拉底对话 + 兴趣探针）· bilibili API 容错强化 |
+| [v0.2.0](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/v0.2.0) | 2026-04-16 | macOS .app 包修复 · 多目标推荐评论框架 · 推荐池硬上限 · 五维 PoolCurator |
+| [v0.1.0](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/v0.1.0) | 2026-04-13 | 首版发布——soul / discovery / recommendation 全链路打通 |
+
+完整里程碑变更：[docs/changelog.md](docs/changelog.md) · 所有发布：[GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)
+
 ## 🗺️ 后续规划
 
 OpenBiliClaw 的目标是做你的**全网个性化内容入口**——从 B 站起步、v0.3.0 已落地小红书与通用 Web 适配器，下一步：
