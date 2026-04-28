@@ -399,6 +399,12 @@ def create_app(
             spec_state = load_speculative_state(ctx.config.data_path)
             from openbiliclaw.api.models import SpeculativeSpecificOut
 
+            # Filter status="active" only — confirmed/rejected items are
+            # technically still in spec_state.active until force_tick rotates
+            # them out, but the popup should not surface them: a user who
+            # clicked 喜欢 has already given their answer and expects the
+            # row to disappear, not to re-render with a "已确认" tag.
+            active_specs = [item for item in spec_state.active if item.status == "active"]
             spec_items = [
                 SpeculativeInterestOut(
                     domain=item.domain,
@@ -416,7 +422,7 @@ def create_app(
                         if s.name.strip()
                     ],
                 )
-                for item in spec_state.active[:6]
+                for item in active_specs[:6]
             ]
         except Exception:
             logger.debug("Failed to load speculative state for profile summary")

@@ -602,12 +602,22 @@ class InterestSpeculator:
         return [s for s in state.active if s.status == "active"]
 
     def user_confirm_speculation(self, domain: str) -> bool:
-        """User explicitly confirmed a speculated interest. Force-promote it."""
+        """User explicitly confirmed a speculated interest. Force-promote it.
+
+        Sets ``status="confirmed"`` so the API stops surfacing this row in
+        the popup's speculative-list (the promotion to a real interest tag
+        still happens asynchronously inside :meth:`force_tick`). Without
+        this, profile-summary kept returning the row with
+        ``confirmation_count == threshold`` and the popup re-rendered it
+        seconds after the user clicked "喜欢" — looking like the action
+        was ignored.
+        """
         state = self._load_state()
         for spec in state.active:
             if spec.domain.lower() == domain.lower() and spec.status == "active":
                 spec.confirmation_count = spec.confirmation_threshold  # Meet threshold
                 spec.confirming_events.append("user_confirmed")
+                spec.status = "confirmed"
                 self._save_state(state)
                 return True
         return False
