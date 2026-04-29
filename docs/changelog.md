@@ -4,6 +4,38 @@
 
 ---
 
+## v0.3.16: README 推荐顺序调整 + 多源登录前置说明（2026-04-30）
+
+两个 README/安装文档层面的调整，没动代码：
+
+### 1. README 后端安装方式重排：一句话装机优先，桌面包后置
+
+之前两份 README 都把「下载后端桌面包」放第一位，「AI 一句话装机」第二位，「自己跑脚本」第三位，「Docker」混在中间。但首版桌面包未签名，会触发 macOS Gatekeeper / Windows SmartScreen，对普通用户其实最不友好。新顺序按「实际可用度」排：
+
+1. **首选**：让 AI agent 跑 `agent-install.md`（零摩擦，agent 把 LLM/Embedding/Cookie 都问全 + 自动跑 init）
+2. **或**：AI agent + Docker（v0.3.11+ 自带 Ollama embedding sidecar）
+3. **或**：自己跑 `install.sh` / `install.ps1`（同一份脚本）
+4. **末位**（折叠在 `<details>` 里）：下载未签名桌面包，要点「右键 → 打开」绕过 Gatekeeper
+
+### 2. README 增加「多源登录前置」段
+
+很多用户装好扩展后发现「为什么没有小红书内容？」——原因是后端不爬小红书，发现/详情都靠扩展在用户登录态的浏览器里跑。新增一张表，明确每个源的登录要求 + 不登录的后果：
+
+| 源 | 登录方式 | 不登录的后果 |
+|---|---|---|
+| B 站 | 浏览器登录 https://www.bilibili.com（v0.3.12+ 扩展自动同步 Cookie） | 拉不到历史/收藏/关注，画像缺失，推荐降级为公共热门 |
+| 小红书 | 浏览器登录 https://www.xiaohongshu.com | **完全没有小红书内容**（后端不直接抓） |
+| 通用 Web 源 | 该站点正常登录 | 同上 |
+
+并强烈推荐小红书用 CDP 模式 Chrome 复用登录态（`--remote-debugging-port=9222` + `[sources.browser] cdp_url`），避免反爬。
+
+`docs/docker-deployment.md` 也加了同样的多源登录前置段，并把 CDP url 改成 `host.docker.internal:9222`，方便容器访问宿主机的 CDP 端口。
+
+### 3. README_EN 同步翻译
+
+两份 README 严格一致。
+---
+
 ## v0.3.15: 一连串 Windows 装机踩坑修复 + Ollama embedding-only 不应做 chat fallback（2026-04-30）
 
 社区反馈了一组 Windows 原生路径的坑，集中修复：

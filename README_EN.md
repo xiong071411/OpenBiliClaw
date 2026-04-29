@@ -69,31 +69,35 @@ The extension is your main interface — it shows recommendations in a Bilibili 
 
 > Developers can also `cd extension && npm install && npm run package` to build from source.
 
+#### Important: log in to **every source you want to use**, in the same browser the extension is installed in
+
+OpenBiliClaw doesn't farm credentials — it reuses **your** current browser sessions to discover content cross-platform. So after installing the extension, log in to every source you care about **in the same browser**:
+
+| Source | How to log in | What you lose if you don't |
+|---|---|---|
+| **Bilibili** | Just log in normally at https://www.bilibili.com (the v0.3.12+ extension auto-syncs the cookie to the backend) | The backend can't fetch your watch history / favorites / following → your soul profile won't reflect your real interests; recommendations degrade to public trending |
+| **Xiaohongshu** | Log in normally at https://www.xiaohongshu.com | The backend never crawls Xiaohongshu directly — **all discovery + detail fetches happen through your extension in hidden tabs**. No login = no Xiaohongshu content at all |
+| Generic web sources | Log in normally on that site | Same as above |
+
+> 💡 **Strongly recommended for Xiaohongshu: use a CDP-mode Chrome to reuse the login session** (avoids anti-scraping). Launch a separate-profile Chrome with `--remote-debugging-port=9222`, manually log in once, then set `[sources.browser] cdp_url = "http://localhost:9222"` in `config.toml`. See [config reference](docs/modules/config.md#sourcesbrowser).
+
 ### ⚡ Step 2: Deploy the Backend
 
-**⭐ Download the backend desktop package from Releases (recommended for most users):**
-
-1. Open [OpenBiliClaw Releases](https://github.com/whiteguo233/OpenBiliClaw/releases) and find the latest `backend-v*` release
-2. Download the backend package for your OS:
-   - macOS: `OpenBiliClaw-macos-*.zip`
-   - Windows: `OpenBiliClaw-windows-*.zip`
-3. Unzip it, launch the backend, then connect the extension to local `http://127.0.0.1:8420`
-
-> ⚠️ The first desktop backend packages are unsigned. macOS may show Gatekeeper prompts and Windows may show SmartScreen warnings. If you would rather avoid OS security prompts, use the installer script or Docker paths below instead.
-
-**⭐ Paste to an AI coding agent for one-click deploy (recommended — works with Claude Code / Codex CLI / Cursor etc.):**
+**Recommended: paste to an AI coding agent for one-click deploy** (works with Claude Code / Codex CLI / Cursor etc.):
 
 ```text
 Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/agent-install.md to deploy the OpenBiliClaw backend for me (use Bash `curl` to fetch the document, NOT WebFetch — WebFetch summarises markdown and drops critical commands).
 ```
 
-**⭐ Have an AI agent deploy with Docker (recommended if you have Docker Desktop):**
+The AI clones the repo locally, installs dependencies, starts the backend, runs a health check, asks you for LLM/embedding config + Bilibili cookie, and finally auto-runs `init` (fetch history → build soul profile → first discovery pass). Fully transparent. **This is the recommended path for most users — zero friction.**
+
+**Or: have the AI agent deploy with Docker** (good if you have Docker Desktop; v0.3.11+ ships an Ollama embedding sidecar by default):
 
 ```text
 Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/docker-deployment.md to deploy the OpenBiliClaw backend via Docker Compose (use Bash `curl` to fetch the document, NOT WebFetch).
 ```
 
-**One terminal command:**
+**Or: run the one-liner installer yourself** (the same script the AI uses, no agent required):
 
 macOS / Linux / WSL2 (Bash):
 
@@ -109,7 +113,22 @@ Native Windows (PowerShell — no Docker, no WSL2 required):
 
 > The leading `[Net.ServicePointManager]...Tls12` lets PowerShell 5.1 (the default on Windows 10/11) successfully negotiate with GitHub. GitHub no longer accepts TLS 1.0/1.1 and PS 5.1 picks those by default. Users on PowerShell 7 can drop the prefix.
 
-The desktop package is the easiest path for macOS / Windows users who want a click-and-go binary. The installer scripts (`install.sh` / `install.ps1`) are for developers and users who want a source-based setup. Prerequisites: `git` and `python3` (3.11+; on Windows the `py` launcher works). The scripts auto-clone the repo, install dependencies, start the backend, run a health check, and prompt you to choose an LLM provider (OpenAI / Gemini / DeepSeek / Claude etc.) and fill in the corresponding API key and Bilibili cookie. Once credentials are set, first-time init runs automatically (fetches history, builds your soul profile, fills the recommendation pool) so you're ready immediately.
+Prerequisites: `git` and `python3` (3.11+; on Windows the `py` launcher works). The scripts auto-clone the repo, install dependencies, start the backend, run a health check, and prompt you to choose an LLM provider (OpenAI / Gemini / DeepSeek / Claude / local Ollama etc.) and fill in API key + Bilibili cookie (auto-synced by the extension since v0.3.12). First-time init runs automatically once credentials are present.
+
+<details>
+<summary><b>Don't want to run scripts? You can also download a pre-built backend desktop package</b></summary>
+
+For users who prefer not to touch the command line. **Caveat:** the first desktop packages are unsigned, so they will trigger OS security prompts — that's why this option is listed last:
+
+1. Open [OpenBiliClaw Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)
+2. Download the backend package for your OS:
+   - macOS: `OpenBiliClaw-macos-*.zip`
+   - Windows: `OpenBiliClaw-windows-*.zip`
+3. Unzip and launch; macOS will show a Gatekeeper prompt (right-click → Open), Windows will show SmartScreen ("More info" → Run anyway)
+4. Connect the extension to local `http://127.0.0.1:8420`
+
+If those prompts feel like a hassle, the one-liner installer above is faster overall.
+</details>
 
 > 💡 **On Windows?** Since v0.3.4 the PowerShell installer fully supports native Windows — no Docker / WSL2 needed. You can still use the Docker path above if you already have Docker Desktop installed.
 
@@ -347,7 +366,8 @@ OpenBiliClaw/
 
 | Version | Date | Key changes |
 |---|---|---|
-| **[v0.3.15](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.15)** | 2026-04-30 | Round-up of Windows native-install pitfalls: CLI now forces stdout to UTF-8 on launch (no more `UnicodeEncodeError` on GBK consoles when emoji prints) · install.ps1's `python -c f"..."` rewritten as `print(a, b)` to dodge a PS 5.1 quoting bug · agent-install.md warns AI agents that `bash` on Windows often resolves to the WSL launcher · **fixes a registry bug where Ollama, registered only for embedding, was incorrectly used as a chat-completion fallback, causing `All providers failed (openai, ollama)` when the primary cloud LLM hit a transient error** |
+| **[v0.3.16](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.16)** | 2026-04-30 | README backend-install order reshuffled: one-liner / Docker / direct script come first, the unsigned desktop package is moved into a `<details>` block at the end · adds a "log into every source you want to use" pre-install section explaining why Xiaohongshu specifically requires being logged in in the same browser the extension is installed (CDP mode strongly recommended) |
+| [v0.3.15](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.15) | 2026-04-30 | Round-up of Windows native-install pitfalls: CLI now forces stdout to UTF-8 on launch (no more `UnicodeEncodeError` on GBK consoles when emoji prints) · install.ps1's `python -c f"..."` rewritten as `print(a, b)` to dodge a PS 5.1 quoting bug · agent-install.md warns AI agents that `bash` on Windows often resolves to the WSL launcher · **fixes a registry bug where Ollama, registered only for embedding, was incorrectly used as a chat-completion fallback, causing `All providers failed (openai, ollama)` when the primary cloud LLM hit a transient error** |
 | [v0.3.14](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.14) | 2026-04-30 | Fixes a Windows GBK-locale bug where `/api/delight/pending-batch`, `/api/activity-feed`, etc. returned 500 on first hit: `MemoryLayer.load()/save()` and `bilibili.auth` cookie I/O now pin `encoding="utf-8"` instead of relying on the platform default. Includes a regression test that monkeypatches `builtins.open` to simulate Chinese Windows. |
 | [v0.3.13](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.13) | 2026-04-30 | Every install path now leads with "install the extension to auto-sync the cookie" instead of pushing the F12 dance: install.sh / install.ps1 status block, agent-install.md AI-agent contract, the CLI wizard's `_interactive_auth_setup`, docker-deployment.md, and openclaw-quickstart.md all updated. F12 demoted to a fallback. |
 | [v0.3.12](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.12) | 2026-04-30 | The browser extension now auto-syncs your Bilibili cookie to the backend — no more F12 dance. The extension reads the live cookie via `chrome.cookies` and POSTs it to a new `/api/bilibili/cookie` endpoint that validates against B站 nav, persists, hot-reloads the runtime, and broadcasts a WebSocket event. Cookie refreshes auto-resync via `chrome.cookies.onChanged`. |

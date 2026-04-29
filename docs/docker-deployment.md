@@ -34,6 +34,16 @@
 docker buildx build --platform linux/amd64,linux/arm64 -t openbiliclaw-backend:v0.3.4 .
 ```
 
+## 多源登录前置：装了扩展的浏览器要登录每一个想用的源
+
+OpenBiliClaw 不爬登录态——它复用**你**当前浏览器的登录会话来跨平台抓你能看到的内容。Docker 部署后，仍然需要在装了扩展的同一个浏览器里登录每个目标源：
+
+- **B 站**：浏览器里登录 https://www.bilibili.com 即可。v0.3.12+ 扩展会自动把 Cookie 推到容器里的 `/api/bilibili/cookie`，免 F12
+- **小红书**：必须在浏览器里登录 https://www.xiaohongshu.com。后端不直接抓小红书，所有发现/详情都通过扩展在隐藏 tab 里以你登录态执行。**不登录 = 完全没有小红书内容**
+- **小红书反爬强建议**：开一个独立 profile 的 Chrome 用 `--remote-debugging-port=9222` 启动，里面手动登录小红书一次；后端 `[sources.browser] cdp_url = "http://host.docker.internal:9222"` 即可永久复用
+
+详见 [配置参考 / sources.browser 段](modules/config.md#sourcesbrowser)。
+
 ## 快速开始
 
 ```bash

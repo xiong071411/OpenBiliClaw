@@ -126,31 +126,35 @@
 
 > 开发者也可以 `cd extension && npm install && npm run package` 从源码构建。
 
+#### 重要：在装了插件的浏览器里**登录每一个想要使用的源**
+
+OpenBiliClaw 不爬登录态——它复用**你**当前浏览器的登录会话来跨平台抓你能看到的内容。所以装好扩展后，请在**同一个浏览器**里登录你想用的每个源：
+
+| 源 | 登录方式 | 不登录的后果 |
+|---|---|---|
+| **B 站** | https://www.bilibili.com 正常登录（Cookie 会被 v0.3.12+ 扩展自动同步给后端） | 拉不到你的观看历史/收藏/关注 → 画像不完整；推荐降级为公共热门 |
+| **小红书** | https://www.xiaohongshu.com 正常登录 | 后端不会爬小红书，**所有发现/详情都靠扩展在隐藏 tab 里以你登录态执行**；不登录 = 完全没有小红书内容 |
+| 通用 Web 源 | 该站点正常登录 | 同上 |
+
+> 💡 **小红书强烈推荐用 CDP 模式 Chrome 复用登录态**（避免反爬）：用一个独立 profile 启 Chrome 打开 `--remote-debugging-port=9222`，里面手动登录小红书一次；后端 `[sources.browser] cdp_url = "http://localhost:9222"` 即可永久复用。详见 [配置参考](docs/modules/config.md#sourcesbrowser)。
+
 ### ⚡ 第二步：部署后端
 
-**⭐ 直接从 Releases 下载后端桌面包（推荐普通用户）：**
-
-1. 打开 [OpenBiliClaw Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)
-2. 按系统下载后端包：
-   - macOS：`OpenBiliClaw-macos-*.zip`
-   - Windows：`OpenBiliClaw-windows-*.zip`
-3. 解压后直接运行后端程序，再让插件连接本地 `http://127.0.0.1:8420`
-
-> ⚠️ 首版后端桌面包暂未做系统签名。macOS 可能出现 Gatekeeper 提示，Windows 可能出现 SmartScreen 提示；如果你不想处理系统安全弹窗，继续使用下面的一键安装脚本或 Docker 方式即可。
-
-**⭐ 复制粘贴给 AI 智能体一键部署（推荐，Claude Code / Codex CLI / Cursor 等都支持）：**
+**首选方式：复制粘贴给 AI 智能体一键部署**（Claude Code / Codex CLI / Cursor 等都支持）：
 
 ```text
 请按照 https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/agent-install.md 的说明帮我部署 OpenBiliClaw 后端(务必用 Bash 的 curl 下载这个文档,不要用 WebFetch — 会丢关键指令)
 ```
 
-**⭐ 让 AI 智能体用 Docker 部署（推荐，适合有 Docker Desktop 的用户）：**
+AI 会按文档把仓库 clone 到本机、装依赖、起后端、做健康检查、再问你 LLM/Embedding 配置 + B 站 Cookie，最后自动跑 `init`（拉历史 + 生成画像 + 首轮发现），全程透明。**这是最推荐的路径**，对绝大多数用户来说零摩擦。
+
+**或者：让 AI 智能体用 Docker 部署**（适合有 Docker Desktop 的用户，v0.3.11+ 自带 Ollama embedding sidecar）：
 
 ```text
 请按照 https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/docker-deployment.md 的说明帮我用 Docker Compose 部署 OpenBiliClaw 后端(务必用 Bash 的 curl 下载这个文档,不要用 WebFetch)
 ```
 
-**终端一条命令：**
+**或者：自己跑一句话装机脚本**（不依赖 AI 智能体，本质上是 AI 装机的同一份脚本）：
 
 macOS / Linux / WSL2（Bash）：
 
@@ -166,7 +170,22 @@ Windows 原生（PowerShell，不需要 Docker / WSL2）：
 
 > 前缀的 `[Net.ServicePointManager]...Tls12` 是为了 PowerShell 5.1（Win10/Win11 默认）能和 GitHub 握手成功。GitHub 已不接受 TLS 1.0/1.1，PS 5.1 默认协议太老。装上 PowerShell 7 的用户可以省掉这段前缀。
 
-桌面包适合 macOS / Windows 用户直接下载即用；`install.sh` / `install.ps1` 推荐给开发者和喜欢可控环境的用户。脚本依赖只有 `git` 和 `python3`（3.11+，Windows 上推荐 `py launcher`）。它会自动克隆仓库、安装依赖、启动后端、做健康检查，然后提示你选择 LLM 提供商（OpenAI / Gemini / DeepSeek / Claude 等）并填写对应的 API Key 和 B 站 Cookie。凭据就绪后自动完成首次初始化（拉取历史、生成画像、填充推荐池），直接达到可用状态。
+脚本依赖只有 `git` 和 `python3`（3.11+，Windows 上推荐 `py launcher`）。会自动克隆仓库、装依赖、起后端、健康检查，然后提示你选 LLM 提供商（OpenAI / Gemini / DeepSeek / Claude / 本地 Ollama 等）并填 API Key + B 站 Cookie（v0.3.12+ 扩展自动同步）。凭据齐全后自动跑首次 init，直接达到可用状态。
+
+<details>
+<summary><b>不想跑脚本？也可以从 Releases 下载后端桌面包</b></summary>
+
+适合不想动命令行的用户，但首版桌面包暂未做系统签名，**容易触发系统安全弹窗**，所以放在最后：
+
+1. 打开 [OpenBiliClaw Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)
+2. 按系统下载后端包：
+   - macOS：`OpenBiliClaw-macos-*.zip`
+   - Windows：`OpenBiliClaw-windows-*.zip`
+3. 解压后直接运行；macOS 会出 Gatekeeper 提示（右键打开），Windows 会出 SmartScreen 提示（点「更多信息」→ 仍要运行）
+4. 让插件连接本地 `http://127.0.0.1:8420`
+
+如果你嫌处理这些弹窗烦，回头用上面的「一句话装机」更省事。
+</details>
 
 > 💡 **Windows 用户**：v0.3.4 起 `install.ps1` 完全适配原生 Windows，无需安装 Docker 或 WSL2。已有 Docker Desktop 也可以用上面的 Docker 一键部署。
 
@@ -411,7 +430,8 @@ OpenBiliClaw/
 
 | 版本 | 日期 | 主要变更 |
 |---|---|---|
-| **[v0.3.15](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.15)** | 2026-04-30 | 一连串 Windows 装机踩坑修复：CLI 启动强制 stdout=UTF-8 防 GBK 控制台 emoji 崩 · install.ps1 的 `python -c f"..."` 改成 `print(a, b)` 绕开 PS 5.1 引号 bug · agent-install.md 警告 Windows 上 `bash` 误踩 WSL · **修 Ollama embedding-only registry 误进 chat fallback 导致 「All providers failed」** |
+| **[v0.3.16](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.16)** | 2026-04-30 | README 后端安装方式重排：一句话装机 / Docker / 自跑脚本 优先，未签名桌面包后置（折叠 details）· 新增「多源登录前置」段，明确小红书必须在装扩展的浏览器里登录（CDP 模式更稳） |
+| [v0.3.15](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.15) | 2026-04-30 | 一连串 Windows 装机踩坑修复：CLI 启动强制 stdout=UTF-8 防 GBK 控制台 emoji 崩 · install.ps1 的 `python -c f"..."` 改成 `print(a, b)` 绕开 PS 5.1 引号 bug · agent-install.md 警告 Windows 上 `bash` 误踩 WSL · **修 Ollama embedding-only registry 误进 chat fallback 导致 「All providers failed」** |
 | [v0.3.14](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.14) | 2026-04-30 | 修 Windows GBK 默认编码导致 `/api/delight/pending-batch`、`/api/activity-feed` 等接口在简体中文 Windows 上返回 500：`MemoryLayer.load()/save()` 显式 `encoding="utf-8"`，`bilibili.auth` 同步加固。带 monkeypatch `builtins.open` 的回归测试 |
 | [v0.3.13](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.13) | 2026-04-30 | 各种安装路径都把「装扩展自动同步」放到 Cookie 步骤的首选：install.sh / install.ps1 / agent-install.md / CLI 向导 / docker-deployment.md / openclaw-quickstart.md 全部更新；F12 路径降级为兜底 |
 | [v0.3.12](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.12) | 2026-04-30 | 浏览器扩展自动同步 B 站 Cookie 到后端，再也不用 F12：扩展用 `chrome.cookies` API 读登录态 → 后端 `POST /api/bilibili/cookie` 校验 + 持久化 + 热重载 + WebSocket 广播。装好扩展几秒内自动登录态，Cookie 过期也会自动续 |
