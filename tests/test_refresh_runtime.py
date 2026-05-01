@@ -541,7 +541,12 @@ async def test_refresh_controller_requests_discovery_with_backfill_limit() -> No
 
     await controller.refresh_if_needed()
 
-    assert discovery.calls[0][2] == 30  # discovery_limit default
+    # v0.3.24+: pool_count=20, target=30, gap=10. Per-strategy target =
+    # max(5, gap*3//4) = max(5, 7) = 7. Pre-fix this would have asked
+    # for 30 (the discovery_limit floor) regardless of gap, causing
+    # ~80% of LLM evaluation cost to land on candidates that were
+    # immediately suppressed by trim_pool_to_target_count.
+    assert discovery.calls[0][2] == 7
 
 
 async def test_refresh_controller_caps_single_discovery_backfill_request() -> None:
@@ -578,7 +583,77 @@ async def test_refresh_controller_caps_single_discovery_backfill_request() -> No
 
     await controller.refresh_if_needed()
 
-    assert discovery.calls[0][2] == 60
+    # v0.3.24+: pool_count=0, target=300, gap=300. Per-strategy target =
+    # max(5, gap*3//4) = max(5, 225) = 225, capped at discovery_limit=30
+    # to avoid one huge wave on init. (Pre-fix this returned 60 — the
+    # _MAX_DISCOVERY_BACKFILL_PER_REFRESH ceiling — because the old
+    # ``effective_limit = max(discovery_limit, gap)`` formula bumped to
+    # gap=300 and hit the absolute cap.)
+    assert discovery.calls[0][2] == 30
+
+
+async def test_refresh_controller_pool_aware_limit_scales_with_gap() -> None:
+    """v0.3.24+: when pool is close to target, request fewer candidates
+    per strategy. Pre-fix this enforced a 30-item floor regardless of
+    gap, causing the LLM evaluation pipeline to score way more
+    candidates than the pool could absorb (88% of evaluations were
+    suppressed by trim_pool_to_target_count immediately after
+    scoring).
+
+    Verifies the gap → per-strategy mapping for three regimes:
+    1. Tiny gap (5): floor at 5 (don't starve strategies entirely)
+    2. Mid gap (40): per_strategy = 30 (gap*3//4=30, no excess)
+    3. Huge gap (1000): cap at discovery_limit=30 (avoid wave)
+    """
+    discovery = _FakeDiscoveryEngine()
+    now = datetime.now().isoformat()
+
+    def make_controller(pool_count: int, pool_target: int) -> ContinuousRefreshController:
+        return ContinuousRefreshController(
+            memory_manager=_FakeMemoryManager(
+                {
+                    "last_event_refresh_at": "",
+                    "last_trending_refresh_at": now,
+                    "last_explore_refresh_at": now,
+                    "last_processed_event_id": 0,
+                    "last_notification_at": "",
+                }
+            ),
+            database=_FakeDatabase(
+                [
+                    {"id": 1, "event_type": "view"},
+                    {"id": 2, "event_type": "search"},
+                    {"id": 3, "event_type": "view"},
+                    {"id": 4, "event_type": "favorite"},
+                    {"id": 5, "event_type": "comment"},
+                    {"id": 6, "event_type": "feedback"},
+                ],
+                pool_count=pool_count,
+            ),
+            soul_engine=_FakeSoulEngine(),
+            discovery_engine=discovery,
+            recommendation_engine=_FakeRecommendationEngine(),
+            pool_target_count=pool_target,
+            trending_refresh_hours=999,
+            explore_refresh_hours=999,
+        )
+
+    # Tiny gap: 95/100, gap=5 → max(5, 5*3//4=3) = 5 (floor protects)
+    discovery.calls.clear()
+    await make_controller(pool_count=95, pool_target=100).refresh_if_needed()
+    assert discovery.calls[0][2] == 5
+
+    # Mid gap: 60/100, gap=40 → max(5, 40*3//4=30) = 30 (full discovery_limit)
+    discovery.calls.clear()
+    await make_controller(pool_count=60, pool_target=100).refresh_if_needed()
+    assert discovery.calls[0][2] == 30
+
+    # Huge gap: 0/1000, gap=1000 → max(5, 1000*3//4=750), capped at
+    # discovery_limit=30. Pre-fix this would have hit the
+    # _MAX_DISCOVERY_BACKFILL_PER_REFRESH=60 ceiling.
+    discovery.calls.clear()
+    await make_controller(pool_count=0, pool_target=1000).refresh_if_needed()
+    assert discovery.calls[0][2] == 30
 
 
 async def test_refresh_controller_replenishes_until_pool_reaches_target() -> None:

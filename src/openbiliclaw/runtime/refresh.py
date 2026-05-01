@@ -886,10 +886,34 @@ class ContinuousRefreshController:
         current_pool_count: int,
         pool_below_target: bool,
     ) -> int:
-        effective_limit = max(self.discovery_limit, requested_limit)
+        """Decide how many candidates each strategy should be asked for.
+
+        v0.3.24+ pool-aware sizing. Pre-fix this enforced an absolute
+        floor of ``discovery_limit`` (30) per strategy, even when the
+        pool was 595/600 and only needed 5 more items. With 4 strategies
+        × 30 = 120 candidates LLM-evaluated per refresh — and the
+        suppress-pass keeping only ~20 — that meant ~80% of LLM
+        evaluation cost went to candidates that were immediately
+        suppressed. The fix sizes each strategy's limit to the actual
+        pool gap (with 2x oversample for items below score threshold and
+        a floor of 5 to keep strategies productive on tiny gaps),
+        capped by ``discovery_limit`` so a sudden post-init replenish
+        doesn't turn into a single huge wave.
+        """
         if pool_below_target:
-            effective_limit = max(effective_limit, self.pool_target_count - current_pool_count)
-        return min(_MAX_DISCOVERY_BACKFILL_PER_REFRESH, effective_limit)
+            gap = max(0, self.pool_target_count - current_pool_count)
+            # The 2-phase plan dispatches strategies in groups; per-
+            # strategy target is roughly gap // (typical strategy count
+            # per phase = 2), with a 1.5x oversample for threshold
+            # filtering. Floor at 5 so a strategy that only finds 2
+            # interesting items doesn't starve the pool entirely.
+            per_strategy_target = max(5, gap * 3 // 4)
+            # Cap at discovery_limit to preserve original behaviour
+            # when the gap is huge (e.g. fresh init, just-trimmed pool).
+            effective_limit = min(self.discovery_limit, per_strategy_target)
+        else:
+            effective_limit = max(self.discovery_limit, requested_limit)
+        return min(_MAX_DISCOVERY_BACKFILL_PER_REFRESH, max(1, effective_limit))
 
     def _is_initialized(self) -> bool:
         try:
