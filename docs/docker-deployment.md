@@ -82,6 +82,12 @@ docker compose ps
 
 最后才进入真正的 init 阶段：拉历史、生成画像、跑首轮发现。整个流程会打印进度，不要以为卡住了——LLM 单次响应可能就要 10–30s。
 
+> 🌸 **小红书数据是否加入(v0.3.27+)**:init 在 Docker 里跑时也会弹一个交互式问题——把小红书的收藏 / 点赞混进画像吗?
+> - 想加就回 Y(默认),会有准备清单提示你装扩展 + 登录小红书。注意 Docker 模式下扩展是装在你**宿主机**的浏览器里的,后端在容器内通过 8420 端口拉数据
+> - 不想加就回 N,只用 B 站数据建画像
+> - 脚本化场景直接传 flag:`docker exec -it openbiliclaw-backend openbiliclaw init --no-xhs` 跳过 / `--yes-xhs` 强制启用
+> - 想永久跳过:在 docker-compose.yml 里加 `OPENBILICLAW_NO_XHS=1` 环境变量
+
 > 💡 **AI agent 一句话部署**：把下面这句粘到 Claude Code / Codex CLI / Cursor / OpenClaw：
 > ```
 > 请按照 https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/docker-deployment.md 的说明帮我用 Docker Compose 部署 OpenBiliClaw 后端（务必用 Bash 的 curl 下载这个文档，不要用 WebFetch）

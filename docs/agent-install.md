@@ -405,6 +405,25 @@ After running, **always**:
 Bilibili fetches). Tell the user upfront so they don't think it's
 hung. The bootstrap streams init's stdout so progress is visible.
 
+### Init 期间会问用户:小红书数据是否加入(v0.3.27+)
+
+`openbiliclaw init` 在拉 B 站数据**之前**会弹一个交互式问题:是否把
+小红书的收藏 / 点赞混进画像。三种状态:
+
+- **交互式终端 + 没有任何 flag**:打印小红书接入说明 + 准备清单
+  (装扩展、登录小红书、浏览器开着),用户回 Y/N。回 Y 后再确认
+  "准备好了吗",回车继续
+- **`openbiliclaw init --no-xhs`**:跳过提问 + 跳过 enqueue,只用
+  B 站数据建画像。给"我有 B 站没小红书"的用户一个干净 opt-out
+- **`openbiliclaw init --yes-xhs`**:跳过提问直接启用,适合脚本化
+- **`OPENBILICLAW_NO_XHS=1` 环境变量**:同 `--no-xhs`,用于永久跳过
+- **非交互式终端(管道 / CI)**:不弹提问,默认启用,bootstrap 任务
+  自带 graceful 降级——扩展没连上时 30s 超时后跳过
+
+AI agent 视角:**绝大多数情况你不应该手工传任何 flag**。让用户自己
+回答 init 的问题——如果用户说 "我没装扩展也不想用小红书",那时再
+建议他用 `openbiliclaw init --no-xhs` 跳过提问。
+
 ### Per-module overrides（高级，默认不要问）
 
 `--module-override MODULE=PROVIDER:MODEL`（可重复）。模块：`soul` /

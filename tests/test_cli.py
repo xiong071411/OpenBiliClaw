@@ -1784,6 +1784,149 @@ def test_enqueue_xhs_bootstrap_task_uses_env_overrides(
     assert captured["payload"]["scopes"] == ["saved", "liked", "xhs_history"]
 
 
+def test_ask_xhs_inclusion_non_interactive_terminal_defaults_yes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.3.27+: in non-interactive terminals (CI / piped stdin) the
+    decision returns True silently. Auto-on is the safest default —
+    the bootstrap task itself degrades gracefully if the extension
+    isn't actually connected."""
+    from openbiliclaw.cli import _ask_xhs_inclusion
+
+    monkeypatch.delenv("OPENBILICLAW_NO_XHS", raising=False)
+    monkeypatch.setattr(cli_module, "_is_interactive_terminal", lambda: False)
+    assert _ask_xhs_inclusion() is True
+
+
+def test_ask_xhs_inclusion_env_var_returns_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``OPENBILICLAW_NO_XHS=1`` skips even non-interactive auto-on
+    so a script can permanently opt out without piping ``n`` into
+    stdin."""
+    from openbiliclaw.cli import _ask_xhs_inclusion
+
+    monkeypatch.setenv("OPENBILICLAW_NO_XHS", "1")
+    monkeypatch.setattr(cli_module, "_is_interactive_terminal", lambda: True)
+    assert _ask_xhs_inclusion() is False
+
+
+def test_init_no_xhs_flag_skips_enqueue(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner, tmp_path: Path
+) -> None:
+    """v0.3.27+: ``openbiliclaw init --no-xhs`` should completely skip
+    the bootstrap enqueue path so users who don't want xhs touched
+    can be sure no task hits the queue."""
+
+    class FakeAuthManager:
+        async def get_status(self) -> AuthStatus:
+            return AuthStatus(
+                has_cookie=True,
+                authenticated=True,
+                cookie_path=tmp_path / "bilibili_cookie.json",
+                username="alice",
+                user_id=10086,
+                message="Cookie 验证成功。",
+            )
+
+    class FakeBilibiliClient:
+        async def get_user_history(self, max_items: int = 100) -> list[dict[str, object]]:
+            return [
+                {
+                    "history": {"bvid": "BV1A", "view_at": 1710000000},
+                    "title": "讲透历史叙事",
+                    "author_name": "历史实验室",
+                }
+            ]
+
+        async def get_all_favorites(self, **_: object) -> list[object]:
+            return []
+
+        async def get_following(self, **_: object) -> list[object]:
+            return []
+
+    class FakeMemoryManager:
+        async def propagate_event(self, event: dict[str, object]) -> None:
+            return None
+
+    class FakeSoulEngine:
+        def __init__(self) -> None:
+            self.analyzed_events: list[list[dict[str, object]]] = []
+
+        async def analyze_events(
+            self, events: list[dict[str, object]], event_chunk_size: int = 0
+        ) -> None:
+            self.analyzed_events.append(events)
+
+        async def build_initial_profile(self, history: list[dict[str, object]]) -> SoulProfile:
+            return SoulProfile(
+                personality_portrait="稳定用户画像" * 30,
+                core_traits=["理性"],
+                preferences=PreferenceLayer(),
+            )
+
+    enqueue_calls: list[bool] = []
+
+    def fake_enqueue() -> str | None:
+        enqueue_calls.append(True)
+        return "fake-task-id"
+
+    async def passthrough_progress(coro: object, **_: object) -> object:
+        return await coro  # type: ignore[misc]
+
+    async def fake_discovery_backfill(*_: object, **__: object) -> int:
+        return 0
+
+    fake_database = type(
+        "FakeDatabase",
+        (),
+        {"count_pool_candidates": lambda self: 0},
+    )()
+
+    monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
+    monkeypatch.setattr(cli_module, "_load_runtime_config_error", lambda render=True: None)
+    monkeypatch.setattr(cli_module, "_build_auth_manager", lambda: FakeAuthManager(), raising=False)
+    monkeypatch.setattr(
+        cli_module,
+        "_build_bilibili_client",
+        lambda: FakeBilibiliClient(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli_module, "_build_memory_manager", lambda: FakeMemoryManager(), raising=False
+    )
+    monkeypatch.setattr(cli_module, "_build_soul_engine", lambda: FakeSoulEngine(), raising=False)
+    monkeypatch.setattr(cli_module, "_get_runtime_database", lambda: fake_database, raising=False)
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+    monkeypatch.setattr(cli_module, "_run_with_progress", passthrough_progress)
+    monkeypatch.setattr(
+        cli_module,
+        "_run_init_discovery_backfill_async",
+        fake_discovery_backfill,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_build_draft_profile_for_discover",
+        lambda memory: SoulProfile(preferences=PreferenceLayer()),
+    )
+    monkeypatch.setattr(cli_module, "_notify_running_server_init_completed", lambda: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_enqueue_xhs_bootstrap_task",
+        fake_enqueue,
+        raising=False,
+    )
+
+    result = runner.invoke(app, ["init", "--no-xhs"])
+
+    assert result.exit_code == 0, f"unexpected failure:\n{result.stdout}"
+    # Critical: --no-xhs should fully skip the enqueue path.
+    assert enqueue_calls == [], (
+        f"expected --no-xhs to skip xhs enqueue, but got {len(enqueue_calls)} call(s)"
+    )
+    assert "跳过小红书数据接入" in result.stdout
+
+
 def test_init_backfills_pool_in_stages_until_target_is_reached(
     monkeypatch: pytest.MonkeyPatch, runner: CliRunner, tmp_path: Path
 ) -> None:

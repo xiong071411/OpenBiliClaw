@@ -1820,8 +1820,92 @@ def db_repair() -> None:
         raise typer.Exit(code=1)
 
 
+def _ask_xhs_inclusion() -> bool:
+    """Decide whether to enqueue the xhs bootstrap task on this init.
+
+    Resolution order (first match wins):
+      1. ``OPENBILICLAW_NO_XHS=1`` env var → False, silent
+      2. Non-interactive terminal (CI / piped stdin) → True, silent.
+         Auto-on is the safest default — graceful timeout + skip if
+         the extension isn't actually connected.
+      3. Interactive terminal → ask the user with default Y, then
+         (if Y) walk them through a prep checklist.
+
+    Returns True iff the caller should proceed with xhs bootstrap.
+    """
+    if os.environ.get("OPENBILICLAW_NO_XHS", "").strip() == "1":
+        console.print("[dim]  跳过小红书数据接入(OPENBILICLAW_NO_XHS=1)。[/dim]")
+        return False
+    if not _is_interactive_terminal():
+        return True
+
+    console.print()
+    console.print("[bold]🌸 小红书数据接入(可选)[/bold]")
+    console.print(
+        "把你的小红书[bold cyan]收藏 / 点赞[/bold cyan]混进画像,"
+        "系统能读懂你跨平台的口味——\n"
+        "你刷小红书喜欢的领域(咖啡 / 摄影 / 穿搭…)也会反映到 B 站推荐里。"
+    )
+    console.print()
+    console.print("启用需要:")
+    console.print("  1. 装好 OpenBiliClaw 浏览器扩展")
+    console.print(
+        "     [link=https://github.com/whiteguo233/OpenBiliClaw/releases]"
+        "https://github.com/whiteguo233/OpenBiliClaw/releases[/link]"
+    )
+    console.print(
+        "  2. 浏览器登录 [link=https://www.xiaohongshu.com]https://www.xiaohongshu.com[/link]"
+    )
+    console.print()
+    console.print(
+        "[dim]说 N 也没关系,init 只用 B 站数据建画像;以后想加随时再跑一次 init,"
+        "或设 OPENBILICLAW_NO_XHS=1 永久跳过。[/dim]"
+    )
+    console.print()
+
+    if not typer.confirm("加入小红书数据?", default=True):
+        console.print("[dim]  已选择跳过,本次 init 不会请求扩展。[/dim]")
+        return False
+
+    # User said yes — walk them through the prep checklist before
+    # we hit the extension. The bootstrap task has a 30-60s timeout
+    # built-in, so if they say "ready" but actually aren't, the
+    # collect step degrades gracefully (status="empty"/"timeout") and
+    # init still completes on B站 data alone.
+    console.print()
+    console.print("[bold]准备小红书接入[/bold]")
+    console.print("请确认以下三件事都做了:")
+    console.print("  [cyan]☐[/cyan] 装好了 OpenBiliClaw 浏览器扩展")
+    console.print("  [cyan]☐[/cyan] 浏览器目前是打开的(扩展需要在前台轮询任务)")
+    console.print("  [cyan]☐[/cyan] 已经登录了 https://www.xiaohongshu.com")
+    console.print()
+    console.print(
+        "[dim]扩展会自动在隐藏 tab 里打开你的小红书 profile 页解析收藏/点赞,"
+        "整个过程 10-30 秒,不需要你做任何事。[/dim]"
+    )
+    console.print()
+    if not typer.confirm("准备好了吗,可以开始吗?", default=True):
+        console.print(
+            "[dim]  已暂缓小红书接入,本次 init 只用 B 站数据。装好扩展+登录"
+            "小红书后随时再跑一次 init 就能补上。[/dim]"
+        )
+        return False
+    return True
+
+
 @app.command()
-def init() -> None:
+def init(
+    no_xhs: bool = typer.Option(
+        False,
+        "--no-xhs",
+        help="跳过小红书数据接入(默认会问)。",
+    ),
+    skip_xhs_prompt: bool = typer.Option(
+        False,
+        "--yes-xhs",
+        help="跳过小红书的 y/n 提问,直接启用(适合脚本化场景)。",
+    ),
+) -> None:
     """首次运行：拉取历史、生成画像并补足首轮发现池."""
     _prepare_init_runtime()
 
@@ -1899,6 +1983,21 @@ def init() -> None:
 
         return hist, favs, follows
 
+    # v0.3.27+: ask the user whether to include xhs data, with a prep
+    # checklist when they opt in. Three escape hatches preserve the
+    # auto-on default for non-interactive callers:
+    #   --no-xhs          forces skip
+    #   --yes-xhs         skips the y/n + checklist (scripted opt-in)
+    #   OPENBILICLAW_NO_XHS=1   env var skip
+    # Default (interactive, no flags): prompt with default Y.
+    if no_xhs:
+        include_xhs = False
+        console.print("[dim]  跳过小红书数据接入(命令行 --no-xhs)。[/dim]")
+    elif skip_xhs_prompt:
+        include_xhs = True
+    else:
+        include_xhs = _ask_xhs_inclusion()
+
     # Enqueue the XHS bootstrap task FIRST so the browser extension
     # can run it in parallel with the slow B站 history/favs/follows
     # fetches below (~10–30s). When _collect_xhs_bootstrap_events()
@@ -1906,7 +2005,7 @@ def init() -> None:
     # done — no extra wall-clock overhead in the happy path. v0.3.21
     # changed this from a serial 8-second blocking poll to this
     # parallel pattern.
-    xhs_task_id = _enqueue_xhs_bootstrap_task()
+    xhs_task_id = _enqueue_xhs_bootstrap_task() if include_xhs else None
     if xhs_task_id:
         console.print("  [dim]已请求扩展拉小红书收藏 / 点赞（后台并行,不阻塞 B 站拉取）。[/dim]")
 
