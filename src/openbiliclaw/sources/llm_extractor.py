@@ -85,6 +85,7 @@ async def extract_content_from_page(
             user_input=user_prompt,
             temperature=0.3,
             max_tokens=4096,
+            caller=f"sources.{source_platform}.extract",
         )
     except Exception:
         logger.exception("LLM extraction failed for %s page", source_platform)

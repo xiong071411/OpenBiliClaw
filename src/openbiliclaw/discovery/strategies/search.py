@@ -231,6 +231,7 @@ class SearchStrategy(DiscoveryStrategy):
             response = await self.llm_service.complete_structured_task(
                 system_instruction=prompt_messages[0]["content"],
                 user_input=prompt_messages[1]["content"],
+                caller="discovery.search.queries",
             )
             queries = self._parse_queries(str(getattr(response, "content", "")))
             if queries:

@@ -494,6 +494,7 @@ class DiscoveryEvaluator:
                 user_input=f"用户画像:\n{persona_ctx}\n\n候选内容:\n{items_text}",
                 temperature=0.3,
                 max_tokens=256,
+                caller="eval.relevance",
             )
             parsed = json.loads(str(getattr(response, "content", "")).strip())
             if isinstance(parsed, dict):
@@ -524,6 +525,7 @@ class DiscoveryEvaluator:
                 user_input=f"用户画像:\n{persona_ctx}\n\n内容列表:\n{items_text}",
                 temperature=0.3,
                 max_tokens=256,
+                caller="eval.specificity",
             )
             parsed = json.loads(str(getattr(response, "content", "")).strip())
             if isinstance(parsed, dict):
@@ -557,6 +559,7 @@ class DiscoveryEvaluator:
                     "输出严格 JSON: {\"score\": 0.0-1.0, \"reason\": \"一句话\"}"
                 ),
                 user_input=f"用户画像:\n{persona_ctx}\n\n搜索词/方向:\n{items_text}",
+                caller="eval.query_quality",
                 temperature=0.3,
                 max_tokens=256,
             )

@@ -4,6 +4,31 @@
 
 ---
 
+## v0.3.28: LLM 费用观测全链路打通（caller 标签 + 实时日志 + per-init 总结）（2026-05-02）
+
+之前 `UsageRecorder` 的 `caller` 字段虽然在表结构 + recorder API + DB 查询里都已就位,但**整个代码库里没有一个 LLM 调用点真的传 `caller="<module>"`** —— 所有行的 caller 都是空字符串,意味着当年设计的 per-module 费用 attribution 完全失效,`openbiliclaw cost` 能看到 by-day / by-provider/model 但看不出"钱花在哪一层",这是用户最关心的视角。补全:
+
+### 新增
+
+- **27 个 LLM 调用点全部 wire 上 caller 标签** —— 覆盖 `recommendation.evaluate_batch / .delight_reason / .write_expression / .expression`、`discovery.trending.rids / .search.queries / .explore.queries / .evaluate_single / .evaluate_batch`、`eval.scenario_gen / .relevance / .specificity / .query_quality`、`soul.preference / .preference.chunk / .profile_build / .insight / .awareness / .role_update / .values_update / .core_update / .speculate / .dialogue / .dialogue.tools / .dialogue.tool_followup / .dialogue_insight`、`sources.{platform}.extract / sources.xhs.keyword_gen`、`api.sentiment`。还把 `LLMService.complete_with_tools` / `complete_socratic_dialogue` 也加了 `caller` 形参并 forward 到内部 `complete_with_core_memory` —— 之前这两个方法漏接 `caller`,让 dialogue 路径的费用全归到 untagged
+- **`UsageRecorder.record()` 每次 LLM 调用打 INFO 日志** —— `[llm-cost] caller=discovery.evaluate_batch model=deepseek-v4-flash tokens=850→230 ≈ ¥0.0010`。tail daemon 日志 (`journalctl -fu openbiliclaw` / `docker logs -f openbiliclaw-backend`) 就能看费用实时累积,不用等跑完才查
+- **单次调用超阈值时打 WARN** —— 默认 ¥0.10 阈值(可通过 `OPENBILICLAW_LLM_EXPENSIVE_CNY` 环境变量调)。抓 runaway prompt(忘了截断历史 / 误开 reasoning_effort=max / 单 batch 太大)用,WARN 行包含 caller / model / token / 实际花费,定位很快
+- **`openbiliclaw cost --by caller`** —— `cost` CLI 加了第三个表(by-caller),展示按模块的费用占比 + token 数。`--by all`(默认) / `--by day` / `--by provider` / `--by caller` 四档
+- **init 结束时自动打印本次 init 的 cost summary** —— 不用再手动 `openbiliclaw cost`,init 完成后直接显示按 caller 拆分的费用占比(本次 init 总 N 次调用 ≈ ¥X,其中 discovery.evaluate_batch 占 60% / soul.profile_build 占 15% 等)。靠 `Database.max_llm_usage_id() / query_llm_usage_since_id()` 在 init 入口快照行 id,出口反查,把累积 usage 限定到本次 init 窗口
+- `pricing.py` 加常量 `EXPENSIVE_CALL_CNY_THRESHOLD = 0.10`(可环境变量覆盖)
+
+### 修改
+
+- `Database.query_llm_usage_by_caller(days=N)` 新方法,SQL 按 caller 分组聚合,`ORDER BY cost_cny DESC` 让最贵的调用排第一
+- `LLMService.complete_with_tools` / `complete_socratic_dialogue` 签名加 `caller: str = ""`,forward 到 inner `complete_with_core_memory(caller=caller)`
+
+### 测试
+
+- 修了 ~30 个测试 fake 让它们的 `complete_*` 签名也接 `caller` 形参(否则生产调用点传 `caller=...` 会让 fake 报 TypeError)。批量改了 17 个测试文件
+- 全套测试 16 失败 / 931 通过,跟 baseline 完全一致 —— 0 新回归
+
+---
+
 ## v0.3.27: 安装文档全面同步至 init wizard 当前形态 + DeepSeek V4 默认模型（2026-05-02）
 
 ### 修改

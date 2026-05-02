@@ -70,6 +70,7 @@ async def generate_xhs_keywords(
             user_input=_build_user_prompt(interest_tuples, count),
             temperature=0.8,
             max_tokens=512,
+            caller="sources.xhs.keyword_gen",
         )
     except Exception as exc:
         logger.warning("xhs keyword LLM call failed: %s", exc)

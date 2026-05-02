@@ -93,6 +93,7 @@ class SocraticDialogue:
                 response = await service.complete_socratic_dialogue(
                     user_message=user_message,
                     history=self._history_to_messages(),
+                    caller="soul.dialogue",
                 )
                 reply = response.content
         except (LLMServiceError, RuntimeError):
@@ -143,6 +144,7 @@ class SocraticDialogue:
             user_input=user_message,
             tools=self._tools,
             history=self._history_to_messages(),
+            caller="soul.dialogue.tools",
         )
 
         # If the LLM returned a tool call, execute and continue
@@ -161,6 +163,7 @@ class SocraticDialogue:
                     {"role": "user", "content": user_message},
                     {"role": "assistant", "content": f"（调用了工具 {tool_call.get('name')}）"},
                 ],
+                caller="soul.dialogue.tool_followup",
             )
             return str(followup.content)
 

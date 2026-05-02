@@ -42,6 +42,7 @@ class FakeStructuredService:
         history: list[dict[str, str]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        caller: str = "",
     ) -> LLMResponse:
         self.calls.append({"system_instruction": system_instruction, "user_input": user_input})
         return self.response
@@ -59,6 +60,7 @@ class FakeErrorStructuredService:
         history: list[dict[str, str]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        caller: str = "",
     ) -> LLMResponse:
         raise self.error
 

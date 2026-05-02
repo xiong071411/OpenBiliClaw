@@ -148,6 +148,7 @@ class TrendingStrategy(DiscoveryStrategy):
             response = await self.llm_service.complete_structured_task(
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
+                caller="discovery.trending.rids",
             )
             parsed = json.loads(str(getattr(response, "content", "")).strip())
             if isinstance(parsed, dict) and isinstance(parsed.get("rids"), list):

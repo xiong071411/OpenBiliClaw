@@ -43,6 +43,7 @@ class FakeLLMService:
         history: list[dict[str, str]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        caller: str = "",
     ) -> object:
         self.calls.append(
             {

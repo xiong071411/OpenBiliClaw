@@ -45,6 +45,7 @@ class _StaticStructuredService:
         history: list[dict[str, str]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        caller: str = "",
     ) -> LLMResponse:
         self.calls.append(
             {

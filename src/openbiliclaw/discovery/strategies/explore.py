@@ -257,6 +257,7 @@ class ExploreStrategy(DiscoveryStrategy):
             response = await self.llm_service.complete_structured_task(
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
+                caller="discovery.explore.queries",
             )
             parsed = json.loads(str(getattr(response, "content", "")).strip())
         except Exception:

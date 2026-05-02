@@ -40,6 +40,7 @@ class FakeService:
         *,
         user_message: str,
         history: list[dict[str, str]],
+        caller: str = "",
     ) -> LLMResponse:
         self.calls.append({"user_message": user_message, "history": history})
         if self.error is not None:

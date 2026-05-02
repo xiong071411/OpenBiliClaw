@@ -638,6 +638,7 @@ class ContentDiscoveryEngine:
             llm_call = self._llm_service.complete_structured_task(
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
+                caller="discovery.evaluate_single",
             )
             if self._concurrency is not None:
                 response = await self._concurrency.run_llm(llm_call)
@@ -864,6 +865,7 @@ class ContentDiscoveryEngine:
                 # so a verbose ``reason`` field doesn't truncate the
                 # array on the last few items.
                 max_tokens=16384,
+                caller="discovery.evaluate_batch",
             )
             if self._concurrency is not None:
                 response = await self._concurrency.run_llm(llm_call)

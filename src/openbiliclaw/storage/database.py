@@ -340,6 +340,35 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def query_llm_usage_by_caller(
+        self,
+        *,
+        days: int = 7,
+    ) -> list[dict[str, Any]]:
+        """Return per-caller totals over the last ``days`` days.
+
+        ``caller`` is a free-form string the LLM service tags into each
+        row (e.g. ``discovery.evaluate`` / ``recommendation.write`` /
+        ``soul.profile``). Untagged calls land under ``""`` which the
+        CLI renders as ``(untagged)``. Result is sorted by cost so the
+        first row is the most expensive caller.
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT COALESCE(caller, '') AS caller,
+                   COUNT(*) AS calls,
+                   COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                   COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                   COALESCE(SUM(estimated_cost_cny), 0) AS cost_cny
+            FROM llm_usage
+            WHERE timestamp >= datetime('now', '-' || ? || ' day', 'localtime')
+            GROUP BY caller
+            ORDER BY cost_cny DESC
+            """,
+            (max(1, int(days)),),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     def query_llm_usage_total(self, *, days: int = 7) -> dict[str, Any]:
         """Return a single-row total for the last ``days`` days."""
         cursor = self.conn.execute(
@@ -366,6 +395,63 @@ class Database:
                 "cost_cny": 0.0,
             }
         )
+
+    def max_llm_usage_id(self) -> int:
+        """Return the highest currently-stored ``llm_usage.id`` (0 if empty).
+
+        Used as a checkpoint for "what's been billed since this point"
+        queries — the init / discovery cycle wrappers snapshot it on
+        entry and pass it to ``query_llm_usage_since_id`` on exit to
+        scope the cost summary to that single phase.
+        """
+        cursor = self.conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM llm_usage")
+        row = cursor.fetchone()
+        return int(row["m"]) if row else 0
+
+    def query_llm_usage_since_id(self, *, since_id: int) -> dict[str, Any]:
+        """Return per-caller breakdown + totals for rows ``id > since_id``.
+
+        Output: ``{"total": {calls, prompt_tokens, completion_tokens,
+        cost_cny}, "by_caller": [{caller, calls, ...}, ...]}``. Bound
+        to a single phase by passing ``max_llm_usage_id()`` taken at
+        the phase entry.
+        """
+        total_cursor = self.conn.execute(
+            """
+            SELECT COUNT(*) AS calls,
+                   COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                   COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                   COALESCE(SUM(estimated_cost_cny), 0) AS cost_cny
+            FROM llm_usage
+            WHERE id > ?
+            """,
+            (int(since_id),),
+        )
+        total_row = total_cursor.fetchone()
+        total = (
+            dict(total_row)
+            if total_row
+            else {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_cny": 0.0}
+        )
+
+        caller_cursor = self.conn.execute(
+            """
+            SELECT COALESCE(caller, '') AS caller,
+                   COUNT(*) AS calls,
+                   COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                   COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                   COALESCE(SUM(estimated_cost_cny), 0) AS cost_cny
+            FROM llm_usage
+            WHERE id > ?
+            GROUP BY caller
+            ORDER BY cost_cny DESC
+            """,
+            (int(since_id),),
+        )
+        return {
+            "total": total,
+            "by_caller": [dict(row) for row in caller_cursor.fetchall()],
+        }
 
     def query_events(
         self,

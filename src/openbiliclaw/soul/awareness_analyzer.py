@@ -65,6 +65,7 @@ class AwarenessAnalyzer:
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
                 max_tokens=DEFAULT_STRUCTURED_MAX_TOKENS,
+                caller="soul.awareness",
             )
         except (LLMProviderError, LLMServiceError) as exc:
             raise AwarenessGenerationError(str(exc)) from exc

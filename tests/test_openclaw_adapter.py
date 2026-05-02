@@ -214,6 +214,7 @@ class _FakeLLMService:
 
     async def complete_socratic_dialogue(
         self, *, user_message: str, history: list[dict[str, str]] | None = None,
+        caller: str = "",
     ) -> SimpleNamespace:
         return SimpleNamespace(
             content=(

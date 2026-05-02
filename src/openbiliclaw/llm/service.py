@@ -141,6 +141,7 @@ class LLMService:
         history: list[dict[str, str]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        caller: str = "",
     ) -> LLMResponse:
         """Execute a completion that may include tool/function calls.
 
@@ -171,6 +172,7 @@ class LLMService:
             temperature=temperature,
             max_tokens=max_tokens,
             json_mode=False,
+            caller=caller,
         )
 
         # Try to parse tool calls from the response
@@ -195,6 +197,7 @@ class LLMService:
         *,
         user_message: str,
         history: list[dict[str, str]],
+        caller: str = "",
     ) -> LLMResponse:
         """Generate a Socratic dialogue reply using core memory context."""
         tone_profile = self._build_dialogue_tone_profile()
@@ -211,6 +214,7 @@ class LLMService:
             system_instruction=prompt_messages[0]["content"],
             user_input=user_message,
             history=history,
+            caller=caller,
         )
 
     def _build_dialogue_tone_profile(self) -> ToneProfile:

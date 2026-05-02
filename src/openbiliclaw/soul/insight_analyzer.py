@@ -66,6 +66,7 @@ class InsightAnalyzer:
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
                 max_tokens=DEFAULT_STRUCTURED_MAX_TOKENS,
+                caller="soul.insight",
             )
         except (LLMProviderError, LLMServiceError) as exc:
             raise InsightGenerationError(str(exc)) from exc

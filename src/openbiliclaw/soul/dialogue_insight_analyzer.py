@@ -64,6 +64,7 @@ class DialogueInsightAnalyzer:
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
                 max_tokens=DEFAULT_STRUCTURED_MAX_TOKENS,
+                caller="soul.dialogue_insight",
             )
         except (LLMProviderError, LLMServiceError) as exc:
             raise DialogueInsightAnalysisError(str(exc)) from exc

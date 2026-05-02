@@ -1303,6 +1303,7 @@ def create_app(
                     user_input=f"方向：{domain}\n用户：{user_message}",
                     max_tokens=8,
                     temperature=0.0,
+                    caller="api.sentiment",
                 ),
                 timeout=15,
             )

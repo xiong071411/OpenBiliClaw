@@ -238,6 +238,7 @@ class ScenarioGenerator:
                 user_input=f"用户画像:\n{persona_text}",
                 temperature=0.8,
                 max_tokens=16384,
+                caller="eval.scenario_gen",
             )
             raw = str(getattr(response, "content", "")).strip()
             logger.info("Scenario LLM response length: %d chars", len(raw))

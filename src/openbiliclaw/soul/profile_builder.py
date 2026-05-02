@@ -77,6 +77,7 @@ class ProfileBuilder:
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
                 max_tokens=DEFAULT_STRUCTURED_MAX_TOKENS,
+                caller="soul.profile_build",
                 temperature=0.5,
             )
         except (LLMProviderError, LLMServiceError) as exc:

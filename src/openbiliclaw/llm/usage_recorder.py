@@ -9,11 +9,21 @@ table. ``openbiliclaw cost`` reads back the table for daily summaries.
 Failures are deliberately swallowed inside ``record()`` — billing
 should never block a successful LLM response from reaching the
 caller.
+
+Two side-channels for real-time observability:
+
+- INFO log on every successful call:
+  ``[llm-cost] caller=discovery.evaluate model=deepseek-v4-flash 850→230 tok ≈ ¥0.0010``
+  Lets you ``tail -f`` daemon logs and see cost flowing in live.
+- WARN log when a *single* call exceeds ``EXPENSIVE_CALL_CNY_THRESHOLD``
+  (default ¥0.10). This catches runaway prompts (a 32K-token reasoning
+  call costs ~¥0.5 silently otherwise).
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, Protocol
 
 from openbiliclaw.llm.pricing import estimate_cost
@@ -22,6 +32,16 @@ if TYPE_CHECKING:
     from openbiliclaw.llm.base import LLMResponse
 
 logger = logging.getLogger(__name__)
+
+# Single-call threshold above which we WARN. Most legitimate
+# OpenBiliClaw calls cost <¥0.01; ¥0.10 is ~10x that, well above
+# any expected per-call cost and into "something's wrong" territory.
+# Override via env var if a deployment runs higher-quality models on
+# purpose (Opus 4.7 alone can exceed this on a long prompt).
+_EXPENSIVE_THRESHOLD_DEFAULT = 0.10
+EXPENSIVE_CALL_CNY_THRESHOLD = float(
+    os.environ.get("OPENBILICLAW_LLM_EXPENSIVE_CNY", _EXPENSIVE_THRESHOLD_DEFAULT)
+)
 
 
 class _UsageSink(Protocol):
@@ -68,7 +88,7 @@ class UsageRecorder:
         ``response`` may be None (degenerate path) — we silently no-op
         rather than raising, since the caller is in a hot path.
         """
-        if self._sink is None or response is None:
+        if response is None:
             return
 
         usage = getattr(response, "usage", None) or {}
@@ -80,6 +100,44 @@ class UsageRecorder:
 
         try:
             cost = estimate_cost(provider, model, prompt_tokens, completion_tokens)
+        except Exception:
+            logger.debug("estimate_cost failed", exc_info=True)
+            return
+
+        # Real-time INFO log so `journalctl -fu openbiliclaw` /
+        # `docker logs -f` shows cost as it accrues. Caller defaults
+        # to "?" when untagged so the log reads consistently.
+        caller_tag = caller or "?"
+        logger.info(
+            "[llm-cost] caller=%s model=%s tokens=%d→%d ≈ ¥%.4f",
+            caller_tag,
+            model or "(unknown)",
+            prompt_tokens,
+            completion_tokens,
+            cost,
+        )
+
+        # Anomaly WARN — single call over threshold is almost always a
+        # runaway prompt (forgotten history truncation, oversized batch,
+        # accidentally enabled reasoning budget, etc.). Worth logging
+        # loudly so it's noticed before $$ accumulate.
+        if cost >= EXPENSIVE_CALL_CNY_THRESHOLD:
+            logger.warning(
+                "[llm-cost] expensive single call: caller=%s model=%s "
+                "%d→%d tokens ≈ ¥%.4f (threshold ¥%.2f, override via "
+                "OPENBILICLAW_LLM_EXPENSIVE_CNY)",
+                caller_tag,
+                model or "(unknown)",
+                prompt_tokens,
+                completion_tokens,
+                cost,
+                EXPENSIVE_CALL_CNY_THRESHOLD,
+            )
+
+        if self._sink is None:
+            return
+
+        try:
             self._sink.insert_llm_usage(
                 provider=provider or "unknown",
                 model=model or "",

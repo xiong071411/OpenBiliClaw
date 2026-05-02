@@ -39,6 +39,7 @@ class FakeLLMService:
         history: list[dict[str, str]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        caller: str = "",
     ) -> object:
         is_batch = "content_batch" in user_input
         if is_batch:
@@ -89,6 +90,7 @@ class _SlowScoringLLMService(FakeLLMService):
         history: list[dict[str, str]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        caller: str = "",
     ) -> object:
         self.active_calls += 1
         self.max_active_calls = max(self.max_active_calls, self.active_calls)

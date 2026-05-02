@@ -324,6 +324,7 @@ async def _update_role(
             system_instruction=messages[0]["content"],
             user_input=messages[1]["content"],
             max_tokens=DEFAULT_STRUCTURED_MAX_TOKENS,
+            caller="soul.role_update",
         )
         result = parse_llm_json_tolerant(response.content)
         if not isinstance(result, dict):
@@ -418,6 +419,7 @@ async def _update_values(
             system_instruction=messages[0]["content"],
             user_input=messages[1]["content"],
             max_tokens=DEFAULT_STRUCTURED_MAX_TOKENS,
+            caller="soul.values_update",
         )
         result = parse_llm_json_tolerant(response.content)
         if not isinstance(result, dict):
@@ -528,6 +530,7 @@ async def _update_core(
             system_instruction=messages[0]["content"],
             user_input=messages[1]["content"],
             max_tokens=DEFAULT_STRUCTURED_MAX_TOKENS,
+            caller="soul.core_update",
         )
         result = parse_llm_json_tolerant(response.content)
         if not isinstance(result, dict):

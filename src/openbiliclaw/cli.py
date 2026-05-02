@@ -2100,12 +2100,20 @@ def setup_embedding() -> None:
 @app.command()
 def cost(
     days: int = typer.Option(7, "--days", min=1, max=90, help="统计窗口(天)"),
+    by: str = typer.Option(
+        "all",
+        "--by",
+        help="单维度展开: all (默认 / 三表全显) / day / provider / caller",
+    ),
 ) -> None:
-    """显示本机 LLM 调用花费(按天 + 按 provider/model)。
+    """显示本机 LLM 调用花费(按天 + 按 provider/model + 按 caller 模块)。
 
     数据来源:每次成功的 LLM 调用都会写一条到 ``llm_usage`` 表(v0.3.26+)。
     费用按 ``llm.pricing`` 里的官方单价估算,允许 ±20% 误差。本地 Ollama
     调用单价 0,只统计调用次数。
+
+    ``--by caller`` 显示按模块(discovery / recommendation / soul / api 等)
+    拆分的占比,这是排查"钱花在哪一层"最有用的视图。
     """
     _print_page_title("LLM 调用花费", f"最近 {days} 天")
     _ensure_runtime_database_healthy()
@@ -2113,6 +2121,7 @@ def cost(
 
     daily = db.query_llm_usage_by_day(days=days)
     by_provider = db.query_llm_usage_by_provider(days=days)
+    by_caller = db.query_llm_usage_by_caller(days=days)
     total = db.query_llm_usage_total(days=days)
 
     if total["calls"] == 0:
@@ -2124,43 +2133,77 @@ def cost(
         )
         return
 
-    daily_table = Table(show_header=True, header_style="bold cyan")
-    daily_table.add_column("日期", no_wrap=True)
-    daily_table.add_column("调用数", justify="right")
-    daily_table.add_column("input tokens", justify="right")
-    daily_table.add_column("output tokens", justify="right")
-    daily_table.add_column("¥ 估算", justify="right", style="bold yellow")
-    for row in daily:
-        daily_table.add_row(
-            str(row["day"]),
-            f"{row['calls']:,}",
-            f"{row['prompt_tokens']:,}",
-            f"{row['completion_tokens']:,}",
-            f"¥{row['cost_cny']:.4f}",
-        )
-    console.print(daily_table)
-    console.print()
+    show_all = by == "all"
 
-    provider_table = Table(show_header=True, header_style="bold magenta")
-    provider_table.add_column("Provider", no_wrap=True)
-    provider_table.add_column("Model")
-    provider_table.add_column("调用数", justify="right")
-    provider_table.add_column("input", justify="right")
-    provider_table.add_column("output", justify="right")
-    provider_table.add_column("¥ 占比", justify="right", style="bold yellow")
-    total_cost = total["cost_cny"] or 1e-9
-    for row in by_provider:
-        share = row["cost_cny"] / total_cost * 100
-        provider_table.add_row(
-            row["provider"] or "?",
-            row["model"] or "(default)",
-            f"{row['calls']:,}",
-            f"{row['prompt_tokens']:,}",
-            f"{row['completion_tokens']:,}",
-            f"¥{row['cost_cny']:.4f} ({share:.0f}%)",
+    if show_all or by == "day":
+        daily_table = Table(
+            show_header=True, header_style="bold cyan", title="按天 (cost by day)"
         )
-    console.print(provider_table)
-    console.print()
+        daily_table.add_column("日期", no_wrap=True)
+        daily_table.add_column("调用数", justify="right")
+        daily_table.add_column("input tokens", justify="right")
+        daily_table.add_column("output tokens", justify="right")
+        daily_table.add_column("¥ 估算", justify="right", style="bold yellow")
+        for row in daily:
+            daily_table.add_row(
+                str(row["day"]),
+                f"{row['calls']:,}",
+                f"{row['prompt_tokens']:,}",
+                f"{row['completion_tokens']:,}",
+                f"¥{row['cost_cny']:.4f}",
+            )
+        console.print(daily_table)
+        console.print()
+
+    total_cost = total["cost_cny"] or 1e-9
+
+    if show_all or by == "provider":
+        provider_table = Table(
+            show_header=True,
+            header_style="bold magenta",
+            title="按 Provider/Model (cost by provider)",
+        )
+        provider_table.add_column("Provider", no_wrap=True)
+        provider_table.add_column("Model")
+        provider_table.add_column("调用数", justify="right")
+        provider_table.add_column("input", justify="right")
+        provider_table.add_column("output", justify="right")
+        provider_table.add_column("¥ 占比", justify="right", style="bold yellow")
+        for row in by_provider:
+            share = row["cost_cny"] / total_cost * 100
+            provider_table.add_row(
+                row["provider"] or "?",
+                row["model"] or "(default)",
+                f"{row['calls']:,}",
+                f"{row['prompt_tokens']:,}",
+                f"{row['completion_tokens']:,}",
+                f"¥{row['cost_cny']:.4f} ({share:.0f}%)",
+            )
+        console.print(provider_table)
+        console.print()
+
+    if show_all or by == "caller":
+        caller_table = Table(
+            show_header=True,
+            header_style="bold green",
+            title="按模块 (cost by caller — 钱花在哪一层)",
+        )
+        caller_table.add_column("Caller (模块.动作)", no_wrap=True)
+        caller_table.add_column("调用数", justify="right")
+        caller_table.add_column("input", justify="right")
+        caller_table.add_column("output", justify="right")
+        caller_table.add_column("¥ 占比", justify="right", style="bold yellow")
+        for row in by_caller:
+            share = row["cost_cny"] / total_cost * 100
+            caller_table.add_row(
+                row["caller"] or "[dim](untagged)[/dim]",
+                f"{row['calls']:,}",
+                f"{row['prompt_tokens']:,}",
+                f"{row['completion_tokens']:,}",
+                f"¥{row['cost_cny']:.4f} ({share:.0f}%)",
+            )
+        console.print(caller_table)
+        console.print()
 
     avg_per_day = total["cost_cny"] / max(1, len(daily))
     _print_status_panel(
@@ -2172,7 +2215,8 @@ def cost(
         f"估算消耗 [bold yellow]¥{total['cost_cny']:.4f}[/bold yellow]\n"
         f"按记录到的天数平均 ≈ ¥{avg_per_day:.4f}/天 ≈ "
         f"¥{avg_per_day * 30:.2f}/月\n"
-        "[dim]（费率为公开渠道估算,与 provider 实际账单可能差 ±20%。）[/dim]",
+        "[dim]（费率为公开渠道估算,与 provider 实际账单可能差 ±20%。"
+        "tail daemon 日志可以看每次调用的实时 [llm-cost] INFO 行。）[/dim]",
     )
 
 
@@ -2324,6 +2368,16 @@ def init(
 ) -> None:
     """首次运行：拉取历史、生成画像并补足首轮发现池."""
     _prepare_init_runtime()
+
+    # Snapshot the highest llm_usage row id seen at start so the
+    # post-init cost summary can scope to "this init only" rather
+    # than the user's lifetime ledger. Wrapped in try/except —
+    # billing is best-effort and must not block init startup.
+    init_start_usage_id: int | None = None
+    try:
+        init_start_usage_id = _get_runtime_database().max_llm_usage_id()
+    except Exception:
+        init_start_usage_id = None
 
     client = _build_bilibili_client()
     memory = _build_memory_manager()
@@ -2636,8 +2690,52 @@ def init(
         ],
     )
 
+    # Phase E (v0.3.28+): print cost breakdown for THIS init only,
+    # scoped by the row-id snapshot taken before any LLM call ran.
+    # Lets users immediately see "init 这次花了 ¥X,其中 X% 在 discovery
+    # 评估" rather than having to manually run `openbiliclaw cost`.
+    if init_start_usage_id is not None:
+        _print_init_cost_summary(init_start_usage_id)
+
     # Notify the running API server so the extension refreshes immediately.
     _notify_running_server_init_completed()
+
+
+def _print_init_cost_summary(since_id: int) -> None:
+    """Print this-init-only LLM cost breakdown by caller."""
+    try:
+        db = _get_runtime_database()
+        snapshot = db.query_llm_usage_since_id(since_id=since_id)
+    except Exception:
+        return  # never block init success on a billing query
+    total = snapshot.get("total", {})
+    if not total or total.get("calls", 0) == 0:
+        return
+    by_caller = snapshot.get("by_caller", [])
+    total_cost = float(total.get("cost_cny", 0.0)) or 1e-9
+
+    summary_table = Table(
+        show_header=True,
+        header_style="bold green",
+        title=f"本次 init LLM 花费 — 总 {total['calls']:,} 次调用 ≈ ¥{total['cost_cny']:.4f}",
+    )
+    summary_table.add_column("Caller (模块.动作)", no_wrap=True)
+    summary_table.add_column("调用数", justify="right")
+    summary_table.add_column("token in→out", justify="right")
+    summary_table.add_column("¥ 占比", justify="right", style="bold yellow")
+    for row in by_caller:
+        share = float(row["cost_cny"]) / total_cost * 100
+        summary_table.add_row(
+            row["caller"] or "[dim](untagged)[/dim]",
+            f"{row['calls']:,}",
+            f"{row['prompt_tokens']:,}→{row['completion_tokens']:,}",
+            f"¥{row['cost_cny']:.4f} ({share:.0f}%)",
+        )
+    console.print(summary_table)
+    console.print(
+        "[dim]💡 想看历史累积花费跑 `openbiliclaw cost` (默认 7 天) / "
+        "`openbiliclaw cost --by caller --days 30` 看 30 天按模块拆分。[/dim]"
+    )
 
 
 def _notify_running_server_init_completed(

@@ -55,6 +55,7 @@ class _SlowLLMService:
         history: list[dict[str, str]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        caller: str = "",
     ) -> object:
         self.active_calls += 1
         self.max_active_calls = max(self.max_active_calls, self.active_calls)

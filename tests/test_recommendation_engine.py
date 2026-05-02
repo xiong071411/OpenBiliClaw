@@ -27,6 +27,7 @@ class _DummyLLM:
         history: list[dict[str, str]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        caller: str = "",
     ) -> LLMResponse:
         self.calls.append(
             {
@@ -1349,6 +1350,7 @@ async def test_classify_pool_backlog_fills_metadata() -> None:
             history: list[dict[str, str]] | None = None,
             temperature: float = 0.7,
             max_tokens: int = 4096,
+            caller: str = "",
         ) -> LLMResponse:
             self.calls.append({"system_instruction": system_instruction})
             # Check if this is a classification call (batch eval prompt)
@@ -1537,6 +1539,7 @@ async def test_precompute_delight_scores_backfills_missing_copy_for_high_scored_
             history: list[dict[str, str]] | None = None,
             temperature: float = 0.7,
             max_tokens: int = 4096,
+            caller: str = "",
         ) -> LLMResponse:
             return LLMResponse(
                 content=json.dumps(

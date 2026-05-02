@@ -668,6 +668,7 @@ class RecommendationEngine:
             system_instruction=messages[0]["content"],
             user_input=messages[1]["content"],
             max_tokens=8192,
+            caller="recommendation.evaluate_batch",
         )
         raw = str(getattr(response, "content", "")).strip()
         payload = json.loads(raw)
@@ -854,6 +855,7 @@ class RecommendationEngine:
             response = await self._llm.complete_structured_task(
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
+                caller="recommendation.delight_reason",
             )
             payload = json.loads(response.content.strip())
             if not isinstance(payload, dict):
@@ -909,6 +911,7 @@ class RecommendationEngine:
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
                 max_tokens=8192,
+                caller="recommendation.write_expression",
             )
             payload = json.loads(response.content.strip())
             if isinstance(payload, dict):
@@ -1083,6 +1086,7 @@ class RecommendationEngine:
             response = await self._llm.complete_structured_task(
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
+                caller="recommendation.expression",
             )
             payload = json.loads(response.content.strip())
             if not isinstance(payload, dict):

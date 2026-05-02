@@ -151,6 +151,7 @@ class _RichFakeService:
         history: list[dict[str, str]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        caller: str = "",
     ) -> LLMResponse:
         self.calls.append(
             {"system_instruction": system_instruction, "user_input": user_input}
@@ -1925,6 +1926,7 @@ class _CognitionFakeService:
         history: list[dict[str, str]] | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        caller: str = "",
     ) -> LLMResponse:
         # Match on distinct keywords present only in each prompt type
         if "awareness" in system_instruction.lower() or "观察" in system_instruction:

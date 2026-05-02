@@ -184,7 +184,12 @@ async def test_evaluator_propagates_llm_franchise_key_through_to_db(
             self.calls = 0
 
         def complete_structured_task(
-            self, *, system_instruction: str, user_input: str, max_tokens: int
+            self,
+            *,
+            system_instruction: str,
+            user_input: str,
+            max_tokens: int,
+            caller: str = "",
         ) -> object:
             self.calls += 1
             # Inspect user_input to figure out the input order so the
@@ -294,7 +299,12 @@ async def test_evaluate_content_batch_default_size_30_uses_single_llm_call(
             self.call_count = 0
 
         def complete_structured_task(
-            self, *, system_instruction: str, user_input: str, max_tokens: int
+            self,
+            *,
+            system_instruction: str,
+            user_input: str,
+            max_tokens: int,
+            caller: str = "",
         ) -> object:
             self.call_count += 1
             input_data = json.loads(

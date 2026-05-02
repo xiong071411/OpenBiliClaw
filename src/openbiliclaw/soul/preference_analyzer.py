@@ -97,6 +97,7 @@ class PreferenceAnalyzer:
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
                 max_tokens=DEFAULT_STRUCTURED_MAX_TOKENS,
+                caller="soul.preference",
             )
         except (LLMProviderError, LLMServiceError) as exc:
             raise PreferenceAnalysisError(str(exc)) from exc
@@ -154,6 +155,7 @@ class PreferenceAnalyzer:
                     system_instruction=messages[0]["content"],
                     user_input=messages[1]["content"],
                     max_tokens=DEFAULT_STRUCTURED_MAX_TOKENS,
+                    caller="soul.preference.chunk",
                 )
             except (LLMProviderError, LLMServiceError) as exc:
                 raise PreferenceAnalysisError(str(exc)) from exc
