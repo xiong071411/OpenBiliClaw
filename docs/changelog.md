@@ -4,11 +4,12 @@
 
 ---
 
-## v0.3.27: 安装文档全面同步至 init wizard 当前形态（2026-05-02）
+## v0.3.27: 安装文档全面同步至 init wizard 当前形态 + DeepSeek V4 默认模型（2026-05-02）
 
 ### 修改
 
 - `docs/openclaw-quickstart.md` —— 把 `init` 4 阶段向导描述同步到 v0.3.27+ 当前形态:Phase 1 LLM(DeepSeek 默认 / Ollama+网关收进高级)、Phase 2 配置、Phase 3 Embedding(Ollama bge-m3 默认)、Phase 4 Per-module 覆盖。新增独立的 🌸 小红书数据可选问题(在 wizard 之后、数据拉取之前),并明确"扩展会在浏览器开前台 tab 抢一次焦点"的真实行为。`init` 阶段列表新增可选小红书拉取步,并提示用 `openbiliclaw cost` 查看花费
+- **DeepSeek 默认模型 `deepseek-chat` → `deepseek-v4-flash`** —— 旧 `deepseek-chat` / `deepseek-reasoner` DeepSeek 官方将于 2026/07/24 弃用。`config.example.toml` 早就指向 v4-flash,但 `cli.py` `_PROVIDER_DEFAULTS` 还在写 `deepseek-chat`,导致 init 向导给出过期的默认值。修复点:`_PROVIDER_DEFAULTS["deepseek"].model`、`_LLM_MENU` hint、Phase 2 配置阶段新增 `_PROVIDER_MODEL_HINT` 表(每个 provider 在 prompt 模型名前显示一行可选清单,DeepSeek 那行明确列 v4-flash / v4-pro 两档 + 旧名弃用日期),让用户明确确认而不是回车跳过一个看不懂的字符串。同步更新 `docs/{openclaw-quickstart,docker-deployment,agent-install,agent-deployment,modules/config,modules/llm}.md`、`scripts/agent_bootstrap.py` 示例、`extension/popup/popup.html` placeholder、`pricing.py` 加 `deepseek-v4-pro` 行
 
 ---
 

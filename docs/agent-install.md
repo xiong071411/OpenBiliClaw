@@ -96,7 +96,7 @@ user's main menu unless they explicitly mention having a gateway):
 
 | 选项 | 默认模型 | 适合谁 | 是否需要 API Key | 钱 / 速度 |
 |---|---|---|---|---|
-| 1. **DeepSeek**（默认推荐 / 极便宜） | `deepseek-chat`（V3 系列） | 想几毛钱体验完整功能、不想自建 | ✅ 需要 | ¥0.001 / 千 token，几乎免费 |
+| 1. **DeepSeek**（默认推荐 / 极便宜） | `deepseek-v4-flash`（可选 `deepseek-v4-pro`;旧 `deepseek-chat`/`deepseek-reasoner` 将于 2026/07/24 弃用） | 想几毛钱体验完整功能、不想自建 | ✅ 需要 | ¥0.001 / 千 token，几乎免费 |
 | 2. **OpenAI 官方** | `gpt-4o-mini` | 已有 sk- 开头的 Key | ✅ 需要 | 按 token 计费 |
 | 3. **Gemini** | `gemini-2.0-flash-exp` | Google AI Studio 申请 Key | ✅ 需要 | 免费档每天 1500 次 |
 | 4. **Claude** | `claude-sonnet-4-5` | Anthropic console | ✅ 需要 | 按 token,质量高 |

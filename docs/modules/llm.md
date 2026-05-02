@@ -137,7 +137,8 @@ model = "gemini-2.5-flash"
 
 [llm.deepseek]
 api_key = ""
-model = "deepseek-chat"
+# 默认 deepseek-v4-flash;可选 deepseek-v4-pro;旧 deepseek-chat / deepseek-reasoner 将于 2026/07/24 弃用
+model = "deepseek-v4-flash"
 base_url = "https://api.deepseek.com"
 
 [llm.ollama]

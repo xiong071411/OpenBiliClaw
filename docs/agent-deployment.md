@@ -95,7 +95,7 @@ python3 scripts/agent_bootstrap.py \
 | `--embedding-model NAME` | （v0.3.5+）embedding 模型名（典型: `bge-m3`、`text-embedding-3-small`）。 |
 | `--embedding-base-url URL` | （v0.3.5+）自托管 embedding 网关的 base_url，会写到对应 `[llm.<provider>]` 段。 |
 | `--embedding-api-key KEY` | （v0.3.5+）自托管 embedding 网关的 API Key。 |
-| `--module-override MODULE=PROVIDER:MODEL` | （v0.3.5+，可重复）per-module LLM 覆盖。MODULE ∈ {soul, discovery, recommendation, evaluation}。例：`--module-override discovery=deepseek:deepseek-chat`。 |
+| `--module-override MODULE=PROVIDER:MODEL` | （v0.3.5+，可重复）per-module LLM 覆盖。MODULE ∈ {soul, discovery, recommendation, evaluation}。例：`--module-override discovery=deepseek:deepseek-v4-flash`。 |
 | `--bilibili-cookie VALUE` | 直接写入 Bilibili Cookie，同时落盘到 `data/bilibili_cookie.json`。 |
 | `--skip-start` | 只准备配置和依赖，不启动服务。 |
 | `--skip-init` | （v0.3.7 起默认 **不要加**）凭据齐全 + 后端健康后，bootstrap 会自动跑 `openbiliclaw init`。只有当用户显式说「先别跑 init」或你只是给已经初始化过的实例补凭据时才加这个 flag。 |

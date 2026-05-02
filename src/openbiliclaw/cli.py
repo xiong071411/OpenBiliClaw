@@ -645,7 +645,7 @@ _PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
     "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
     "claude": {"base_url": "", "model": "claude-sonnet-4-5-20250929"},
     "gemini": {"base_url": "", "model": "gemini-2.0-flash-exp"},
-    "deepseek": {"base_url": "https://api.deepseek.com", "model": "deepseek-chat"},
+    "deepseek": {"base_url": "https://api.deepseek.com", "model": "deepseek-v4-flash"},
     "ollama": {"base_url": "http://localhost:11434/v1", "model": "llama3"},
     "openrouter": {"base_url": "https://openrouter.ai/api/v1", "model": "openai/gpt-4o-mini"},
 }
@@ -658,6 +658,22 @@ _PROVIDER_HINTS: dict[str, str] = {
     "deepseek": "DeepSeek 官方（OpenAI 兼容协议）",
     "ollama": "本地 Ollama（无需 Key）",
     "openrouter": "OpenRouter 聚合",
+}
+
+
+# One-liner shown right before the model prompt so the user knows
+# what's actually on offer, instead of confirming an opaque string.
+# Lists current main-line model names per provider — refresh when
+# a provider deprecates / renames a model.
+_PROVIDER_MODEL_HINT: dict[str, str] = {
+    "deepseek": (
+        "可选模型: deepseek-v4-flash (默认 / 便宜) / deepseek-v4-pro (更强)。"
+        "旧名 deepseek-chat / deepseek-reasoner 将于 2026/07/24 弃用"
+    ),
+    "openai": "可选模型: gpt-4o-mini (默认 / 便宜) / gpt-4o / gpt-4-turbo",
+    "gemini": "可选模型: gemini-2.0-flash-exp (默认) / gemini-2.5-flash / gemini-2.5-pro",
+    "claude": "可选模型: claude-sonnet-4-5 (默认) / claude-3-5-sonnet / claude-3-haiku",
+    "openrouter": "默认 openai/gpt-4o-mini。OpenRouter 模型名格式: <vendor>/<model>",
 }
 
 
@@ -928,7 +944,7 @@ _LLM_MENU: tuple[tuple[str, str, str], ...] = (
     (
         "deepseek",
         "DeepSeek 官方 ★默认推荐",
-        "默认模型 deepseek-chat（V3 系列）。¥0.001/千 token 几乎免费，国内可直连",
+        "默认模型 deepseek-v4-flash。¥0.001/千 token 几乎免费，国内可直连",
     ),
     ("openai", "OpenAI 官方", "默认模型 gpt-4o-mini。api.openai.com，需要 sk- 开头的 Key"),
     (
@@ -1080,9 +1096,16 @@ def _prompt_provider_triplet(menu_choice: str) -> tuple[str, str, str, str]:
         default="",
         show_default=False,
     ).strip()
+    # Surface the per-provider model menu before asking, so the user
+    # consciously confirms the default rather than just hitting Enter
+    # on an opaque string. Particularly important for DeepSeek where
+    # deepseek-chat / deepseek-reasoner are deprecating 2026-07-24.
+    model_hint = _PROVIDER_MODEL_HINT.get(provider)
+    if model_hint:
+        console.print(f"[dim]  {model_hint}[/dim]")
     model = (
         typer.prompt(
-            "模型名（默认即可，按回车跳过）",
+            "模型名（直接回车 = 用默认）",
             default=default_model,
             show_default=bool(default_model),
         ).strip()

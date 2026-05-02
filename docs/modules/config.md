@@ -59,7 +59,7 @@ cp config.example.toml config.toml
 | 键 | 类型 | 默认值 | 说明 |
 |----|------|--------|------|
 | `api_key` | string | `""` | DeepSeek API Key |
-| `model` | string | `"deepseek-chat"` | 模型名称 |
+| `model` | string | `"deepseek-v4-flash"` | 模型名称（可选 `deepseek-v4-pro`；旧 `deepseek-chat` / `deepseek-reasoner` 将于 2026/07/24 弃用） |
 | `base_url` | string | `"https://api.deepseek.com"` | API 地址 |
 
 ### `[llm.ollama]`
@@ -149,19 +149,19 @@ model    = "claude-sonnet-4-5-20250929"
 
 [llm.discovery]
 provider = "deepseek"
-model    = "deepseek-chat"
+model    = "deepseek-v4-flash"
 
 [llm.evaluation]
 provider = "deepseek"
-model    = "deepseek-chat"
+model    = "deepseek-v4-flash"
 ```
 
 > 通过 `agent_bootstrap.py` 的命令行写入：
 > ```bash
 > python3 scripts/agent_bootstrap.py \
 >   --module-override soul=claude:claude-sonnet-4-5-20250929 \
->   --module-override discovery=deepseek:deepseek-chat \
->   --module-override evaluation=deepseek:deepseek-chat
+>   --module-override discovery=deepseek:deepseek-v4-flash \
+>   --module-override evaluation=deepseek:deepseek-v4-flash
 > ```
 
 ### `[bilibili]`

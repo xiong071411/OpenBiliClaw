@@ -23,14 +23,15 @@ from __future__ import annotations
 # (input_rate, output_rate) — CNY per 1,000 tokens.
 PRICING: dict[str, dict[str, tuple[float, float]]] = {
     "deepseek": {
-        # The deepseek-chat (V3) and deepseek-reasoner (R1) lines are
-        # the current published series. ``deepseek-v4-flash`` is the
-        # config-default in this project; tracked under the V4-flash
-        # rate row so users running the default get reasonable
-        # estimates even if the model name isn't in DeepSeek's public
-        # pricing table at any given moment.
-        "deepseek-chat": (0.0007, 0.0014),
+        # ``deepseek-v4-flash`` is the project default and the current
+        # main-line model. ``deepseek-v4-pro`` is the higher-tier V4
+        # variant. The legacy V3 ``deepseek-chat`` and R1
+        # ``deepseek-reasoner`` rows stay so existing configs keep
+        # producing accurate estimates until those models reach the
+        # 2026/07/24 deprecation date.
         "deepseek-v4-flash": (0.001, 0.002),
+        "deepseek-v4-pro": (0.004, 0.012),
+        "deepseek-chat": (0.0007, 0.0014),
         "deepseek-reasoner": (0.004, 0.016),
         "default": (0.001, 0.002),
     },

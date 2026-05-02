@@ -199,7 +199,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Per-module LLM override. Repeatable. MODULE ∈ {soul, "
             "discovery, recommendation, evaluation}. Example: "
-            "--module-override discovery=deepseek:deepseek-chat"
+            "--module-override discovery=deepseek:deepseek-v4-flash"
         ),
     )
     parser.add_argument(

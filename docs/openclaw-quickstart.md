@@ -69,7 +69,7 @@ docker exec -it openbiliclaw-backend openbiliclaw init
 `init` 是 v0.3.27+ 的交互式向导，自动检测 `config.toml` 缺哪些字段并按需补齐。每一步都有"不确定就回 1"的默认值：
 
 1. **Phase 1 — LLM 服务选择（7 项菜单，"不确定就回 1"）**：菜单实际显示 7 项,每项都标注了默认模型:
-   - **1) DeepSeek 官方 ★默认推荐** —— 默认 `deepseek-chat`（V3 系列）/ ¥0.001/千 token / 国内可直连
+   - **1) DeepSeek 官方 ★默认推荐** —— 默认 `deepseek-v4-flash`（旧 `deepseek-chat` / `deepseek-reasoner` 将于 2026/07/24 弃用,可选 `deepseek-v4-pro`）/ ¥0.001/千 token / 国内可直连
    - **2) OpenAI 官方** —— 默认 `gpt-4o-mini` / 需 sk- Key
    - **3) Gemini 官方** —— 默认 `gemini-2.0-flash-exp` / 免费档每天 1500 次
    - **4) Claude 官方** —— 默认 `claude-sonnet-4-5` / 按 token 付费,质量高
