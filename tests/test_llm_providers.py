@@ -280,6 +280,27 @@ def test_deepseek_provider_defaults() -> None:
     assert provider.name == "deepseek"
 
 
+@pytest.mark.asyncio
+async def test_deepseek_provider_retries_empty_response_once_without_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = DeepSeekProvider(api_key="test-key")
+    calls = {"count": 0}
+
+    async def fake_create(**_: object) -> SimpleNamespace:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return _openai_response("")
+        return _openai_response("retry-ok")
+
+    monkeypatch.setattr(provider._client.chat.completions, "create", fake_create)
+
+    response = await provider.complete([{"role": "user", "content": "hi"}])
+
+    assert response.content == "retry-ok"
+    assert calls["count"] == 2
+
+
 def test_openai_provider_disables_sdk_retries() -> None:
     provider = OpenAIProvider(api_key="test-key")
 

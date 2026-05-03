@@ -167,6 +167,11 @@ class RecommendationEngine:
         # by serve()'s _merge_topic_supergroups for instant lookup.
         # Keys/values are normalised (stripped+lowered).
         self._supergroup_canonical_map: dict[str, str] = {}
+        # v0.3.31+: track the previous served batch's bvids so the
+        # debug-summary log can compute carryover (how many items in
+        # the new batch were also in the previous batch). High
+        # carryover signals stale-pool / fatigue-bypass.
+        self._last_served_bvids: frozenset[str] = frozenset()
 
     async def serve(
         self,
@@ -207,10 +212,14 @@ class RecommendationEngine:
         await self._merge_topic_supergroups(candidates)
 
         label = "realtime" if expression_mode == "realtime" else "pool"
+        prev_bvids = self._last_served_bvids
         logger.info(
             "Recommendation candidate summary (serve/%s): %s",
             label,
-            json.dumps(self._build_debug_summary(candidates), ensure_ascii=False),
+            json.dumps(
+                self._build_debug_summary(candidates, prev_bvids=prev_bvids),
+                ensure_ascii=False,
+            ),
         )
 
         score_override: dict[str, float] | None = None
@@ -226,8 +235,15 @@ class RecommendationEngine:
         logger.info(
             "Recommendation picked summary (serve/%s): %s",
             label,
-            json.dumps(self._build_debug_summary(ranked), ensure_ascii=False),
+            json.dumps(
+                self._build_debug_summary(ranked, prev_bvids=prev_bvids),
+                ensure_ascii=False,
+            ),
         )
+        # Snapshot for the next call. Use bvid only — title might
+        # legitimately repeat across different bvids and we want the
+        # carryover signal to be at the canonical-id level.
+        self._last_served_bvids = frozenset(item.bvid for item in ranked if item.bvid)
 
         recommendations: list[Recommendation] = []
         for item in ranked:
@@ -1630,12 +1646,40 @@ class RecommendationEngine:
     def _build_debug_summary(
         cls,
         candidates: list[DiscoveredContent],
+        *,
+        prev_bvids: frozenset[str] | None = None,
     ) -> dict[str, object]:
+        """Build a content-diversity-focused debug payload for one batch.
+
+        v0.3.31+: enriched to surface what really matters for "is this
+        batch diverse" diagnosis:
+
+        - ``unique_topics`` / ``unique_franchises``: total distinct
+          values, not just top-5. The previous summary's top-5 hid
+          tail diversity.
+        - ``top_topic_share`` / ``top_style_share`` /
+          ``top_franchise_share``: dominance ratio (max-bucket-count /
+          total). >0.4 on any of these = "this batch's content is
+          concentrated", <0.2 = "well-spread".
+        - ``carryover_from_prev``: how many items in this batch also
+          showed in the previous batch (when ``prev_bvids`` is given).
+          Tells you if the recommender keeps re-serving the same content.
+        - ``unique_titles_ratio``: distinct titles / count. <1.0 means
+          the same title appears multiple times in one batch (data quality
+          issue; same content cross-source).
+        """
+        n = len(candidates)
+        if n == 0:
+            return {"count": 0}
+
         style_counts = Counter(cls._style_token(item) or "unknown" for item in candidates)
         source_counts = Counter(
             cls._normalize_topic_token(item.source_strategy) or "unknown" for item in candidates
         )
         platform_counts = Counter(cls._platform_token(item) for item in candidates)
+
+        # Topic group counts via the same canonicalization the diversifier
+        # uses, so this summary reflects what the diversifier sees.
         topic_counts: Counter[str] = Counter()
         for item in candidates:
             tokens = cls._diversity_tokens(item)
@@ -1643,11 +1687,45 @@ class RecommendationEngine:
                 topic_counts["unknown"] += 1
                 continue
             topic_counts[sorted(tokens)[0]] += 1
+
+        # Franchise key — exclude empty (non-IP-bearing content). This
+        # is OUR guard against "5 different 原神 angle videos in one
+        # batch" (same franchise, different topic_group).
+        franchise_counts: Counter[str] = Counter(
+            (getattr(item, "franchise_key", "") or "").strip().lower()
+            for item in candidates
+        )
+        del franchise_counts[""]  # don't count non-franchise content
+
+        # Carryover with previous batch — biggest "stale recommendations"
+        # signal users complain about. Stored on the engine across calls.
+        carryover = 0
+        if prev_bvids is not None:
+            carryover = sum(1 for item in candidates if item.bvid in prev_bvids)
+
+        unique_titles = len({item.title.strip() for item in candidates if item.title})
+
+        def _share(counts: Counter[str]) -> float:
+            if not counts:
+                return 0.0
+            return round(counts.most_common(1)[0][1] / n, 3)
+
         return {
-            "count": len(candidates),
+            "count": n,
             "platforms": dict(platform_counts.most_common()),
             "styles": dict(style_counts.most_common(5)),
             "sources": dict(source_counts.most_common(5)),
             "topics": dict(topic_counts.most_common(5)),
+            # New v0.3.31 content-diversity fields
+            "unique_topics": len(topic_counts),
+            "unique_franchises": len(franchise_counts),
+            "top_topic_share": _share(topic_counts),
+            "top_style_share": _share(style_counts),
+            "top_franchise_share": _share(franchise_counts),
+            "top_franchise": (
+                franchise_counts.most_common(1)[0][0] if franchise_counts else ""
+            ),
+            "carryover_from_prev": carryover,
+            "unique_titles_ratio": round(unique_titles / n, 3),
             "sample_titles": [item.title for item in candidates[:5]],
         }

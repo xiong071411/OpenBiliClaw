@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 _LOCK_RETRY_ATTEMPTS = 5
 _LOCK_RETRY_SLEEP_SECONDS = 0.1
 _BVID_PATTERN = re.compile(r"(BV[0-9A-Za-z]+)")
+_XHS_SOURCE_FAMILY = "xiaohongshu"
+_XHS_SOURCE_PREFIXES = ("xhs-", "xhs_", "xiaohongshu")
 _EXPLORE_HIGH_RISK_CLUSTERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "manufacturing",
@@ -123,6 +125,29 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 CREATE INDEX IF NOT EXISTS idx_llm_usage_timestamp ON llm_usage(timestamp);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_provider ON llm_usage(provider, model);
 """
+
+
+def _pool_source_family(source: object, source_platform: object = "") -> str:
+    """Return the source family key used by pool share accounting."""
+    platform = str(source_platform or "").strip().lower()
+    raw_source = str(source or "").strip()
+    source_key = raw_source.lower()
+    if platform in {_XHS_SOURCE_FAMILY, "xhs"} or source_key.startswith(
+        _XHS_SOURCE_PREFIXES
+    ):
+        return _XHS_SOURCE_FAMILY
+    return raw_source or "unknown"
+
+
+def _is_linkable_pool_source(
+    source: object,
+    source_platform: object,
+    content_url: object,
+) -> bool:
+    """Return False for xhs rows that cannot be opened from recommendations."""
+    if _pool_source_family(source, source_platform) != _XHS_SOURCE_FAMILY:
+        return True
+    return "xsec_token=" in str(content_url or "")
 
 
 class Database:
@@ -849,7 +874,7 @@ class Database:
         """Return how many fresh candidates are immediately available for reshuffle."""
         cursor = self.conn.execute(
             """
-            SELECT bvid
+            SELECT bvid, source, source_platform, content_url
             FROM content_cache
             WHERE COALESCE(pool_status, 'fresh') = 'fresh'
               AND COALESCE(feedback_type, '') != 'dislike'
@@ -864,14 +889,20 @@ class Database:
         return sum(
             1
             for row in cursor.fetchall()
-            if str(row["bvid"]).strip() and str(row["bvid"]).strip() not in viewed_bvids
+            if str(row["bvid"]).strip()
+            and str(row["bvid"]).strip() not in viewed_bvids
+            and _is_linkable_pool_source(
+                row["source"],
+                row["source_platform"],
+                row["content_url"],
+            )
         )
 
     def count_pool_candidates_by_source(self) -> dict[str, int]:
-        """Return fresh pool counts grouped by discovery source."""
+        """Return fresh pool counts grouped by discovery source family."""
         cursor = self.conn.execute(
             """
-            SELECT bvid, source
+            SELECT bvid, source, source_platform, content_url
             FROM content_cache
             WHERE COALESCE(pool_status, 'fresh') = 'fresh'
               AND COALESCE(feedback_type, '') != 'dislike'
@@ -888,8 +919,14 @@ class Database:
             bvid = str(row["bvid"]).strip()
             if not bvid or bvid in viewed_bvids:
                 continue
-            source = str(row["source"] or "").strip() or "unknown"
-            counts[source] += 1
+            if not _is_linkable_pool_source(
+                row["source"],
+                row["source_platform"],
+                row["content_url"],
+            ):
+                continue
+            source_family = _pool_source_family(row["source"], row["source_platform"])
+            counts[source_family] += 1
         return dict(counts)
 
     def get_distinct_topic_groups(self) -> list[str]:
@@ -1025,6 +1062,11 @@ class Database:
         Items with empty ``topic_group`` are ignored. Within an over-cap
         group, the highest-scored / most-recently-scored items are kept;
         the rest get ``pool_status='suppressed'``.
+
+        v0.3.31+: emits an INFO log when something gets dropped, naming
+        the over-flowing groups + how many items each lost. Without this,
+        the function ran silently — operators couldn't tell whether the
+        diversity machinery was actually cutting anything or sleeping.
         """
         if max_per_group <= 0:
             return 0
@@ -1053,7 +1095,9 @@ class Database:
             grouped[group].append(row)
 
         overflow_bvids: list[str] = []
-        for items in grouped.values():
+        # v0.3.31+: track per-group drop counts for the INFO log
+        drops_per_group: dict[str, int] = {}
+        for group_name, items in grouped.items():
             if len(items) <= max_per_group:
                 continue
             ranked = sorted(
@@ -1064,8 +1108,10 @@ class Database:
                     str(row.get("bvid", "")),
                 ),
             )
+            losers = ranked[max_per_group:]
+            drops_per_group[group_name] = len(losers)
             overflow_bvids.extend(
-                str(row.get("bvid", "")).strip() for row in ranked[max_per_group:]
+                str(row.get("bvid", "")).strip() for row in losers
             )
 
         clean_bvids = [bvid for bvid in overflow_bvids if bvid]
@@ -1080,6 +1126,17 @@ class Database:
             WHERE bvid IN ({placeholders})
             """,
             clean_bvids,
+        )
+
+        # Top 10 most-trimmed groups so the log line stays readable
+        top = sorted(drops_per_group.items(), key=lambda kv: -kv[1])[:10]
+        logger.info(
+            "[diversity] trim_topic_group_overflow: cap=%d, dropped=%d items "
+            "across %d over-cap groups, top: %s",
+            max_per_group,
+            len(clean_bvids),
+            len(drops_per_group),
+            ", ".join(f"{g}:{c}" for g, c in top),
         )
         return len(clean_bvids)
 
@@ -1097,19 +1154,21 @@ class Database:
         recommendation side treats the pool as a queue, so consumed rows are
         never trimmed here.
 
-        When ``source_share_quotas`` is provided, the trim respects per-source
-        share targets: items from sources already at or above their quota
+        When ``source_share_quotas`` is provided, the trim respects per-source-family
+        share targets: items from source families already at or above their quota
         get suppressed *before* lower-scored items from under-quota sources.
         Without this, score-only trim systematically axes low-relevance
         sources (trending, explore) when high-relevance sources (search,
         related_chain) overflow — defeating the per-source diversity goal.
+        Xiaohongshu extension channels (task/search/explore/profile) are
+        collapsed under the single ``xiaohongshu`` family.
         """
         if target <= 0:
             return 0
 
         cursor = self.conn.execute(
             """
-            SELECT bvid, source, relevance_score, last_scored_at
+            SELECT bvid, source, source_platform, content_url, relevance_score, last_scored_at
             FROM content_cache
             WHERE COALESCE(pool_status, 'fresh') = 'fresh'
               AND COALESCE(feedback_type, '') != 'dislike'
@@ -1118,7 +1177,15 @@ class Database:
               )
             """
         )
-        rows = [dict(row) for row in cursor.fetchall()]
+        rows = [
+            dict(row)
+            for row in cursor.fetchall()
+            if _is_linkable_pool_source(
+                row["source"],
+                row["source_platform"],
+                row["content_url"],
+            )
+        ]
         if len(rows) <= target:
             return 0
 
@@ -1139,39 +1206,46 @@ class Database:
             #   negotiable_tracked: bottom (total-quota) items from over-quota
             #              tracked sources
             #   negotiable_untracked: items from sources without a declared
-            #              share (e.g. xhs) — eligible to be cut before
-            #              touching protected.
+            #              share — eligible to be cut before touching protected.
             # Order for the final keep walk: protected → negotiable_untracked
             # → negotiable_tracked.  This ensures trending (under quota) stays
             # 100% protected even when sum of in_quota > target due to
             # untracked sources eating slots.
             counts_per_source: dict[str, int] = defaultdict(int)
             for row in rows:
-                counts_per_source[str(row.get("source", "") or "")] += 1
+                source_family = _pool_source_family(
+                    row.get("source", ""),
+                    row.get("source_platform", ""),
+                )
+                counts_per_source[source_family] += 1
 
             protected: list[dict[str, Any]] = []
             negotiable_tracked: list[dict[str, Any]] = []
             negotiable_untracked: list[dict[str, Any]] = []
             seen: dict[str, int] = defaultdict(int)
             for row in ranked:
-                src = str(row.get("source", "") or "")
-                quota = source_share_quotas.get(src)
+                source_family = _pool_source_family(
+                    row.get("source", ""),
+                    row.get("source_platform", ""),
+                )
+                quota = source_share_quotas.get(source_family)
                 if quota is None:
                     negotiable_untracked.append(row)
                     continue
-                if counts_per_source[src] <= quota:
+                if counts_per_source[source_family] <= quota:
                     # entire source under quota — every item protected
                     protected.append(row)
                 else:
                     # over quota: top `quota` items protected, rest negotiable
-                    if seen[src] < quota:
+                    if seen[source_family] < quota:
                         protected.append(row)
-                        seen[src] += 1
+                        seen[source_family] += 1
                     else:
                         negotiable_tracked.append(row)
             ranked = protected + negotiable_untracked + negotiable_tracked
 
-        overflow_bvids = [str(row.get("bvid", "")).strip() for row in ranked[target:]]
+        overflow_rows = ranked[target:]
+        overflow_bvids = [str(row.get("bvid", "")).strip() for row in overflow_rows]
         clean_bvids = [bvid for bvid in overflow_bvids if bvid]
         if not clean_bvids:
             return 0
@@ -1185,7 +1259,110 @@ class Database:
             """,
             clean_bvids,
         )
+        # v0.3.31+: log per-source breakdown so operators see whether the
+        # quota guard is biting (e.g. "explore overflowing 80%" → fix the
+        # discovery cycle, not the recommender).
+        per_source: dict[str, int] = defaultdict(int)
+        for row in overflow_rows:
+            family = _pool_source_family(
+                row.get("source", ""),
+                row.get("source_platform", ""),
+            )
+            per_source[family] += 1
+        breakdown = ", ".join(
+            f"{src}:{cnt}"
+            for src, cnt in sorted(per_source.items(), key=lambda kv: -kv[1])
+        )
+        logger.info(
+            "[diversity] trim_pool_to_target_count: target=%d, before=%d, "
+            "suppressed=%d, by-source: %s",
+            target,
+            len(rows),
+            len(clean_bvids),
+            breakdown or "(none)",
+        )
         return len(clean_bvids)
+
+    def reactivate_under_quota_pool_sources(
+        self,
+        *,
+        target: int,
+        source_share_quotas: dict[str, int],
+    ) -> int:
+        """Move suppressed candidates back to fresh for under-quota source families.
+
+        This is a source-balance repair pass for pools that are already full but
+        uneven. It only reactivates rows that are otherwise eligible for the
+        recommendation pool; the caller should run ``trim_pool_to_target_count``
+        afterwards if the fresh pool rises above ``target``.
+        """
+        if target <= 0 or not source_share_quotas:
+            return 0
+
+        current_counts = self.count_pool_candidates_by_source()
+        deficits = {
+            source_family: min(target, max(0, int(quota)))
+            - int(current_counts.get(source_family, 0))
+            for source_family, quota in source_share_quotas.items()
+            if int(quota) > 0
+        }
+        deficits = {source: deficit for source, deficit in deficits.items() if deficit > 0}
+        if not deficits:
+            return 0
+
+        cursor = self.conn.execute(
+            """
+            SELECT bvid, source, source_platform, content_url, relevance_score, last_scored_at
+            FROM content_cache
+            WHERE COALESCE(pool_status, 'fresh') = 'suppressed'
+              AND COALESCE(feedback_type, '') != 'dislike'
+              AND NOT EXISTS (
+                SELECT 1 FROM recommendations AS r WHERE r.bvid = content_cache.bvid
+              )
+            ORDER BY
+                CASE candidate_tier WHEN 'primary' THEN 0 ELSE 1 END ASC,
+                relevance_score DESC,
+                last_scored_at DESC,
+                bvid ASC
+            """
+        )
+        viewed_bvids = self.get_recent_viewed_bvids()
+        selected_bvids: list[str] = []
+        selected_counts: dict[str, int] = defaultdict(int)
+        target_selection_count = sum(deficits.values())
+
+        for row in cursor.fetchall():
+            bvid = str(row["bvid"]).strip()
+            if not bvid or bvid in viewed_bvids:
+                continue
+            if not _is_linkable_pool_source(
+                row["source"],
+                row["source_platform"],
+                row["content_url"],
+            ):
+                continue
+            source_family = _pool_source_family(row["source"], row["source_platform"])
+            deficit = deficits.get(source_family, 0)
+            if deficit <= 0 or selected_counts[source_family] >= deficit:
+                continue
+            selected_bvids.append(bvid)
+            selected_counts[source_family] += 1
+            if len(selected_bvids) >= target_selection_count:
+                break
+
+        if not selected_bvids:
+            return 0
+
+        placeholders = ", ".join("?" for _ in selected_bvids)
+        self._execute_write(
+            f"""
+            UPDATE content_cache
+            SET pool_status = 'fresh'
+            WHERE bvid IN ({placeholders})
+            """,
+            selected_bvids,
+        )
+        return len(selected_bvids)
 
     @staticmethod
     def _balance_pool_rows(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:

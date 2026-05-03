@@ -269,7 +269,13 @@ class DeepSeekProvider(OpenAIProvider):
             )
         except LLMResponseError:
             if not effort:
-                raise
+                logger.warning("deepseek: empty content; retrying once")
+                return await super().complete(
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    json_mode=json_mode,
+                )
             # Max-effort reasoning occasionally burns through the entire
             # output budget before the model emits any ``content``. Retry
             # once with thinking disabled so structured pipelines get a

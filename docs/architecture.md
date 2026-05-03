@@ -37,7 +37,7 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - 自我编辑和遗忘机制
 
 ### Content Discovery (`discovery/`)
-- 多策略内容发现（search · trending · related_chain · explore），按 source 配额并行调度
+- 多策略内容发现（B 站 search · trending · related_chain · explore + 小红书 `xiaohongshu` 来源族），按 source-family 配额并行调度
 - 内容评估（基于用户 Soul，LLM 批量打分）
 - 候选分层、去重和缓存写入；写入时 `pool_status='suppressed'` 的旧候选在重新发现时自动复活成 `'fresh'`
 - v0.3.0+ 多样性栈：trending 按 rid 交错 / explore 按 domain 交错 / `_compress_topic_repeats` 单次压缩 / `trim_topic_group_overflow` 跨源跨轮配额（任意 topic_group ≤ 池子 10%）/ deficit-source 合并 + 并行 fan-out
@@ -60,8 +60,8 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 
 ### Runtime (`runtime/`)
 - 系统生命周期管理和服务编排
-- `ContinuousRefreshController` — 后台定时刷新候选池；按 source 配额评估 deficit，多源缺货合并到一次 discover() 并行 fan-out
-- `_enforce_pool_cap` 每 tick 跑 `trim_topic_group_overflow` + 必要时按 share quotas 修剪过额源
+- `ContinuousRefreshController` — 后台定时刷新候选池；按 source-family 配额评估 deficit，B 站缺货合并到一次 discover() 并行 fan-out，小红书缺口交给 xhs producer / 扩展任务链
+- `_enforce_pool_cap` 每 tick 跑 `trim_topic_group_overflow` + under-quota suppressed 候选复活 + 必要时按 share quotas 修剪过额源
 - `AccountSyncService` — 历史记录、收藏夹、关注列表同步
 - `runtime-stream` — 浏览器扩展 background 以 `client=background` 连接后，若后端本地没有 B 站 Cookie，会先推送 `bilibili_cookie_sync_requested`，扩展立即通过 `/api/bilibili/cookie` 回传当前浏览器 Cookie；后续推荐、惊喜和画像更新仍复用同一条 WebSocket 事件流
 

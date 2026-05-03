@@ -454,7 +454,7 @@ discovery 不是“把整个找片过程都交给 LLM”。当前实现里，LLM
 | M119 style_key 风格标注 | ✅ | discovery 入池时会按标题/描述轻规则补 `style_key`，为推荐层的风格多样性约束提供稳定信号 |
 | M120 候选池来源交错取样 | ✅ | `get_pool_candidates()` 现在会按 `search / trending / related_chain / explore` 交错取样，避免候选窗口被单一来源刷满 |
 | M122 来源优先补齐与风格误判修正 | ✅ | 池子压缩时会优先保留不同 `source` 的候选，再限制重复 `style`；同时补强 `style_key` 规则，减少硬内容误判成 `light_chat` |
-| M123 按来源缺口补池子 | ✅ | runtime 在补货时会先统计池子里的 `search / related_chain / trending / explore` 余量，再优先补足缺口最大的来源，不再让 `explore` 长期淹没其它来源 |
+| M123 按来源缺口补池子 | ✅ | runtime 在补货时会先统计池子里的来源族余量；B 站 `search / related_chain / trending / explore` 缺口会合并到一次 discover()，不再让 `explore` 长期淹没其它来源 |
 | M126 explore 高风险子簇压缩 | ✅ | refresh 结束后会温和压一轮 `explore` 内部的高风险相邻簇，例如制造 / 工艺 / 材料、博弈 / 桌游 / 机制，避免单簇继续堆满 fresh pool |
 | v0.3.0 trending 按 rid 交错 | ✅ | `TrendingStrategy` 拉 5 个分区排行榜后做 round-robin 交错再送 LLM 评估，避免下游 30 条 hard-cap 把 rid=0/36 的顶部全吃掉 |
 | v0.3.0 explore 按 domain 交错 | ✅ | `ExploreStrategy` 同模式：按 `domain_label` round-robin 后再送评估 |
@@ -464,6 +464,7 @@ discovery 不是“把整个找片过程都交给 LLM”。当前实现里，LLM
 | v0.3.0 suppressed 重发现复活 | ✅ | `cache_content` UPSERT 时把 `pool_status='suppressed'` 自动复位为 `'fresh'`；slow-churning 源（trending）从此不再被旧 trim 决定终生淘汰 |
 | v0.3.0 trending share 重定 | ✅ | `_SOURCE_TARGET_SHARES` 把 trending 从 3 调到 1（target ≈ 46，匹配实际稳态 30-45）；不再每分钟无效触发单 source 轮次 |
 | v0.3.1 trim_topic_group 每 tick 触发 | ✅ | 修复"trim 只在 discover 之后跑"的盲点：`_enforce_pool_cap` 路径上每 tick 都调一次，避免 pool 满 cap 时 topic 配额永远不收敛 |
+| v0.3.31 小红书来源族均衡 | ✅ | `_SOURCE_TARGET_SHARES` 增加 `xiaohongshu`；`xhs-extension-task/search/profile` 等 raw source 归并为一个来源族参与配额，满池时会从 suppressed 高分小红书候选中复活 under-quota 库存，再按统一 cap trim 让出空间 |
 | SearchStrategy LLM 评估 | ✅ | `SearchStrategy` 现在默认走 `evaluate_content()` LLM 打分（`llm_evaluation=True`），不再只用本地启发式（上限 0.62），可通过 `llm_evaluation=False` 关闭 |
 | 策略中间产物捕获 | ✅ | 4 个策略均支持 `last_intermediates` 属性，运行后可查看生成的搜索词、选择的分区、种子列表、探索域等中间产物 |
 | Discovery 评估框架 | ✅ | `DiscoveryEvaluator` 支持 7 维质量评估（relevance / diversity / specificity / query_quality / explanation_quality / novelty / no_echo_chamber），含自动和人工两种模式 |
@@ -513,6 +514,36 @@ assert 0.0 <= score <= 1.0
 - 引擎关心“这些结果如何合并成一个可消费的候选池”
 
 因此真正影响推荐体验稳定性的，往往不是单个策略够不够聪明，而是引擎层的并发、去重、压缩和补货逻辑是否可靠。
+
+### Runtime pool source balance
+
+```python
+source_targets = controller._source_target_counts()
+# pool_target=600 时约为：
+# {
+#     "search": 141,
+#     "related_chain": 141,
+#     "trending": 35,
+#     "explore": 141,
+#     "xiaohongshu": 142,
+# }
+
+database.reactivate_under_quota_pool_sources(
+    target=600,
+    source_share_quotas=source_targets,
+)
+database.trim_pool_to_target_count(
+    target=600,
+    source_share_quotas=source_targets,
+)
+```
+
+行为说明：
+
+- 配额单位是“来源族”，不是 raw `content_cache.source`。小红书的 `xhs-extension-task`、`xhs-extension-search`、`xhs-extension-profile` 会统一计入 `xiaohongshu`。
+- B 站缺口仍由 `ContentDiscoveryEngine.discover()` 的四个策略补齐；小红书缺口由 `XhsTaskProducer` / 浏览器插件任务链补齐。
+- 如果池子已满但 `xiaohongshu` 低于配额，`reactivate_under_quota_pool_sources()` 会优先从 `pool_status='suppressed'` 且可打开的高分小红书候选中复活一批，再由 `trim_pool_to_target_count()` 按同一份配额压掉过量来源。
+- 小红书候选必须带可打开的 `xsec_token` URL 才计入可用池子；裸 URL 仍不会参与候选池计数或复活。
 
 ### SearchStrategy
 
@@ -870,7 +901,7 @@ for each epoch:
 13. **候选窗口本身也要按来源打散**：如果 `get_pool_candidates()` 的前 30 条几乎全是 `explore`，下游再怎么多样化都很难救；因此 discovery pool 读取阶段也会做来源交错取样
 14. **来源补齐优先级高于风格上限**：在 discovery 压缩时，新的 `search / trending / related_chain` 候选应优先获得一个坑位，不能先被重复的 `style_key` 卡死
 15. **`style_key` 规则宁可偏粗，也不能把硬内容全掉进 `light_chat`**：芯片、显微镜、理论、哲学这类更适合 `deep_dive`；全过程、制造过程、工艺难度更适合 `story_doc`
-16. **补货要看来源缺口，不只看池子总量**：如果池子总数够了但 `trending` 一直接近 0、`explore` 却超标，体感仍会单一；runtime refresh 现在会优先补足来源缺口，再追总量
+16. **补货要看来源缺口，不只看池子总量**：如果池子总数够了但 `trending` 或 `xiaohongshu` 一直接近 0、`explore` 却超标，体感仍会单一；runtime refresh 现在按来源族配额评估缺口，B 站策略只补 B 站缺口，小红书缺口交给 xhs producer / 扩展任务链
 17. **`explore` 也要控内部子簇，不只控总量**：即使 `explore` 总数没超标，制造 / 工艺 / 材料、博弈 / 桌游 / 机制这类相邻方向也可能在内部堆成一大簇；refresh 现在会把过量部分温和压到非 `fresh`，避免”可换窗口只剩一个味”
 18. **四个策略统一走 LLM 评估**：`SearchStrategy` 不再只用本地启发式打分，默认也走 `evaluate_content()`；这让评估系统可以统一优化 `content_evaluation_prompt` 对全部策略生效
 19. **策略暴露中间产物**：每个策略的 `last_intermediates` 让评估系统能独立评估搜索词质量、分区选择、种子选择和探索方向，而不只是看最终结果列表

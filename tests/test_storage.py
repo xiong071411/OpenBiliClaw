@@ -385,7 +385,8 @@ class TestDatabase:
             # Search lost the bottom 2 (suppressed), kept top 3: 2 within quota
             # + 1 backfill from over-quota since target=6 had remaining slot.
             search_fresh = [
-                bvid for bvid in (f"BVS{i}" for i in range(5))
+                bvid
+                for bvid in (f"BVS{i}" for i in range(5))
                 if by_bvid[bvid]["pool_status"] == "fresh"
             ]
             assert len(search_fresh) == 3
@@ -431,7 +432,7 @@ class TestDatabase:
     def test_trim_pool_protects_under_quota_source_when_untracked_sources_present(
         self,
     ) -> None:
-        """The bug this prevents: untracked sources (e.g. xhs) eat pool slots,
+        """The bug this prevents: untracked sources eat pool slots,
         pushing total > target. The trim must suppress untracked items before
         cutting under-quota tracked sources (trending). Without this guard,
         sum(in_quota) > target leads to score-based cuts that hit trending
@@ -440,11 +441,12 @@ class TestDatabase:
             db = Database(Path(tmpdir) / "test.db")
             db.initialize()
 
-            # search at quota (5/5), trending under quota (2 of 4), xhs (4 untracked).
+            # search at quota (5/5), trending under quota (2 of 4), manual import
+            # (4 untracked).
             # Total = 11, target = 8, so 3 must go.
             # Bug-prone behavior: trending scores are 0.5 (low), so naïve
             # trim would axe both trending items.
-            # Correct behavior: untracked xhs items get cut first.
+            # Correct behavior: untracked manual-import items get cut first.
             for i in range(5):
                 db.cache_content(
                     f"BVS{i}",
@@ -463,10 +465,10 @@ class TestDatabase:
                 )
             for i in range(4):
                 db.cache_content(
-                    f"BVX{i}",
+                    f"BVM{i}",
                     title=f"X{i}",
                     up_name="UP",
-                    source="xhs-extension-task",
+                    source="manual-import",
                     relevance_score=0.70,
                 )
 
@@ -482,11 +484,164 @@ class TestDatabase:
             assert all(by_bvid[f"BVT{i}"]["pool_status"] == "fresh" for i in range(2))
             # Search fully protected (at quota, no over-quota items)
             assert all(by_bvid[f"BVS{i}"]["pool_status"] == "fresh" for i in range(5))
-            # 3 of the 4 xhs items suppressed (lowest score among negotiable)
-            xhs_fresh = sum(
-                1 for i in range(4) if by_bvid[f"BVX{i}"]["pool_status"] == "fresh"
+            # 3 of the 4 manual-import items suppressed (lowest score among negotiable)
+            manual_fresh = sum(1 for i in range(4) if by_bvid[f"BVM{i}"]["pool_status"] == "fresh")
+            assert manual_fresh == 1
+            db.close()
+
+    def test_count_pool_candidates_by_source_collapses_xhs_source_family(self) -> None:
+        """Xiaohongshu extension channels count as one source family.
+
+        The refresh controller consumes this summary to decide which Bilibili
+        strategies are deficient. If raw xhs-extension-* names leak through,
+        xhs content is invisible to the source-balance accounting.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            db.cache_content("BVSOURCE", title="S", up_name="UP", source="search")
+            db.cache_content(
+                "XHS-TASK-1",
+                title="X1",
+                up_name="XHS",
+                source="xhs-extension-task",
+                source_platform="xiaohongshu",
+                content_url=("https://www.xiaohongshu.com/explore/XHS-TASK-1?xsec_token=ABC="),
             )
-            assert xhs_fresh == 1
+            db.cache_content(
+                "XHS-SEARCH-1",
+                title="X2",
+                up_name="XHS",
+                source="xhs-extension-search",
+                source_platform="xiaohongshu",
+                content_url=("https://www.xiaohongshu.com/explore/XHS-SEARCH-1?xsec_token=ABC="),
+            )
+            db.cache_content(
+                "XHS-LEGACY-1",
+                title="X3",
+                up_name="XHS",
+                source="xhs-extension-profile",
+                content_url=("https://www.xiaohongshu.com/explore/XHS-LEGACY-1?xsec_token=ABC="),
+            )
+
+            counts = db.count_pool_candidates_by_source()
+
+            assert counts == {"search": 1, "xiaohongshu": 3}
+            db.close()
+
+    def test_trim_pool_share_quotas_protect_xhs_source_family(self) -> None:
+        """Xiaohongshu rows are protected by the xiaohongshu quota.
+
+        Raw xhs-extension-* sources must not be treated as generic untracked
+        items; otherwise a high-scored unknown source can crowd xhs out even
+        when the xiaohongshu source family is under its quota.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            for i in range(3):
+                db.cache_content(
+                    f"BVS{i}",
+                    title=f"S{i}",
+                    up_name="UP",
+                    source="search",
+                    relevance_score=0.95,
+                )
+            for i in range(3):
+                db.cache_content(
+                    f"BVMANUAL{i}",
+                    title=f"M{i}",
+                    up_name="UP",
+                    source="manual-import",
+                    relevance_score=0.90,
+                )
+            for i, source in enumerate(
+                ("xhs-extension-task", "xhs-extension-search", "xhs-extension-profile")
+            ):
+                db.cache_content(
+                    f"XHS-QUOTA-{i}",
+                    title=f"X{i}",
+                    up_name="XHS",
+                    source=source,
+                    source_platform="xiaohongshu",
+                    content_url=(
+                        f"https://www.xiaohongshu.com/explore/XHS-QUOTA-{i}?xsec_token=ABC="
+                    ),
+                    relevance_score=0.50,
+                )
+
+            suppressed = db.trim_pool_to_target_count(
+                target=6,
+                source_share_quotas={"search": 3, "xiaohongshu": 3},
+            )
+
+            assert suppressed == 3
+            rows = db.get_cached_content(limit=20)
+            by_bvid = {row["bvid"]: row for row in rows}
+            assert all(by_bvid[f"XHS-QUOTA-{i}"]["pool_status"] == "fresh" for i in range(3))
+            assert all(by_bvid[f"BVMANUAL{i}"]["pool_status"] == "suppressed" for i in range(3))
+            db.close()
+
+    def test_reactivate_under_quota_pool_sources_restores_suppressed_xhs_family(
+        self,
+    ) -> None:
+        """A full Bilibili pool can make room for existing suppressed xhs rows.
+
+        This covers the production shape where xhs rows were previously
+        suppressed while raw xhs-extension-* sources were invisible to source
+        quotas. Once xiaohongshu has its own family quota, high-scored
+        suppressed rows should be allowed back into the fresh pool and then
+        normal cap trimming removes over-quota sources.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            for i in range(6):
+                db.cache_content(
+                    f"BVSRC{i}",
+                    title=f"S{i}",
+                    up_name="UP",
+                    source="search",
+                    relevance_score=0.95,
+                )
+            for i in range(3):
+                note_id = f"xhs-reactivate-{i}"
+                db.cache_content(
+                    note_id,
+                    title=f"X{i}",
+                    up_name="XHS",
+                    source="xhs-extension-task",
+                    source_platform="xiaohongshu",
+                    content_url=(f"https://www.xiaohongshu.com/explore/{note_id}?xsec_token=ABC="),
+                    relevance_score=0.80,
+                )
+                db._execute_write(
+                    "UPDATE content_cache SET pool_status = 'suppressed' WHERE bvid = ?",
+                    (note_id,),
+                )
+
+            reactivated = db.reactivate_under_quota_pool_sources(
+                target=6,
+                source_share_quotas={"search": 3, "xiaohongshu": 3},
+            )
+            suppressed = db.trim_pool_to_target_count(
+                target=6,
+                source_share_quotas={"search": 3, "xiaohongshu": 3},
+            )
+
+            assert reactivated == 3
+            assert suppressed == 3
+            rows = db.get_cached_content(limit=20)
+            by_bvid = {row["bvid"]: row for row in rows}
+            assert all(by_bvid[f"xhs-reactivate-{i}"]["pool_status"] == "fresh" for i in range(3))
+            search_fresh = sum(
+                1 for i in range(6) if by_bvid[f"BVSRC{i}"]["pool_status"] == "fresh"
+            )
+            assert search_fresh == 3
+            assert db.count_pool_candidates() == 6
             db.close()
 
     def test_purge_pool_by_disliked_topics_matches_topic_key_exact(self) -> None:

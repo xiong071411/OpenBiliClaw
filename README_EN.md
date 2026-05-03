@@ -317,7 +317,7 @@ Four Bilibili strategies work in coordination, each with independent API quota, 
 | **Related Chain** | Expands from seed videos along recommendation chains | Fair share |
 | **Explore** | LLM-driven cross-domain exploration | Fair share |
 
-Results go through multi-dimensional diversity selection: per-source reservation → topic deduplication → style balancing → ceiling caps, ensuring broad coverage in final recommendations.
+Results go through multi-dimensional diversity selection: source-family reservation (the four Bilibili strategies plus one unified `xiaohongshu` family) → topic deduplication → style balancing → ceiling caps, ensuring broad coverage in final recommendations.
 
 For first-run profiling, `openbiliclaw init` can also enqueue an XHS `bootstrap_profile` task. The extension opens Xiaohongshu in the user's logged-in browser session; explicit scrolling tasks open `/explore` in the foreground and click the page's own "Me" profile entry instead of directly jumping to the profile URL. It then parses rendered profile state / DOM for saved / liked notes, and only imports Xiaohongshu-page history when the site exposes an explicit history/footprint state. Explicit scrolling tasks return `partial` batches as new notes appear, then finish with a final result. The backend converts those notes into normal `favorite / like / view` events and still does not crawl or log into Xiaohongshu directly.
 

@@ -4,6 +4,7 @@ import asyncio
 from contextlib import suppress
 from datetime import datetime
 
+from openbiliclaw.recommendation.delight import DEFAULT_DELIGHT_THRESHOLD
 from openbiliclaw.runtime.refresh import ContinuousRefreshController
 
 
@@ -38,16 +39,20 @@ class _FakeDatabase:
         *,
         pool_count: int = 30,
         source_counts: dict[str, int] | None = None,
+        reactivate_pool_count: int = 0,
         delight_candidate: dict[str, object] | None = None,
         delight_count: int = 0,
     ) -> None:
         self.events = events
         self.pool_count = pool_count
         self.source_counts = source_counts or {}
+        self.reactivate_pool_count = reactivate_pool_count
         self.delight_candidate = delight_candidate
         self.delight_count = delight_count
         self.count_delight_thresholds: list[float] = []
         self.get_delight_thresholds: list[float] = []
+        self.trim_source_share_quotas: dict[str, int] | None = None
+        self.reactivate_source_share_quotas: dict[str, int] | None = None
         self.recommendations = [
             {"id": 1, "presented": 0},
             {"id": 2, "presented": 1},
@@ -88,12 +93,27 @@ class _FakeDatabase:
     def trim_topic_group_overflow(self, *, max_per_group: int) -> int:
         return 0
 
+    def reactivate_under_quota_pool_sources(
+        self,
+        *,
+        target: int,
+        source_share_quotas: dict[str, int],
+    ) -> int:
+        self.reactivate_source_share_quotas = dict(source_share_quotas)
+        reactivated = max(0, self.reactivate_pool_count)
+        self.pool_count += reactivated
+        self.reactivate_pool_count = 0
+        return reactivated
+
     def trim_pool_to_target_count(
         self,
         *,
         target: int,
         source_share_quotas: dict[str, int] | None = None,
     ) -> int:
+        self.trim_source_share_quotas = (
+            dict(source_share_quotas) if source_share_quotas is not None else None
+        )
         if self.pool_count <= target:
             return 0
         trimmed = self.pool_count - target
@@ -345,8 +365,8 @@ async def test_refresh_controller_uses_shared_delight_threshold_for_runtime_quer
 
     assert status["pending_delight_count"] == 2
     assert pending is not None
-    assert database.count_delight_thresholds == [0.70]
-    assert database.get_delight_thresholds == [0.70]
+    assert database.count_delight_thresholds == [DEFAULT_DELIGHT_THRESHOLD]
+    assert database.get_delight_thresholds == [DEFAULT_DELIGHT_THRESHOLD]
 
 
 async def test_refresh_controller_prepares_delight_candidates_without_refresh() -> None:
@@ -898,6 +918,82 @@ async def test_refresh_trims_pool_overflow_before_skipping() -> None:
 
     assert result["reason"] == "pool_at_cap"
     assert database.pool_count == 30  # trimmed back down to target
+
+
+def test_source_target_counts_include_xhs_family() -> None:
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=_FakeDatabase([], pool_count=600),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=600,
+    )
+
+    assert controller._source_target_counts() == {
+        "search": 141,
+        "related_chain": 141,
+        "trending": 35,
+        "explore": 141,
+        "xiaohongshu": 142,
+    }
+
+
+def test_source_replenishment_plan_leaves_xhs_deficit_to_xhs_producer() -> None:
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=_FakeDatabase(
+            [],
+            pool_count=458,
+            source_counts={
+                "search": 141,
+                "related_chain": 141,
+                "trending": 35,
+                "explore": 141,
+                "xiaohongshu": 0,
+            },
+        ),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=600,
+    )
+
+    assert controller._build_source_replenishment_plan() == []
+
+
+def test_pool_cap_trim_receives_xhs_family_quota() -> None:
+    database = _FakeDatabase([], pool_count=650)
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=database,
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=600,
+    )
+
+    assert controller._enforce_pool_cap() is True
+    assert database.trim_source_share_quotas is not None
+    assert database.trim_source_share_quotas["xiaohongshu"] == 142
+
+
+def test_pool_cap_reactivates_under_quota_sources_before_trim() -> None:
+    database = _FakeDatabase([], pool_count=600, reactivate_pool_count=20)
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=database,
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=600,
+    )
+
+    assert controller._enforce_pool_cap() is True
+    assert database.reactivate_source_share_quotas is not None
+    assert database.reactivate_source_share_quotas["xiaohongshu"] == 142
+    assert database.trim_source_share_quotas is not None
+    assert database.pool_count == 600
 
 
 async def test_run_refresh_plan_stops_midway_when_cap_hit() -> None:

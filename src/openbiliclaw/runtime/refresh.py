@@ -28,7 +28,13 @@ _SOURCE_TARGET_SHARES: tuple[tuple[str, int], ...] = (
     # reality.
     ("trending", 1),
     ("explore", 4),
+    # Xiaohongshu has multiple internal extension/task channels, but the
+    # runtime pool should treat them as one first-class source family.
+    # The xhs_producer owns replenishment; Bilibili discover() plans below
+    # only fill deficits for the four Bilibili strategies.
+    ("xiaohongshu", 4),
 )
+_BILIBILI_DISCOVERY_SOURCES = ("search", "related_chain", "trending", "explore")
 
 
 class SupportsRuntimeState(Protocol):
@@ -56,6 +62,12 @@ class SupportsEventDatabase(Protocol):
         *,
         target: int,
         source_share_quotas: dict[str, int] | None = None,
+    ) -> int: ...
+    def reactivate_under_quota_pool_sources(
+        self,
+        *,
+        target: int,
+        source_share_quotas: dict[str, int],
     ) -> int: ...
     def evict_stale_pool_items(self, *, max_age_days: int = 14) -> int: ...
     def get_notification_candidate(
@@ -227,8 +239,8 @@ class ContinuousRefreshController:
     async def force_refresh(self) -> dict[str, object]:
         """Run a full refresh immediately, bypassing runtime thresholds.
 
-        Runs all 4 strategies in a single discover() call so they execute
-        concurrently via asyncio.gather, maximizing pool diversity. The pool
+        Runs all 4 Bilibili strategies in a single discover() call so they
+        execute concurrently via asyncio.gather, maximizing pool diversity. The pool
         target still applies as a hard cap — if the pool is already full, no
         discovery runs and overflow is trimmed.
         """
@@ -270,13 +282,32 @@ class ContinuousRefreshController:
         except Exception:
             logger.exception("trim_topic_group_overflow failed")
 
+        source_targets = self._source_target_counts()
+        reactivate_fn = getattr(self.database, "reactivate_under_quota_pool_sources", None)
+        if callable(reactivate_fn):
+            try:
+                reactivated = reactivate_fn(
+                    target=self.pool_target_count,
+                    source_share_quotas=source_targets,
+                )
+                if reactivated > 0:
+                    logger.info(
+                        "enforce_pool_cap: reactivated=%s under-quota source items",
+                        reactivated,
+                    )
+                    self.database.trim_topic_group_overflow(
+                        max_per_group=max(3, self.pool_target_count // 10),
+                    )
+            except Exception:
+                logger.exception("reactivate_under_quota_pool_sources failed")
+
         pool_available = self.database.count_pool_candidates()
         if pool_available > self.pool_target_count:
             trimmed = 0
             try:
                 trimmed = self.database.trim_pool_to_target_count(
                     target=self.pool_target_count,
-                    source_share_quotas=self._source_target_counts(),
+                    source_share_quotas=source_targets,
                 )
             except Exception:
                 logger.exception("trim_pool_to_target_count failed")
@@ -847,7 +878,7 @@ class ContinuousRefreshController:
 
         target_counts = self._source_target_counts()
         deficits: list[tuple[str, int]] = []
-        for source in ("search", "related_chain", "trending", "explore"):
+        for source in _BILIBILI_DISCOVERY_SOURCES:
             deficit = max(0, target_counts[source] - int(source_counts.get(source, 0)))
             if deficit > 0:
                 deficits.append((source, deficit))

@@ -4,6 +4,22 @@
 
 ---
 
+## v0.3.31: Discovery 来源均衡兼容小红书（2026-05-03）
+
+### 修复
+
+- **小红书作为一等来源族参与候选池配额**:`_SOURCE_TARGET_SHARES` 增加 `xiaohongshu`，600 池目标约分配为 `search=141 / related_chain=141 / trending=35 / explore=141 / xiaohongshu=142`。`xhs-extension-task/search/profile` 等 raw source 会归并到同一个 `xiaohongshu` 来源族，避免小红书库存在 share-aware trim 中被当作未知来源或被拆成多个来源。
+- **满池时也能恢复已 suppressed 的小红书高分候选**:`reactivate_under_quota_pool_sources()` 会在来源族低于配额时，从 `pool_status='suppressed'` 且带 `xsec_token` 的可打开候选中复活一批，再由 `trim_pool_to_target_count(source_share_quotas=...)` 按统一配额裁掉过量来源。现有被压住的小红书内容不必等重新浏览同一页面才有机会回到 fresh pool。
+- **池子计数排除不可打开的小红书裸 URL**:`count_pool_candidates()` 和 `count_pool_candidates_by_source()` 现在只把带 `xsec_token` 的小红书行算作可用候选，避免 runtime 状态显示“池子满了”但 UI 实际不能推荐。
+- **explore 域生成遇到 DeepSeek 空内容会自愈一次**:线上日志里的 `deepseek returned empty content` 来自 DeepSeek HTTP 200 但 `content=""`，之前普通模式没有 provider 层重试，导致 `discovery.explore.queries` 直接返回 0 个探索域。`DeepSeekProvider` 现在对空内容统一重试一次；`reasoning_effort` 开启时仍关闭 thinking 重试，普通模式按原参数重试。
+
+### 测试
+
+- 新增 storage / refresh runtime 回归测试覆盖小红书来源族归一、under-quota suppressed 复活、满池裁剪传递小红书配额。
+- 新增 LLM provider 回归测试覆盖 DeepSeek 普通模式空内容重试。
+
+---
+
 ## v0.3.30: 日志自动清理（按大小 / 按年龄 / 按总预算）（2026-05-02）
 
 用户实测发现 `logs/` 目录下有几个未托管的大文件占盘:`backend-restart.log` 2.2 GB、`openbiliclaw-restart.log` 296 MB,加上原本的 `openbiliclaw.log` 1 GB 主日志,整个目录 5 GB+。原 `RotatingFileHandler` 只管 *本身配置的那个* 文件,其他 stdout-redirect 出来的脚本日志完全没人管。补一套 unmanaged 日志兜底清理。
