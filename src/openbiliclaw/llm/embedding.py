@@ -8,6 +8,7 @@ with zero API calls on the hot path.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -120,6 +121,7 @@ class EmbeddingService:
         cache_size: int = 500,
         similarity_threshold: float = 0.82,
         persistent_cache: EmbeddingCache | None = None,
+        max_concurrent_provider_calls: int = 2,
     ) -> None:
         self._provider = provider
         self._model = model
@@ -127,6 +129,17 @@ class EmbeddingService:
         self._cache_size = cache_size
         self.similarity_threshold = similarity_threshold
         self._l2_cache = persistent_cache
+        # Cap concurrent provider calls. Local CPU-bound providers (Ollama
+        # bge-m3 on a single GGUF runner) collapse under unbounded
+        # asyncio.gather fan-out from delight scoring + topic supergroup
+        # merge + speculator. v0.3.31 caught a real cascade where the
+        # daemon spawned 14+ concurrent embed calls within 1 second after
+        # the proxy fix landed; Ollama queued them serially, exceeded the
+        # 60s read timeout, and every call returned ``[]``. Even cloud
+        # providers benefit from a small ceiling to amortize TLS handshake
+        # cost. Default 2 keeps single-CPU bge-m3 healthy while still
+        # using both cores for inference + tokenization.
+        self._provider_semaphore = asyncio.Semaphore(max_concurrent_provider_calls)
 
     async def embed(self, text: str) -> list[float]:
         """Get embedding for text. Checks L1 → L2 → API."""
@@ -146,12 +159,13 @@ class EmbeddingService:
                 self._l1_cache[key] = persisted
                 return persisted
 
-        # L3: API call
-        try:
-            vector = await self._provider.embed(key, model=self._model)
-        except Exception:
-            logger.warning("Embedding failed for: %s", key[:50], exc_info=True)
-            return []
+        # L3: API call (throttled — see __init__ semaphore comment)
+        async with self._provider_semaphore:
+            try:
+                vector = await self._provider.embed(key, model=self._model)
+            except Exception:
+                logger.warning("Embedding failed for: %s", key[:50], exc_info=True)
+                return []
 
         # Never cache an empty vector. Empty means the provider failed
         # transparently (e.g. swallowed timeout) and returned ``[]``;

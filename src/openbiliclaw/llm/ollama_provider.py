@@ -53,7 +53,14 @@ class OllamaProvider(OpenAIProvider):
             # trust_env=False bypasses the user's HTTP_PROXY / HTTPS_PROXY env
             # vars, which would otherwise route localhost embedding calls
             # through e.g. a 127.0.0.1:7897 VPN proxy and time out.
-            async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
+            #
+            # 120s timeout absorbs (a) the initial bge-m3 cold-load (~10-30s
+            # from disk on first call after Ollama wake) and (b) brief
+            # request-queue backlog when EmbeddingService throttles to
+            # concurrency=2 but the daemon enqueued >2 cache-miss texts
+            # within seconds. 60s was too tight under the post-proxy-fix
+            # cache-rebuild burst.
+            async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
                 response = await client.post(
                     url,
                     json={"model": model, "prompt": text},
