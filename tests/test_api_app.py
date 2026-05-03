@@ -2660,3 +2660,110 @@ class TestEmbeddingAndCompatProviderE2E:
         compat_mask = data["openai_compatible"]["api_key"]
         assert "*" in openai_mask and "*" in compat_mask
         assert openai_mask != compat_mask
+
+
+def test_events_endpoint_emits_activity_added_runtime_event() -> None:
+    """v0.3.38 — POST /api/events publishes ``activity.added`` so the
+    popup can refresh its activity feed without polling.
+    """
+    from fastapi.testclient import TestClient
+
+    class FakeMemoryManager:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        async def propagate_event(self, event: dict[str, object]) -> None:
+            self.events.append(event)
+
+    class FakeEventHub:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        async def publish(self, event: dict[str, object]) -> None:
+            self.events.append(event)
+
+    class FakeRuntimeController:
+        def __init__(self, hub: FakeEventHub) -> None:
+            self.event_hub = hub
+
+    hub = FakeEventHub()
+    memory = FakeMemoryManager()
+    app = create_app(
+        memory_manager=memory,
+        database=object(),
+        soul_engine=object(),
+        runtime_controller=FakeRuntimeController(hub),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/events",
+        json={
+            "events": [
+                {
+                    "type": "click",
+                    "url": "https://www.bilibili.com/video/BV1A",
+                    "title": "A",
+                    "timestamp": 1710000000000,
+                },
+                {
+                    "type": "view",
+                    "url": "https://www.bilibili.com/video/BV1B",
+                    "title": "B",
+                    "timestamp": 1710000001000,
+                },
+                {
+                    "type": "click",
+                    "url": "https://www.bilibili.com/video/BV1C",
+                    "title": "C",
+                    "timestamp": 1710000002000,
+                },
+            ]
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["accepted"] == 3
+
+    activity_events = [e for e in hub.events if e["type"] == "activity.added"]
+    assert len(activity_events) == 1, "should fire exactly once per ingest call"
+    assert activity_events[0]["count"] == 3
+
+
+def test_events_endpoint_skips_activity_added_for_empty_batch() -> None:
+    """No events accepted → no activity.added (avoids spamming popup
+    when the extension flushes an empty buffer)."""
+    from fastapi.testclient import TestClient
+
+    class FakeMemoryManager:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        async def propagate_event(self, event: dict[str, object]) -> None:
+            self.events.append(event)
+
+    class FakeEventHub:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        async def publish(self, event: dict[str, object]) -> None:
+            self.events.append(event)
+
+    class FakeRuntimeController:
+        def __init__(self, hub: FakeEventHub) -> None:
+            self.event_hub = hub
+
+    hub = FakeEventHub()
+    app = create_app(
+        memory_manager=FakeMemoryManager(),
+        database=object(),
+        soul_engine=object(),
+        runtime_controller=FakeRuntimeController(hub),
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/events", json={"events": []})
+    assert response.status_code == 200
+    assert response.json()["accepted"] == 0
+
+    activity_events = [e for e in hub.events if e["type"] == "activity.added"]
+    assert activity_events == []

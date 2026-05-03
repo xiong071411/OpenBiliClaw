@@ -396,3 +396,89 @@ def test_database_get_pool_candidates_needing_delight_score_includes_high_score_
     assert "BV1BACKFILL" in bvids
     assert "BV1READY" not in bvids
     assert "BV1LOW" not in bvids
+
+
+
+# ---------------------------------------------------------------------------
+# v0.3.34+ — LLMDelightScorer + JSON shape tolerance + retrieval gate
+# ---------------------------------------------------------------------------
+
+
+def test_extract_delight_entries_handles_plain_list() -> None:
+    """DeepSeek default: clean root-level array."""
+    from openbiliclaw.recommendation.delight import _extract_delight_entries
+
+    payload = '[{"bvid":"BV1","score":0.7,"rationale":"r","hook":"h"}]'
+    entries = _extract_delight_entries(payload, expected_count=1)
+    assert len(entries) == 1
+    assert entries[0]["bvid"] == "BV1"
+
+
+def test_extract_delight_entries_handles_dict_wrapped() -> None:
+    """mimo-v2.5-pro default: ``{"results": [...]}``."""
+    from openbiliclaw.recommendation.delight import _extract_delight_entries
+
+    for wrap in ("results", "items", "delights", "data", "scores", "candidates"):
+        payload = f'{{"{wrap}": [{{"bvid":"BV1","score":0.7}}]}}'
+        entries = _extract_delight_entries(payload, expected_count=1)
+        assert len(entries) == 1, f"failed to unwrap {wrap}"
+
+
+def test_extract_delight_entries_handles_jsonl_extra_data() -> None:
+    """mimo "Extra data" mode: multiple roots newline-separated."""
+    from openbiliclaw.recommendation.delight import _extract_delight_entries
+
+    payload = '{"bvid":"BV1","score":0.7}\n{"bvid":"BV2","score":0.5}'
+    entries = _extract_delight_entries(payload, expected_count=2)
+    assert len(entries) == 2
+    assert {e["bvid"] for e in entries} == {"BV1", "BV2"}
+
+
+def test_extract_delight_entries_handles_single_dict_with_bvid() -> None:
+    """batch=1 case: LLM returns a single object, not wrapped in a list."""
+    from openbiliclaw.recommendation.delight import _extract_delight_entries
+
+    payload = '{"bvid":"BV1","score":0.8,"rationale":"x","hook":"y"}'
+    entries = _extract_delight_entries(payload, expected_count=1)
+    assert len(entries) == 1
+    assert entries[0]["bvid"] == "BV1"
+
+
+def test_extract_delight_entries_handles_garbage() -> None:
+    """Invalid JSON yields empty list (caller must treat as scoring failure)."""
+    from openbiliclaw.recommendation.delight import _extract_delight_entries
+
+    assert _extract_delight_entries("not json", expected_count=5) == []
+    assert _extract_delight_entries("", expected_count=5) == []
+    assert _extract_delight_entries("{}", expected_count=5) == []
+
+
+def test_get_pool_candidates_filters_by_min_relevance(tmp_path: Path) -> None:
+    """v0.3.35: relevance_score gate cuts weak-fit items before LLM judgement."""
+    database = _make_database(tmp_path)
+    database.cache_content("BV1HIGH", title="High fit", relevance_score=0.85)
+    database.cache_content("BV1MED", title="Moderate", relevance_score=0.60)
+    database.cache_content("BV1LOW", title="Weak", relevance_score=0.40)
+
+    rows = database.get_pool_candidates_needing_delight_score(
+        limit=10,
+        min_relevance_score=0.55,
+    )
+    bvids = {r["bvid"] for r in rows}
+    assert "BV1HIGH" in bvids
+    assert "BV1MED" in bvids
+    assert "BV1LOW" not in bvids
+
+
+def test_get_pool_candidates_default_min_relevance_is_055(tmp_path: Path) -> None:
+    """v0.3.35: default gate must remain 0.55 (any change is a behaviour
+    swing affecting how many candidates the LLM sees per cycle)."""
+    database = _make_database(tmp_path)
+    database.cache_content("BV1HALF", title="Right at edge", relevance_score=0.54)
+    database.cache_content("BV1OVER", title="Just over", relevance_score=0.56)
+
+    # No min_relevance_score passed — uses default
+    rows = database.get_pool_candidates_needing_delight_score(limit=10)
+    bvids = {r["bvid"] for r in rows}
+    assert "BV1OVER" in bvids
+    assert "BV1HALF" not in bvids

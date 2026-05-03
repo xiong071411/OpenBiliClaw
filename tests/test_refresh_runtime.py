@@ -1236,3 +1236,156 @@ async def test_run_forever_cancels_child_loops_on_shutdown() -> None:
         for child in spawned_tasks:
             with suppress(asyncio.CancelledError):
                 await child
+
+
+# ---------------------------------------------------------------------------
+# v0.3.37+ — runtime event emission (delight.refreshed / pool_status)
+# ---------------------------------------------------------------------------
+
+
+async def test_refresh_publishes_delight_refreshed_when_count_increases() -> None:
+    """``_run_refresh_plan`` emits ``delight.refreshed`` when precompute
+    finds net new above-threshold delights. Popup uses this to trigger a
+    silent re-fetch of /api/delight/pending-batch.
+    """
+    event_hub = _FakeEventHub()
+    database = _FakeDatabase(
+        [{"id": 1, "event_type": "view"}],
+        pool_count=20,
+        delight_count=2,  # Initial count
+    )
+
+    # Recommendation engine bumps the database's delight count when its
+    # precompute runs, simulating a new above-threshold item being scored.
+    rec_engine = _FakeRecommendationEngine()
+    original_precompute = rec_engine.precompute_pool_copy
+
+    async def precompute_then_bump(**kwargs):
+        result = await original_precompute(**kwargs)
+        database.delight_count = 5  # +3 new delights after precompute
+        return result
+
+    rec_engine.precompute_pool_copy = precompute_then_bump  # type: ignore[assignment]
+
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=database,
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=rec_engine,
+        event_hub=event_hub,
+        pool_target_count=30,
+    )
+
+    await controller.force_refresh()
+
+    delight_events = [e for e in event_hub.events if e["type"] == "delight.refreshed"]
+    assert len(delight_events) == 1, f"expected 1 delight.refreshed, got {len(delight_events)}"
+    assert delight_events[0]["count"] == 3
+    assert delight_events[0]["total_pending"] == 5
+
+
+async def test_refresh_skips_delight_refreshed_when_count_unchanged() -> None:
+    """No event when precompute finishes without new above-threshold delights
+    (avoids spamming popup with no-op refreshes)."""
+    event_hub = _FakeEventHub()
+    database = _FakeDatabase(
+        [{"id": 1, "event_type": "view"}],
+        pool_count=20,
+        delight_count=2,  # stays at 2 — no new delights
+    )
+
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=database,
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        event_hub=event_hub,
+        pool_target_count=30,
+    )
+
+    await controller.force_refresh()
+
+    delight_events = [e for e in event_hub.events if e["type"] == "delight.refreshed"]
+    assert len(delight_events) == 0
+
+
+async def test_refresh_publishes_pool_status_when_count_changes() -> None:
+    """``_publish_pool_status_if_changed`` emits ``pool_status`` only when
+    the count differs from last published."""
+    event_hub = _FakeEventHub()
+    database = _FakeDatabase(
+        [{"id": 1, "event_type": "view"}],
+        pool_count=42,  # → emit pool_status with 42
+    )
+
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=database,
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        event_hub=event_hub,
+        pool_target_count=30,
+    )
+
+    # Trigger _enforce_pool_cap via a tick that hits the gate
+    await controller._publish_pool_status_if_changed()
+
+    pool_events = [e for e in event_hub.events if e["type"] == "pool_status"]
+    assert len(pool_events) == 1
+    assert pool_events[0]["pool_available_count"] == 42
+    assert pool_events[0]["pool_target_count"] == 30
+
+
+async def test_refresh_pool_status_dedupes_unchanged_count() -> None:
+    """Calling ``_publish_pool_status_if_changed`` repeatedly with the
+    same count must only emit the first one — popup-side state
+    rendering would still re-paint on duplicate."""
+    event_hub = _FakeEventHub()
+    database = _FakeDatabase([], pool_count=42)
+
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=database,
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        event_hub=event_hub,
+        pool_target_count=30,
+    )
+
+    await controller._publish_pool_status_if_changed()
+    await controller._publish_pool_status_if_changed()
+    await controller._publish_pool_status_if_changed()
+
+    pool_events = [e for e in event_hub.events if e["type"] == "pool_status"]
+    assert len(pool_events) == 1, "second/third calls should not re-publish"
+
+
+async def test_refresh_pool_status_re_emits_when_count_rotates() -> None:
+    """When count changes back, we must re-emit. Otherwise popup never
+    sees a pool drain → refill cycle."""
+    event_hub = _FakeEventHub()
+    database = _FakeDatabase([], pool_count=42)
+
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=database,
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        event_hub=event_hub,
+        pool_target_count=30,
+    )
+
+    await controller._publish_pool_status_if_changed()  # 42
+    database.pool_count = 20
+    await controller._publish_pool_status_if_changed()  # 20
+    database.pool_count = 42
+    await controller._publish_pool_status_if_changed()  # 42 again
+
+    pool_events = [e for e in event_hub.events if e["type"] == "pool_status"]
+    counts = [e["pool_available_count"] for e in pool_events]
+    assert counts == [42, 20, 42]
