@@ -167,6 +167,11 @@ class ContinuousRefreshController:
     _manual_refresh_message: str = ""
     _manual_refresh_started_at: str = ""
     _manual_refresh_finished_at: str = ""
+    # Last-tick fingerprint of pool maintenance state, used to demote
+    # the per-minute "reactivated=N" / "trim dropped=N top=X" log lines
+    # to DEBUG when nothing actually changed since the previous tick.
+    # INFO fires only when the count or top-group rotates.
+    _last_pool_maintenance_fingerprint: tuple[int, int, str] = (-1, -1, "")
 
     _signal_event_types = [
         "view",
@@ -291,9 +296,22 @@ class ContinuousRefreshController:
                     source_share_quotas=source_targets,
                 )
                 if reactivated > 0:
-                    logger.info(
+                    # Demote to DEBUG when the count is identical to the
+                    # previous tick — pool sitting in steady-state with
+                    # the same N items reactivating each minute is noise,
+                    # not signal. INFO fires only when N changes (real
+                    # state transition: pool drained to refill, or new
+                    # source surge).
+                    last_reactivated = self._last_pool_maintenance_fingerprint[1]
+                    log_fn = logger.info if reactivated != last_reactivated else logger.debug
+                    log_fn(
                         "enforce_pool_cap: reactivated=%s under-quota source items",
                         reactivated,
+                    )
+                    self._last_pool_maintenance_fingerprint = (
+                        self._last_pool_maintenance_fingerprint[0],
+                        reactivated,
+                        self._last_pool_maintenance_fingerprint[2],
                     )
                     self.database.trim_topic_group_overflow(
                         max_per_group=max(3, self.pool_target_count // 10),

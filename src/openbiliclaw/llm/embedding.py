@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import sqlite3
+from collections import OrderedDict
 from pathlib import Path
 from typing import Protocol
 
@@ -125,7 +126,11 @@ class EmbeddingService:
     ) -> None:
         self._provider = provider
         self._model = model
-        self._l1_cache: dict[str, list[float]] = {}
+        # OrderedDict + move_to_end on hit gives us proper LRU instead of
+        # FIFO. With a 500-key cache and bursty access patterns (delight
+        # scoring iterates the same like_texts repeatedly), FIFO would
+        # evict heavy-hit keys whenever the cache filled with cold misses.
+        self._l1_cache: OrderedDict[str, list[float]] = OrderedDict()
         self._cache_size = cache_size
         self.similarity_threshold = similarity_threshold
         self._l2_cache = persistent_cache
@@ -147,9 +152,10 @@ class EmbeddingService:
         if not key:
             return []
 
-        # L1: in-memory
+        # L1: in-memory (LRU — move_to_end marks the key as recently used)
         cached = self._l1_cache.get(key)
         if cached is not None:
+            self._l1_cache.move_to_end(key)
             return cached
 
         # L2: SQLite persistent
@@ -186,10 +192,11 @@ class EmbeddingService:
             )
             return []
 
-        # Store in both caches
+        # Store in both caches (LRU eviction: popitem(last=False) drops
+        # the least-recently-used entry — combined with move_to_end on
+        # cache hit above, this is true LRU instead of FIFO).
         if len(self._l1_cache) >= self._cache_size:
-            oldest_key = next(iter(self._l1_cache))
-            del self._l1_cache[oldest_key]
+            self._l1_cache.popitem(last=False)
         self._l1_cache[key] = vector
 
         if self._l2_cache is not None:

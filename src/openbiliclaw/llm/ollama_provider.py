@@ -45,38 +45,55 @@ class OllamaProvider(OpenAIProvider):
         1024-dim). Other Ollama embedding models also work — just pass
         ``model=...``.
 
-        Returns an empty list on failure so callers can degrade gracefully
-        (the embedding service treats empty vectors as "no embedding").
+        Retries once on transient errors (timeout / connection drop /
+        Ollama runner restart). Returns an empty list only after both
+        attempts fail. Callers (EmbeddingService) treat empty vectors
+        as "no embedding" and skip caching them.
         """
         url = f"{self._native_root()}/api/embeddings"
-        try:
-            # trust_env=False bypasses the user's HTTP_PROXY / HTTPS_PROXY env
-            # vars, which would otherwise route localhost embedding calls
-            # through e.g. a 127.0.0.1:7897 VPN proxy and time out.
-            #
-            # 120s timeout absorbs (a) the initial bge-m3 cold-load (~10-30s
-            # from disk on first call after Ollama wake) and (b) brief
-            # request-queue backlog when EmbeddingService throttles to
-            # concurrency=2 but the daemon enqueued >2 cache-miss texts
-            # within seconds. 60s was too tight under the post-proxy-fix
-            # cache-rebuild burst.
-            async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
-                response = await client.post(
-                    url,
-                    json={"model": model, "prompt": text},
-                )
-                response.raise_for_status()
-                data = response.json()
-        except Exception:
-            logger.warning(
-                "Ollama embedding failed (model=%s, url=%s)",
-                model,
-                url,
-                exc_info=True,
-            )
-            return []
+        last_exc: Exception | None = None
+        # 1 initial + 1 retry. The retry covers brief Ollama hiccups
+        # (model swap, runner restart, momentary OOM) without making a
+        # transient failure poison the user's experience for several
+        # minutes. Two attempts is enough — if the second also fails,
+        # something structural is wrong and adding more retries just
+        # delays the inevitable WARN.
+        for attempt in (1, 2):
+            try:
+                # trust_env=False bypasses the user's HTTP_PROXY / HTTPS_PROXY env
+                # vars, which would otherwise route localhost embedding calls
+                # through e.g. a 127.0.0.1:7897 VPN proxy and time out.
+                #
+                # 120s timeout absorbs (a) the initial bge-m3 cold-load (~10-30s
+                # from disk on first call after Ollama wake) and (b) brief
+                # request-queue backlog when EmbeddingService throttles to
+                # concurrency=2 but the daemon enqueued >2 cache-miss texts
+                # within seconds. 60s was too tight under the post-proxy-fix
+                # cache-rebuild burst.
+                async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
+                    response = await client.post(
+                        url,
+                        json={"model": model, "prompt": text},
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                vec = data.get("embedding")
+                if not isinstance(vec, list):
+                    return []
+                return [float(v) for v in vec if isinstance(v, int | float)]
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 1:
+                    logger.debug(
+                        "Ollama embedding attempt 1 failed (model=%s), retrying",
+                        model,
+                        exc_info=True,
+                    )
 
-        vec = data.get("embedding")
-        if not isinstance(vec, list):
-            return []
-        return [float(v) for v in vec if isinstance(v, int | float)]
+        logger.warning(
+            "Ollama embedding failed after 2 attempts (model=%s, url=%s)",
+            model,
+            url,
+            exc_info=last_exc,
+        )
+        return []

@@ -723,6 +723,22 @@ class InterestSpeculator:
         if active_count >= self._max_active:
             return False
 
+        # Slot-aware throttle: when there's only 1 free slot, the dedup
+        # gate (existing_domains) almost always wins because the LLM
+        # tends to re-propose stuck active probes by name. We observed
+        # 7+ consecutive 30-min ticks generating the same 2 stuck
+        # domains and adding 0 new probes, burning ~¥0.005 per tick on
+        # nothing. Require at least 2 free slots so the candidate yield
+        # is realistic for the LLM call cost.
+        if self._max_active - active_count < 2:
+            logger.debug(
+                "Speculation skipped: only %d slot(s) free of %d, "
+                "not worth an LLM call (most candidates would dedup-fail).",
+                self._max_active - active_count,
+                self._max_active,
+            )
+            return False
+
         # Check active speculation tier cap. We gate solely on
         # ``active_count`` here, not ``confirmed + active`` — see the
         # comment in ``force_tick``: a well-mapped user with many

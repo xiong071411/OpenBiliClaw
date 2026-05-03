@@ -132,9 +132,7 @@ def _pool_source_family(source: object, source_platform: object = "") -> str:
     platform = str(source_platform or "").strip().lower()
     raw_source = str(source or "").strip()
     source_key = raw_source.lower()
-    if platform in {_XHS_SOURCE_FAMILY, "xhs"} or source_key.startswith(
-        _XHS_SOURCE_PREFIXES
-    ):
+    if platform in {_XHS_SOURCE_FAMILY, "xhs"} or source_key.startswith(_XHS_SOURCE_PREFIXES):
         return _XHS_SOURCE_FAMILY
     return raw_source or "unknown"
 
@@ -1143,9 +1141,7 @@ class Database:
             )
             losers = ranked[max_per_group:]
             drops_per_group[group_name] = len(losers)
-            overflow_bvids.extend(
-                str(row.get("bvid", "")).strip() for row in losers
-            )
+            overflow_bvids.extend(str(row.get("bvid", "")).strip() for row in losers)
 
         clean_bvids = [bvid for bvid in overflow_bvids if bvid]
         if not clean_bvids:
@@ -1161,9 +1157,14 @@ class Database:
             clean_bvids,
         )
 
-        # Top 10 most-trimmed groups so the log line stays readable
+        # Top 10 most-trimmed groups so the log line stays readable.
+        # Demoted to DEBUG: this runs once per minute from the refresh
+        # tick. When the pool is steady-state and a single group
+        # consistently sits ~8 items over the cap, the same line gets
+        # logged 1440x per day at INFO. Caller can lift to INFO when
+        # the trim shape actually changes (see refresh.enforce_pool_cap).
         top = sorted(drops_per_group.items(), key=lambda kv: -kv[1])[:10]
-        logger.info(
+        logger.debug(
             "[diversity] trim_topic_group_overflow: cap=%d, dropped=%d items "
             "across %d over-cap groups, top: %s",
             max_per_group,
@@ -1303,8 +1304,7 @@ class Database:
             )
             per_source[family] += 1
         breakdown = ", ".join(
-            f"{src}:{cnt}"
-            for src, cnt in sorted(per_source.items(), key=lambda kv: -kv[1])
+            f"{src}:{cnt}" for src, cnt in sorted(per_source.items(), key=lambda kv: -kv[1])
         )
         logger.info(
             "[diversity] trim_pool_to_target_count: target=%d, before=%d, "
@@ -2031,8 +2031,7 @@ class Database:
     def _ensure_llm_usage_cache_columns(self) -> None:
         """Backfill v0.3.28+ prompt-cache columns on existing llm_usage tables."""
         existing_columns = {
-            str(row["name"])
-            for row in self.conn.execute("PRAGMA table_info(llm_usage)").fetchall()
+            str(row["name"]) for row in self.conn.execute("PRAGMA table_info(llm_usage)").fetchall()
         }
         required_columns = {
             "cached_input_tokens": "INTEGER NOT NULL DEFAULT 0",
@@ -2040,9 +2039,7 @@ class Database:
         for column_name, column_type in required_columns.items():
             if column_name in existing_columns:
                 continue
-            self.conn.execute(
-                f"ALTER TABLE llm_usage ADD COLUMN {column_name} {column_type}"
-            )
+            self.conn.execute(f"ALTER TABLE llm_usage ADD COLUMN {column_name} {column_type}")
 
     def _ensure_recommendation_feedback_columns(self) -> None:
         """Backfill recommendation feedback columns for existing databases."""

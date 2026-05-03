@@ -17,6 +17,13 @@
 - **EmbeddingService 并发把本地 Ollama 打爆**:proxy fix 之后 daemon 立刻用并发 embed 补齐积压（delight scoring + 主题去重 + speculator + 池内 candidate batch 同时发起），实测一秒内 14+ 个并发请求灌进 bge-m3 单进程 GGUF runner，CPU 4 核 100%、`ollama runner` 占用 406%、curl 直连 30s 都收不到响应、所有 in-flight 请求 60s timeout 失败。新增 `EmbeddingService` 内部 `Semaphore(2)` 限流（默认 2，可通过 `max_concurrent_provider_calls` 改），同时把 `OllamaProvider.embed` 的 httpx timeout 从 60s 提到 120s 吸收冷启动 + 队列等待。
 - **Speculator 探针长复合中文短语永远匹配不上事件**:LLM 生成的 probe 域名常是 `'AI图像生成工作流深度拆解'` 这种 13 字连续中文，原匹配器三条路径全失效（整串 substring 不命中、`[与和·、/\s及]+` 切不动、whitespace-tokenize 只产 1 个 token）→ 一天观察 0 次匹配，所有探针挂在 active 槽 3 天后 TTL 过期被拒。新增 Chinese-bigram 兜底：name 端要求 ≥4 个 distinct bigram、event 端要求 ≥2 个 bigram 重叠才算命中，配合上游 `confirmation_threshold=3` 防误升。
 - **Speculator "generated N new" 日志骗人**:`result.generated` 之前取 `state.active` 全集，导致每轮 tick 都把携带过来的老探针重复打成 "generated 2 new"，制造在工作的假象。改成取 `_generate` 调用前后的 domain 集合差，只展示真正新增的；空集时落到 `force_tick: no-op (active full)` DEBUG 行。`Speculator observed` 日志同步从 DEBUG 升到 INFO，让事件→探针确认信号在生产日志里可见。
+- **Speculator slot-aware 提早 skip LLM 调用**:`_should_generate` 之前只检查 `active_count < max_active`,但 LLM 几乎肯定会重复提案已存在 active 集合中的 domain → dedup 之后净新增 0。要求至少 2 个空闲 slot 才发起 LLM 调用,否则跳过。粗略估算每天省 ~¥0.04 的 speculator 浪费调用。
+- **CLI 三个 Ollama 探测**(`_ollama_is_running` / `_ollama_has_model` / `_ollama_pull_model`)同样存在代理劫持问题,补 `trust_env=False`,避免 `setup-embedding` 在代理环境下误判 "Ollama 没启动"。
+- **DelightScorer 增加 embedding 子系统死亡告警**:四个 embedding-driven 信号(likes / deep_need / insight / dislike)同时为 0.0 时,几乎只可能是 embedding 子系统挂了(用户的 likes/deep_needs/insights/disliked_topics 同时为空在稳态下不可能)。新增 per-candidate WARN 让失败信号在 recommendation 层可见,不再被埋在 1GB 的 provider HTTP DEBUG 里。
+- **`trim_topic_group_overflow` 每分钟一行 INFO 噪音降级**:稳态下池子里 `人工智能:8 over cap` 这种数据每 60s 重复打一遍,一天 1440 条。Database 里的 emit 改成 DEBUG;Refresh 层的 `enforce_pool_cap: reactivated=N` 加 fingerprint 缓存,reactivated 数与上一 tick 相同则降到 DEBUG,变化时才 INFO。
+- **EmbeddingService L1 cache 改 LRU**:之前用普通 dict + `next(iter)` 驱逐最老,实质是 FIFO,500 条容量 + bursty 访问下会驱逐刚刚命中过的热 key。改用 `OrderedDict` + `move_to_end(key)` on hit + `popitem(last=False)` on evict,正确 LRU。
+- **OllamaProvider 加 1 次重试**:bge-m3 短暂 OOM / Ollama runner 重启 / 模型 hot-swap 这些瞬时故障之前直接返 `[]` 走静默降级。改成 `for attempt in (1, 2)` 模式,首次失败 DEBUG 一行后立刻重试,两次都失败才 WARN。同时把 `Ollama embedding failed` 日志改成 `failed after 2 attempts`。
+- **`config.toml` 同步 v0.3.30 logging 默认值**:把用户旧的 `max_file_size_mb = 1024` 降到 100,补上 `aggregate_budget_mb = 500` / `unmanaged_truncate_mb = 200` / `unmanaged_max_age_days = 30`,让 v0.3.30 引入的日志兜底机制实际生效。这个改动只动 `config.toml`(gitignored),仓库 `config.example.toml` 早就是新值。
 
 ### 测试
 
