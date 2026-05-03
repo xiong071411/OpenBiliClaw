@@ -24,6 +24,9 @@
 - **EmbeddingService L1 cache 改 LRU**:之前用普通 dict + `next(iter)` 驱逐最老,实质是 FIFO,500 条容量 + bursty 访问下会驱逐刚刚命中过的热 key。改用 `OrderedDict` + `move_to_end(key)` on hit + `popitem(last=False)` on evict,正确 LRU。
 - **OllamaProvider 加 1 次重试**:bge-m3 短暂 OOM / Ollama runner 重启 / 模型 hot-swap 这些瞬时故障之前直接返 `[]` 走静默降级。改成 `for attempt in (1, 2)` 模式,首次失败 DEBUG 一行后立刻重试,两次都失败才 WARN。同时把 `Ollama embedding failed` 日志改成 `failed after 2 attempts`。
 - **`config.toml` 同步 v0.3.30 logging 默认值**:把用户旧的 `max_file_size_mb = 1024` 降到 100,补上 `aggregate_budget_mb = 500` / `unmanaged_truncate_mb = 200` / `unmanaged_max_age_days = 30`,让 v0.3.30 引入的日志兜底机制实际生效。这个改动只动 `config.toml`(gitignored),仓库 `config.example.toml` 早就是新值。
+- **DelightScorer dislike_penalty 阈值/放大器按 bge-m3 重新标定**:之前 `(sim - 0.55) * 2.5` 是按 Gemini 标的,bge-m3 对低语义中文(直播片段标题、metadata)有"通用中文 cluster"现象,baseline cosine 0.78-0.85,所有候选都被 dislike 拉减 0.30 分。改成 `(sim - 0.78) * 1.5` 后:历史 3 条 ≥0.65 delight item 重打分从被 dislike 假阳性压到 0.20 → 恢复到真实 0.51-0.52,新候选最高 likes 也从被压到 0.13 → 真实 0.40-0.48。
+- **DelightScorer threshold 同步按 bge-m3 实际分布下调**:0.65/0.75 默认是按 Gemini embedding 标的,在 bge-m3 上等于"永远不触发 delight"。基于实测 100 条池内 top-relevance 候选的实际分数分布(max=0.485, p95=0.440, p90=0.428),`DEFAULT_DELIGHT_THRESHOLD` 从 0.65 改成 0.45(对应 ~p95 的"特别匹配"位置),`CONSERVATIVE_DELIGHT_THRESHOLD` 从 0.75 改成 0.55。
+- **DelightScorer "embedding 子系统死亡"告警改用直接探测**:之前判定条件是 4 个 embedding 信号同时为 0,但一个用户兴趣范围之外的合法内容(如 tech-only 用户看到一条历史纪录片标题)也会全 0,导致告警每条 candidate 都 false-positive。改成单次 `embed(content_text)` 探测,只有 provider 真返空向量才告警。
 
 ### 测试
 

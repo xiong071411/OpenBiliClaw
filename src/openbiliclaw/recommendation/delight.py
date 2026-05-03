@@ -78,25 +78,29 @@ class DelightWeights:
 # ---------------------------------------------------------------------------
 
 # Delight threshold:
-# After v2 of the scorer (added likes_alignment + dislike_penalty,
-# Delight is meant to be exceptional — "this one really resonates"
-# picks pulled out of the regular recommendation pool. Lowering the
-# bar dilutes the signal: at 0.35 most "delights" become just
-# "above-average recommendations", which kills the surprise value
-# the feature is built around.
+# Calibrated for the bge-m3 multilingual embedding (the user's main
+# local embedding via Ollama). bge-m3's cosine distribution is
+# tighter than Gemini's — even strong likes_alignment matches top out
+# around raw cosine 0.85, which after the ``(sim - 0.5) * 2.0``
+# amplifier yields ~0.70 contribution; combined with the 0.30 weight
+# that's a 0.21 ceiling on the likes signal alone.
 #
-# Keep the bar at 0.65 even though the v2 scorer (with likes_alignment
-# + dislike_penalty redistributing weights across 6 signals) makes
-# this score harder to reach. Rarity is a feature here, not a bug:
-# - Typical pool of 2000+ scored items yields ~30-50 candidates
-#   above 0.65, which at the 4h push cooldown is enough supply for
-#   ~5-7 days of "really pick of the litter" surfacing
-# - As discovery refreshes the pool, new exceptional matches join
-#   the queue
-# - Below 0.65 content still surfaces via the normal recommendation
-#   feed; users see those without the "delight" framing
-DEFAULT_DELIGHT_THRESHOLD: float = 0.65
-CONSERVATIVE_DELIGHT_THRESHOLD: float = 0.75
+# Empirical score distribution on this codebase's pool top-100 by
+# relevance (2026-05-03, after the embedding/dislike fixes landed):
+#     max = 0.485, p95 = 0.440, p90 = 0.428, p75 = 0.408, median = 0.181
+# A 0.65 threshold (the original Gemini-era constant) is unreachable
+# under bge-m3 — no content ever surfaces as delight, defeating the
+# feature. 0.45 lands at ~p95, catching 4-5 items per 100 (the
+# targeted "exceptional" rarity tier). 0.40 is too generous (32%
+# pass, dilutes the signal). CONSERVATIVE bar drops proportionally
+# from 0.75 to 0.55.
+#
+# If discovery quality changes (different pool, different embedding
+# model, profile shift), recheck the empirical distribution and
+# re-tune. ``openbiliclaw cost`` and ad-hoc pool stats SQL queries
+# make this trivial to verify.
+DEFAULT_DELIGHT_THRESHOLD: float = 0.45
+CONSERVATIVE_DELIGHT_THRESHOLD: float = 0.55
 _LOW_EXPLORATION_OPENNESS: float = 0.3
 _DEFAULT_WEIGHTS = DelightWeights()
 
@@ -168,6 +172,16 @@ class DelightScorer:
         """Compute individual delight signal components."""
         content_text = f"{candidate.title} {candidate.description or ''}"
 
+        # Probe the embedding subsystem once with the content text. If
+        # this returns empty, the provider is genuinely broken — the
+        # downstream signal calls would then all return 0.0 silently.
+        # Cheap: subsequent embed() calls for the same content_text hit
+        # the L1 cache (~10µs).
+        embed_alive = True
+        if self._embedding is not None:
+            probe_vec = await self._embedding.embed(content_text)
+            embed_alive = bool(probe_vec)
+
         deep_need = await self._deep_need_alignment(content_text, profile)
         insight = await self._insight_resonance(content_text, profile)
         likes = await self._likes_alignment(content_text, profile)
@@ -176,28 +190,17 @@ class DelightScorer:
         exploration = self._exploration_match(candidate, profile, novelty)
         dislike = await self._dislike_penalty(content_text, profile)
 
-        # Surface "embedding subsystem dead" cascades. When the embedding
-        # provider is broken (proxy hijack, Ollama OOM, network glitch),
-        # every embedding-driven signal silently returns 0.0 and the
-        # final score collapses below threshold for ALL candidates,
-        # which previously looked indistinguishable from "user just has
-        # narrow tastes". Embedding-driven signals are likes/deep_need/
-        # insight/dislike — if all four are exactly 0.0 there's a near-
-        # zero chance that's a legitimate scoring outcome (it would
-        # require empty user likes + empty deep_needs + empty insights +
-        # empty disliked_topics simultaneously). Log a single WARN per
-        # such candidate so a stuck embedding pipeline becomes visible
-        # at the recommendation layer, not just the embedding layer.
-        if (
-            self._embedding is not None
-            and deep_need == 0.0
-            and insight == 0.0
-            and likes == 0.0
-            and dislike == 0.0
-        ):
+        # Surface "embedding subsystem dead" cascades — only when the
+        # provider actually returned no vector for the content. Earlier
+        # version (v0.3.31) flagged the case where all 4 embedding-
+        # driven signals were 0.0, but that fires false-positive on
+        # legitimate content-out-of-user-interest items: a history doc
+        # for a tech-only user gets likes=0.0 from low cosine + clamp,
+        # not from a dead embedding. embed_alive directly distinguishes.
+        if self._embedding is not None and not embed_alive:
             logger.warning(
-                "Delight scoring degraded for %s: all 4 embedding-driven "
-                "signals are 0.0 (likely embedding subsystem failure). "
+                "Delight scoring degraded for %s: embedding provider "
+                "returned empty vector for content text "
                 "Score will be capped at non-embedding signals only.",
                 getattr(candidate, "bvid", "?"),
             )
@@ -397,9 +400,25 @@ class DelightScorer:
             sim = cosine_similarity(content_vec, term_vec)
             max_sim = max(max_sim, sim)
 
-        # Sharper threshold than positive signals: only similarity > 0.55
-        # contributes; below that, treat as no concern.
-        return max(0.0, min(1.0, (max_sim - 0.55) * 2.5))
+        # Threshold + amplifier calibrated for bge-m3 (multilingual,
+        # the user's main local embedding). bge-m3 puts low-semantic
+        # Chinese fragments — live-stream titles like "青梅煮酒_20260425
+        # dy主播", short metadata strings, etc. — into a "generic
+        # Chinese" embedding cluster where cosine similarity to ANY
+        # Chinese phrase floats around 0.78-0.85. The original
+        # ``(sim - 0.55) * 2.5`` (calibrated for Gemini's larger
+        # baseline spread) blew through this cluster: any low-semantic
+        # Chinese title scored dislike_penalty ≈ 0.6-0.73 against
+        # arbitrary disliked terms, killing legitimate delight scores.
+        # Empirical bge-m3 cosine distribution against the user's
+        # disliked_topics:
+        #   high-semantic content (e.g. "Scratch物理引擎"):  0.02-0.05
+        #   low-semantic fragments ("dy主播 青梅煮酒"):      0.78-0.85
+        #   actually similar topic (genuine match):          0.88-0.95
+        # Threshold 0.78 cuts the false-positive cluster; amplifier
+        # 1.5 keeps the true-positive band (0.88+) actionable without
+        # over-penalizing borderline matches.
+        return max(0.0, min(1.0, (max_sim - 0.78) * 1.5))
 
     def _novelty_factor(self, candidate: SupportsDelightCandidate) -> float:
         """Score novelty based on discovery strategy and topic freshness."""
