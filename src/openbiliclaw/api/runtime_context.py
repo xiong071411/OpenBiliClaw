@@ -167,6 +167,7 @@ class RuntimeContext:
             bilibili_client=new_bilibili_client,
             concurrency=concurrency,
             embedding_service=new_embedding_service,
+            database=cast("Any", self.database),
         )
         new_discovery_engine.register_strategy(search_strategy)
         new_discovery_engine.register_strategy(trending_strategy)

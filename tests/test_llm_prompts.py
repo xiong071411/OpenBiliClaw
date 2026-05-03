@@ -140,6 +140,64 @@ def test_build_explore_domains_prompt_requires_core_interest_anchors() -> None:
     assert "why_it_might_resonate" in system_prompt
 
 
+def test_build_explore_domains_prompt_passes_covered_groups_into_user_msg() -> None:
+    """v0.3.31+: covered_topic_groups feeds into the user message and
+    the system prompt names the rule. Together this lets the LLM avoid
+    re-proposing already-saturated areas."""
+    covered = ["人工智能", "认知科学", "体育预测"]
+    messages = build_explore_domains_prompt(
+        profile_summary={"interests": ["AI"]},
+        covered_topic_groups=covered,
+    )
+
+    system_prompt = messages[0]["content"]
+    user_prompt = messages[1]["content"]
+
+    # System rule must reference the constraint by name so the LLM
+    # actually applies it rather than ignoring the user-msg block.
+    assert "covered_topic_groups" in system_prompt
+    assert "盲区优先" in system_prompt or "禁止" in system_prompt
+
+    # User msg must carry the actual list (deduped, JSON-serialized).
+    assert "<covered_topic_groups>" in user_prompt
+    for label in covered:
+        assert label in user_prompt
+
+
+def test_build_explore_domains_prompt_omits_block_when_no_covered_groups() -> None:
+    """Empty / None covered list → original prompt shape, no extra
+    block added (back-compat for callers that don't pass DB)."""
+    messages_none = build_explore_domains_prompt(
+        profile_summary={"interests": []},
+        covered_topic_groups=None,
+    )
+    messages_empty = build_explore_domains_prompt(
+        profile_summary={"interests": []},
+        covered_topic_groups=[],
+    )
+
+    for m in (messages_none, messages_empty):
+        assert "<covered_topic_groups>" not in m[1]["content"]
+
+
+def test_build_explore_domains_prompt_caps_covered_groups_at_30() -> None:
+    """Defensive: don't blow up the prompt size when the active pool has
+    hundreds of distinct topic_groups. Cap at 30 so the most-covered
+    ones always get into the avoidance signal."""
+    covered = [f"topic_{i}" for i in range(100)]
+    messages = build_explore_domains_prompt(
+        profile_summary={"interests": []},
+        covered_topic_groups=covered,
+    )
+    user_prompt = messages[1]["content"]
+
+    # First 30 included, anything past 30 is dropped to keep prompt sane
+    assert "topic_0" in user_prompt
+    assert "topic_29" in user_prompt
+    assert "topic_50" not in user_prompt
+    assert "topic_99" not in user_prompt
+
+
 # ----------------------------------------------------------------------
 # v0.3.28+: prompt-cache convention enforcement.
 #

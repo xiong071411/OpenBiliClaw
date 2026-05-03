@@ -28,6 +28,18 @@ from openbiliclaw.llm.prompts import build_explore_domains_prompt
 if TYPE_CHECKING:
     from openbiliclaw.llm.embedding import SupportsEmbeddingService
     from openbiliclaw.soul.profile import SoulProfile
+    from openbiliclaw.storage.database import Database
+
+
+# Minimal contract — explore only needs the topic-group-coverage query
+# and shouldn't depend on the full Database surface (keeps unit tests
+# light, makes injection simple).
+class _SupportsTopicCoverage:
+    """Minimal protocol the strategy needs from a Database-like object."""
+
+    def get_active_pool_topic_groups(
+        self, *, limit: int = 30, min_count: int = 2
+    ) -> list[str]: ...
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +52,14 @@ class ExploreStrategy(DiscoveryStrategy):
     bilibili_client: SupportsSearchClient
     concurrency: DiscoveryConcurrencyController | None = None
     embedding_service: SupportsEmbeddingService | None = None
+    # v0.3.31+: optional database handle so the strategy can query
+    # which topic_groups are already saturated in the active pool.
+    # The LLM domain generator avoids re-proposing those, which is
+    # the main fix for the "explore returned 30 items / 8 distinct
+    # topic_groups" pathology — most of the collapse came from the
+    # generator suggesting domains that mapped to already-covered
+    # topic_groups by the time the eval LLM labeled them.
+    database: _SupportsTopicCoverage | None = None
     score_threshold: float = 0.65
     queries_per_domain: int = 3
     max_domains: int = 5
@@ -249,9 +269,34 @@ class ExploreStrategy(DiscoveryStrategy):
         return results
 
     async def _generate_domains(self, profile: SoulProfile) -> list[dict[str, object]]:
+        # v0.3.31+: feed already-saturated topic_groups to the LLM as
+        # "blind-spot guide" so it doesn't re-propose well-covered
+        # areas. Soft-fails to None on any DB error; the prompt's
+        # default branch (no covered_topic_groups) is the back-compat
+        # path.
+        covered_topic_groups: list[str] | None = None
+        if self.database is not None:
+            try:
+                covered_topic_groups = self.database.get_active_pool_topic_groups(
+                    limit=30,
+                    min_count=2,
+                )
+            except Exception:
+                logger.debug(
+                    "explore: failed to load covered_topic_groups, falling back",
+                    exc_info=True,
+                )
+        if covered_topic_groups:
+            logger.info(
+                "explore: feeding %d covered topic_groups to domain generator (top 5: %s)",
+                len(covered_topic_groups),
+                ", ".join(covered_topic_groups[:5]),
+            )
+
         messages = build_explore_domains_prompt(
             profile_summary=build_profile_summary(profile)
-            | {"exploration_openness": profile.preferences.exploration_openness}
+            | {"exploration_openness": profile.preferences.exploration_openness},
+            covered_topic_groups=covered_topic_groups,
         )
         try:
             response = await self.llm_service.complete_structured_task(

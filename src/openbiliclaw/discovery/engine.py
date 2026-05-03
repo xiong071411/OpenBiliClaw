@@ -782,14 +782,50 @@ class ContentDiscoveryEngine:
             )
             elapsed = time.monotonic() - t0
             kept = sum(1 for s in batch_scores if s > 0)
+            # v0.3.31+: diversity snapshot of the kept items so we can
+            # see whether discovery is feeding the pool with variety or
+            # 30 candidates that all collapse to the same topic_group.
+            from collections import Counter as _C
+
+            kept_items = [
+                batch_contents[i] for i, s in enumerate(batch_scores) if s > 0
+            ]
+            topics: _C[str] = _C(
+                (getattr(c, "topic_group", "") or "untagged").strip().lower()
+                for c in kept_items
+            )
+            styles: _C[str] = _C(
+                (getattr(c, "style_key", "") or "untagged").strip().lower()
+                for c in kept_items
+            )
+            franchises: _C[str] = _C(
+                (getattr(c, "franchise_key", "") or "").strip().lower()
+                for c in kept_items
+            )
+            del franchises[""]  # don't count non-franchise items
+            top_topic = topics.most_common(1)[0] if topics else ("", 0)
+            top_franchise = franchises.most_common(1)[0] if franchises else ("", 0)
             logger.info(
-                "eval_batch %d/%d done: source=%s size=%d elapsed=%.1fs kept=%d",
+                "eval_batch %d/%d done: source=%s size=%d elapsed=%.1fs kept=%d "
+                "diversity={topics: %d uniq, top=%s×%d (%.0f%%); styles: %d uniq, "
+                "top=%s×%d; franchises: %d uniq%s}",
                 batch_idx,
                 total_batches,
                 source_context or "mixed",
                 len(batch_indices),
                 elapsed,
                 kept,
+                len(topics),
+                top_topic[0] or "—",
+                top_topic[1],
+                (top_topic[1] / kept * 100) if kept else 0,
+                len(styles),
+                styles.most_common(1)[0][0] if styles else "—",
+                styles.most_common(1)[0][1] if styles else 0,
+                len(franchises),
+                f", top_franchise={top_franchise[0]}×{top_franchise[1]}"
+                if top_franchise[1] > 1
+                else "",
             )
             return batch_indices, batch_scores
 
@@ -1046,11 +1082,31 @@ class ContentDiscoveryEngine:
                 continue
             items: list[DiscoveredContent] = outcome
             results.extend(items)
+            # v0.3.31+: per-strategy raw diversity snapshot. Items at
+            # this point are pre-LLM-evaluation (topic_group / style_key
+            # not set yet), so we report what's observable: title-level
+            # uniqueness, up_name spread, and platform mix. Catches
+            # "search returned 13 items but they're all from the same UP
+            # / all same title prefix" pathologies.
+            from collections import Counter as _C
+
+            ups: _C[str] = _C((c.up_name or "").strip().lower() for c in items)
+            del ups[""]
+            unique_titles = len({c.title.strip() for c in items if c.title})
+            platforms: _C[str] = _C((c.source_platform or "bilibili") for c in items)
+            top_up = ups.most_common(1)[0] if ups else ("", 0)
             logger.info(
-                "Strategy '%s' found %d items.%s",
+                "Strategy '%s' found %d items.%s "
+                "diversity={unique_titles=%d/%d, unique_ups=%d, top_up=%s×%d, platforms=%s}",
                 strategy.name,
                 len(items),
                 "" if items else " (empty — all candidates filtered or generation failed)",
+                unique_titles,
+                len(items) or 1,
+                len(ups),
+                top_up[0] or "—",
+                top_up[1],
+                dict(platforms.most_common()),
             )
         return results
 

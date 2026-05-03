@@ -433,6 +433,7 @@ def _build_discovery_engine() -> Any:
         bilibili_client=bilibili_client,
         concurrency=concurrency,
         embedding_service=embedding_service,
+        database=database,
     )
 
     engine.register_strategy(search_strategy)

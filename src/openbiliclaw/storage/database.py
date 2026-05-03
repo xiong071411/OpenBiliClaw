@@ -946,6 +946,39 @@ class Database:
         )
         return [str(row[0]) for row in cursor.fetchall() if row and row[0]]
 
+    def get_active_pool_topic_groups(
+        self,
+        *,
+        limit: int = 30,
+        min_count: int = 2,
+    ) -> list[str]:
+        """Return the top ``limit`` topic_group names currently in active pool.
+
+        Used by ExploreStrategy to know which topics the pool already
+        covers, so the LLM that generates explore domains can avoid
+        re-proposing those (the v0.3.31 explore-blind-spot pattern).
+        Filters to groups with at least ``min_count`` members so a
+        single one-off item doesn't block exploration of an actually-
+        empty area. Result is sorted by group size DESC.
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT topic_group, COUNT(*) AS n
+            FROM content_cache
+            WHERE COALESCE(pool_status, 'fresh') = 'fresh'
+              AND COALESCE(topic_group, '') != ''
+              AND NOT EXISTS (
+                SELECT 1 FROM recommendations AS r WHERE r.bvid = content_cache.bvid
+              )
+            GROUP BY topic_group
+            HAVING COUNT(*) >= ?
+            ORDER BY n DESC, topic_group ASC
+            LIMIT ?
+            """,
+            (max(1, int(min_count)), max(1, int(limit))),
+        )
+        return [str(row["topic_group"]) for row in cursor.fetchall()]
+
     def get_topic_group_samples(
         self,
         *,

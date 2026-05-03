@@ -113,6 +113,7 @@ def build_openclaw_adapter_services() -> OpenClawAdapterServices:
         llm_service=llm_service,
         bilibili_client=bilibili_client,
         concurrency=concurrency,
+        database=database,
     )
     discovery_engine.register_strategy(search_strategy)
     discovery_engine.register_strategy(trending_strategy)
