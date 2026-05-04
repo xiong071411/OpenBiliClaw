@@ -4,6 +4,34 @@
 
 ---
 
+## v0.3.47: 推荐文案精排提前出货 — 与 discovery 各 strategy 并行（2026-05-05）
+
+### 背景
+
+线上日志看到一个真问题：popup 推荐卡里大量出现「《X》偏实操一点，信息是能直接拿来用的」这种 fallback 模板文案——它**就是源码里 11 套硬编码模板之一**，触发条件是候选的 `pool_expression` 字段为空。
+
+跟踪原因：`precompute_pool_copy`（生成 expression 的那一步）排在 `_run_refresh_plan` 末尾，**所有 discovery strategy 都跑完才轮到它**。而 deepseek-v4-flash 开了 `reasoning_effort` 之后单批 `evaluate_batch` 要 8-16 分钟。一次 refresh 串行多个 strategy = 30+ 分钟之后 expression 才开始跑。这段时间内 popup 看到的内容全用 fallback 模板。
+
+实测一份 43 分钟的 daemon 会话日志：`recommendation.write_expression` LLM 调用**只发了 2 次** → 整个会话只有 ~14 条候选拿到了真 LLM 文案，其余 95% 都是模板。
+
+### 改动
+
+- **`RecommendationEngine._precompute_lock`** (`recommendation/engine.py`): 新增 `asyncio.Lock` 串行化并发的 `precompute_pool_copy` 调用——多个 per-strategy fire-and-forget task 不会同时 load 相同的 un-precomputed 候选，避免对同一批 item 双开 LLM 调用浪费 token。
+- **`precompute_pool_copy` 内部并行化** + **batch_size 8 → 30**: 之前 `for batch in batches: await _precompute_batch(...)` 串行，现在 `asyncio.gather` 并发。一次精排 60 条候选只要 1 个 batch latency（~30s）而不是 8 个 × 30s。
+- **`_run_refresh_plan` 每个 strategy 完成后立刻 fire 一个 expression task**（`runtime/refresh.py`）: 不再等所有 strategy 跑完才统一精排。每个 strategy 完成一调 `asyncio.create_task(self._safe_precompute_pool_copy(...))`，让 expression 跟下一个 strategy 的 LLM 调用**并行**。Lock 在 engine 内串行排队，安全。最后 `await asyncio.gather` 这些 task 才进 cleanup（trim / prewarm）。
+- **`_safe_precompute_pool_copy` helper**: 包装 `precompute_pool_copy` 吞掉异常 + log，给 fire-and-forget task 提供干净的失败兜底。
+- **回退分支**: 整个 refresh round 没产生任何 strategy（plan 为空 / 全部 short-circuit）时仍然 sync 跑一次 `_safe_precompute_pool_copy`，保证早期 cycle backlog 还能被精排清完。
+
+### 影响
+
+- **expression 出货时机从「全部 strategy 跑完」提前到「第一个 strategy 跑完」**——按日志数据估算 popup 看到真 LLM 文案的延迟从 ~22 min 降到 ~5-10 min。
+- **single precompute_pool_copy 内部 N 个 batch 并行**: 60 条候选从 N × 30s 降到 ~30s 全部完成。
+- **Lock 防 LLM token 浪费**: 多个 fire-and-forget task 排队，不重复对同一批 item 跑精排。
+- 不动 prompt builder（`build_batch_expression_prompt` 已经支持任意 batch 大小，只是默认 batch_size=8 没充分用上），LLM cache 命中率不受影响。
+- 测试：`tests/test_refresh_runtime.py` 75/75 通过，更新一处 assertion（precompute_pool_copy 现在按 strategy 数被调用 N 次而不是 1 次）+ 在 `_FakeRecommendationEngine` 补 `prewarm_pool_mmr_embeddings`。
+
+---
+
 ## v0.3.46: init 期 profile-not-ready 假错误轰炸治理（2026-05-05）
 
 ### 背景

@@ -199,6 +199,9 @@ class _FakeRecommendationEngine:
     async def prewarm_supergroup_embeddings(self) -> int:
         return 0
 
+    async def prewarm_pool_mmr_embeddings(self, *, limit: int = 200) -> int:
+        return 0
+
 
 class _FakeEventHub:
     def __init__(self) -> None:
@@ -336,7 +339,14 @@ async def test_refresh_controller_backfills_pool_copy_after_replenishment() -> N
 
     await controller.refresh_if_needed()
 
-    assert recommendations.pool_copy_calls == [({"profile": "ok"}, 60)]
+    # v0.3.47+: precompute_pool_copy is fired once per discovery
+    # strategy (parallel with subsequent strategies' LLM calls), so the
+    # default 2-strategy plan produces 2 calls. Each carries the same
+    # profile + per-refresh backfill limit.
+    assert len(recommendations.pool_copy_calls) >= 1
+    assert all(
+        call == ({"profile": "ok"}, 60) for call in recommendations.pool_copy_calls
+    )
 
 
 async def test_refresh_controller_uses_shared_delight_threshold_for_runtime_queries() -> None:

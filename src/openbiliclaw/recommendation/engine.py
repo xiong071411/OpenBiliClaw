@@ -162,6 +162,11 @@ class RecommendationEngine:
         self._curator = curator
         self._embedding_service = embedding_service
         self._classify_lock = asyncio.Lock()
+        # v0.3.47+: serialise precompute_pool_copy so multiple
+        # per-strategy fire-and-forget tasks (now created from
+        # _run_refresh_plan after each strategy completes) don't load
+        # the same un-precomputed candidates and double-spend LLM tokens.
+        self._precompute_lock = asyncio.Lock()
         # Background-computed supergroup canonical map. Populated by
         # prewarm_supergroup_embeddings() during refresh ticks; consumed
         # by serve()'s _merge_topic_supergroups for instant lookup.
@@ -598,12 +603,21 @@ class RecommendationEngine:
         profile: SoulProfile,
         limit: int = 20,
         delight_limit: int = 30,
-        batch_size: int = 8,
+        batch_size: int = 30,
     ) -> int:
         """Precompute fast-path popup copy for fresh pool candidates.
 
-        Uses batched LLM calls: one call generates expressions for up to
-        ``batch_size`` items, reducing API calls by ~8x.
+        v0.3.47+: batches dispatched in parallel via ``asyncio.gather``,
+        and ``batch_size`` defaults to 30 (matches discovery's eval batch).
+        With the previous serial × ``batch_size=8`` shape, a 60-item
+        backlog needed 8 LLM calls and 8 sequential round trips. The new
+        shape needs 2 LLM calls running concurrently — popup copy
+        catches up minutes faster.
+
+        The whole call is guarded by ``self._precompute_lock`` so the
+        per-strategy fire-and-forget tasks queued from
+        ``_run_refresh_plan`` don't load the same un-precomputed
+        candidates and double-spend LLM tokens.
 
         Also runs delight scoring on un-scored candidates and generates
         delight reasons for items above the delight threshold.
@@ -618,35 +632,48 @@ class RecommendationEngine:
                 scoring whenever the copy queue is short.
             batch_size: Batch size for expression generation LLM calls.
         """
-        # Safety net: classify any leftover un-evaluated items that were
-        # not caught by the ingest-time classification (e.g. race condition,
-        # or the background task was suppressed).  This is a no-op when all
-        # pool items already have style_key and topic_group.
-        try:
-            await self.classify_pool_backlog(profile=profile, limit=limit)
-        except Exception:
-            logger.exception("classify_pool_backlog failed, continuing with precompute")
+        async with self._precompute_lock:
+            # Safety net: classify any leftover un-evaluated items that were
+            # not caught by the ingest-time classification (e.g. race
+            # condition, or the background task was suppressed). No-op when
+            # all pool items already have style_key and topic_group.
+            try:
+                await self.classify_pool_backlog(profile=profile, limit=limit)
+            except Exception:
+                logger.exception(
+                    "classify_pool_backlog failed, continuing with precompute"
+                )
 
-        candidates = self._load_pool_candidates_needing_copy(limit=max(0, limit))
-        if not candidates:
-            # Even when no expression work is needed, still run delight scoring
+            candidates = self._load_pool_candidates_needing_copy(limit=max(0, limit))
+            if not candidates:
+                await self.precompute_delight_scores(
+                    profile=profile,
+                    limit=delight_limit,
+                )
+                return 0
+
+            batches = [
+                candidates[i : i + batch_size]
+                for i in range(0, len(candidates), batch_size)
+            ]
+            results = await asyncio.gather(
+                *(self._precompute_batch(batch, profile) for batch in batches),
+                return_exceptions=True,
+            )
+            completed = 0
+            for r in results:
+                if isinstance(r, BaseException):
+                    logger.warning("Expression batch failed: %s", r)
+                    continue
+                completed += int(r or 0)
+
+            # Run delight scoring after expression precompute. Inside the
+            # lock so a back-to-back precompute call doesn't try to score
+            # the same items twice.
             await self.precompute_delight_scores(
                 profile=profile,
                 limit=delight_limit,
             )
-            return 0
-
-        completed = 0
-        for batch_start in range(0, len(candidates), batch_size):
-            batch = candidates[batch_start : batch_start + batch_size]
-            count = await self._precompute_batch(batch, profile)
-            completed += count
-
-        # Run delight scoring after expression precompute
-        await self.precompute_delight_scores(
-            profile=profile,
-            limit=delight_limit,
-        )
         return completed
 
     # ── Source-agnostic content classification ───────────────────────

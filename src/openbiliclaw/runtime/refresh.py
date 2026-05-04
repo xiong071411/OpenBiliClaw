@@ -494,6 +494,26 @@ class ContinuousRefreshController:
             limit=0,
         )
 
+    async def _safe_precompute_pool_copy(self, *, profile: Any) -> int:
+        """Run ``precompute_pool_copy`` swallowing any exception.
+
+        v0.3.47+ uses this from per-strategy fire-and-forget tasks in
+        ``_run_refresh_plan``. The lock inside the engine queues
+        concurrent calls so two strategies don't double-spend LLM
+        tokens; this wrapper exists so a single failed expression
+        batch doesn't take down the whole refresh round (caller does
+        ``return_exceptions=True`` on the gather, but a logged warning
+        from one place is cleaner than scattering try/except).
+        """
+        try:
+            return await self.recommendation_engine.precompute_pool_copy(
+                profile=profile,
+                limit=_MAX_DISCOVERY_BACKFILL_PER_REFRESH,
+            )
+        except Exception:
+            logger.exception("precompute_pool_copy task failed")
+            return 0
+
     async def run_forever(self) -> None:
         """Launch all background tasks as independent concurrent loops.
 
@@ -757,6 +777,15 @@ class ContinuousRefreshController:
         all_discovered: list[Any] = []
         flattened_strategies: list[str] = []
         replenished_topics: list[str] = []
+        # v0.3.47+: per-strategy expression precompute tasks. Each strategy's
+        # `discover()` blocks on a slow LLM eval batch (8-16 minutes
+        # observed in production). Without this, popup copy precompute was
+        # gated until ALL strategies finished — i.e. ~30 min of latency
+        # for fresh items. Now: as soon as a strategy yields content we
+        # kick a precompute task; ``self._precompute_lock`` inside
+        # ``RecommendationEngine`` serialises them so two tasks don't
+        # double-spend LLM tokens on the same un-precomputed candidates.
+        precompute_tasks: list[asyncio.Task[Any]] = []
 
         await self._publish_event(
             {
@@ -796,6 +825,15 @@ class ContinuousRefreshController:
 
             if discovered:
                 replenished_topics.extend(self._extract_topics(discovered))
+                # Fire expression precompute now (in parallel with the next
+                # strategy's discovery LLM call). The lock inside the engine
+                # queues this if a previous task is still running.
+                precompute_tasks.append(
+                    asyncio.create_task(
+                        self._safe_precompute_pool_copy(profile=profile),
+                        name="precompute_pool_copy",
+                    )
+                )
 
         if flattened_strategies:
             self.database.trim_explore_cluster_overflow(max_per_cluster=3)
@@ -812,10 +850,17 @@ class ContinuousRefreshController:
             # to the popup (no per-item chrome notification — popup
             # re-fetches /api/delight/pending-batch when this fires).
             delight_count_before = self._safe_count_delight_candidates()
-            await self.recommendation_engine.precompute_pool_copy(
-                profile=profile,
-                limit=_MAX_DISCOVERY_BACKFILL_PER_REFRESH,
-            )
+            # v0.3.47+: drain the per-strategy precompute tasks fired
+            # eagerly above. They have already been running in parallel
+            # with discovery's later strategies, so this awaits whatever
+            # is still pending instead of starting from scratch. If the
+            # discovery loop produced nothing precompute-eligible (e.g.
+            # all rejected at eval), fall back to one synchronous call so
+            # any earlier-cycle backlog still gets cleared.
+            if precompute_tasks:
+                await asyncio.gather(*precompute_tasks, return_exceptions=True)
+            else:
+                await self._safe_precompute_pool_copy(profile=profile)
             # Pre-warm supergroup-merge embeddings so the popup's "换一批"
             # hot path always hits the L1/L2 cache. New labels added by
             # this refresh round get warmed before the user clicks.
