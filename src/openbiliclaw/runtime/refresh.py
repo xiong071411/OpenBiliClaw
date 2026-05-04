@@ -187,6 +187,13 @@ class ContinuousRefreshController:
     # popup-side ``mergeRuntimeStatusEvent`` only re-renders when the
     # number actually changes — see ``_publish_pool_status_if_changed``.
     _last_published_pool_count: int = -1
+    # Flips false→true when soul profile is first detected. Used by
+    # ``_loop_refresh`` to fire a one-shot ``classify_pool_backlog``
+    # the moment init's analyze_events finishes — otherwise items
+    # ingested during the ~7-minute init window sit un-classified
+    # until the next natural refresh tick (and recommendation summary
+    # would print fallback ``topic_group="title[:N]"`` until then).
+    _profile_ready_observed: bool = False
 
     _signal_event_types = [
         "view",
@@ -521,8 +528,46 @@ class ContinuousRefreshController:
         """Discovery refresh — fills the candidate pool."""
         while True:
             with suppress(Exception):
+                await self._on_profile_ready_if_first_time()
+            with suppress(Exception):
                 await self.refresh_if_needed()
             await asyncio.sleep(self.check_interval_seconds)
+
+    async def _on_profile_ready_if_first_time(self) -> None:
+        """One-shot hook fired the tick after soul profile first appears.
+
+        Drains the un-classified pool backlog that piled up during init's
+        analyze_events window. Without this, items entering the pool
+        before profile-ready (XHS bootstrap notes, B站 history fetches)
+        sit with empty ``topic_group`` / ``style_key`` until the next
+        natural refresh tick — and the recommendation summary log shows
+        fallback ``topic_group=title[:N]`` (the ugly "屎屎/165/三花"
+        debug we saw on 2026-05-05).
+        """
+        if self._profile_ready_observed:
+            return
+        if not self._is_initialized():
+            return
+        self._profile_ready_observed = True
+        engine = self.recommendation_engine
+        classify_fn = getattr(engine, "classify_pool_backlog", None) if engine else None
+        if not callable(classify_fn):
+            return
+        try:
+            profile = await self.soul_engine.get_profile()
+        except Exception:
+            # Race: _is_initialized was true but get_profile raised.
+            # Reset the flag so the next tick retries cleanly.
+            self._profile_ready_observed = False
+            return
+        logger.info(
+            "Soul profile became ready — kicking classify_pool_backlog "
+            "to drain init-window backlog"
+        )
+        try:
+            await classify_fn(profile=profile, limit=100)
+        except Exception:
+            logger.exception("profile-ready classify_pool_backlog failed")
 
     async def _loop_soul_pipeline(self) -> None:
         """Soul profile pipeline — buffer flushes, speculator, cognition."""

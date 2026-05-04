@@ -826,8 +826,18 @@ def create_app(
         ensures every item gets ``style_key``, ``topic_group``, and
         ``relevance_score`` before it can be recommended — same treatment
         bilibili content receives during discovery.
+
+        Silent skip when soul profile hasn't been built yet (init's first
+        ~7 minutes). Otherwise events ingested before profile-ready would
+        log ERROR-level traces for every batch — the legitimate retry is
+        the next-tick + the profile-ready hook in ``SoulEngine``.
         """
         if ctx.recommendation_engine is None or ctx.soul_engine is None:
+            return
+        if not ctx.soul_engine.is_profile_ready():
+            logger.debug(
+                "Background pool classification skipped: soul profile not ready"
+            )
             return
         try:
             profile = await ctx.soul_engine.get_profile()

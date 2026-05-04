@@ -60,6 +60,12 @@ class XhsTaskProducer:
         if not self._is_due():
             return self._skip("throttled")
 
+        is_ready_fn = getattr(self.soul_engine, "is_profile_ready", None)
+        if callable(is_ready_fn) and not is_ready_fn():
+            # Init's first ~7 minutes — every minute the producer ticks
+            # would otherwise WARN. Silent skip; we'll retry next tick.
+            logger.debug("xhs producer: soul profile not ready yet")
+            return self._skip("no_profile")
         try:
             profile = await self.soul_engine.get_profile()
         except Exception as exc:

@@ -104,6 +104,16 @@ class CognitionCycle:
         state = self._load_state()
         result = CognitionCycleResult()
 
+        # Gate: awareness + insight LLM calls feed on `preference` and `soul`
+        # memory layers. If neither has been built yet (init's first ~7
+        # minutes), the analyzer prompts get near-empty inputs and tend to
+        # blow up. Silent skip here avoids the ERROR-level traces every
+        # cognition tick before the profile lands.
+        if not self._memory.get_layer("preference").data:
+            logger.debug("CognitionCycle skipped: preference layer not built yet")
+            result.throttled = True
+            return result
+
         last_awareness_at = _parse_iso(state.get("last_awareness_at"))
         last_insight_at = _parse_iso(state.get("last_insight_at"))
 

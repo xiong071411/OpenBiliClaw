@@ -2028,15 +2028,34 @@ class RecommendationEngine:
         )
         platform_counts = Counter(cls._platform_token(item) for item in candidates)
 
-        # Topic group counts via the same canonicalization the diversifier
-        # uses, so this summary reflects what the diversifier sees.
+        # Topic group counts. v0.3.46+: when an item has no proper
+        # ``topic_group`` / ``topic_key`` / tags (i.e. classify_pool_backlog
+        # hasn't run yet), bucket it as ``"_unclassified_"`` rather than
+        # leaning on ``_diversity_tokens()``'s title-prefix fallback —
+        # otherwise the summary log would print fake-looking topics like
+        # ``"165"``, ``"屎屎"`` or ``"三花"`` extracted from raw titles
+        # before the LLM evaluator gets to assign a real category.
+        # The bucketing path (used by the actual diversifier) keeps the
+        # fallback so unclassified items don't all collapse into one
+        # bucket — but the summary should not lie about what's there.
         topic_counts: Counter[str] = Counter()
         for item in candidates:
-            tokens = cls._diversity_tokens(item)
-            if not tokens:
-                topic_counts["unknown"] += 1
+            primary = (
+                cls._normalize_topic_token(item.topic_group)
+                or cls._normalize_topic_token(item.topic_key)
+            )
+            if primary:
+                topic_counts[primary] += 1
                 continue
-            topic_counts[sorted(tokens)[0]] += 1
+            tag_tokens = {
+                cls._normalize_topic_token(tag)
+                for tag in item.tags
+                if cls._normalize_topic_token(tag)
+            }
+            if tag_tokens:
+                topic_counts[sorted(tag_tokens)[0]] += 1
+            else:
+                topic_counts["_unclassified_"] += 1
 
         # Franchise key — exclude empty (non-IP-bearing content). This
         # is OUR guard against "5 different 原神 angle videos in one

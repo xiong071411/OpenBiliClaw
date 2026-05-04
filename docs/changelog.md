@@ -4,6 +4,32 @@
 
 ---
 
+## v0.3.46: init 期 profile-not-ready 假错误轰炸治理（2026-05-05）
+
+### 背景
+
+跨日志（agent-bootstrap.log + openbiliclaw.log）联合诊断发现：daemon 启动到 soul profile 建好之间约 7 分钟里，所有依赖 profile 的后台任务都在硬调 `get_profile()`，撞上 `SoulProfileNotInitializedError`，被 `except Exception` 接住后按 ERROR / WARNING 级别打日志。**单次 init 累计 4 次 ERROR + 9 次 WARNING + 6 分钟字面截断 topic 名**——功能其实都没坏，但用户体感像装炸了。
+
+同时 profile 建好之后，第一次 `classify_pool_backlog` 要等下一个自然 refresh tick（最多 60s），**期间 popup 看到 `topic_group` 字段空，被 fallback 退化成"屎屎/165/三花"这种从标题里抠的字面 token**。
+
+### 改动
+
+- **`SoulEngine.is_profile_ready()`** (`soul/engine.py`): 新增廉价、不抛异常的 profile-存在检查。后台 consumer 不再用 `try get_profile() except SoulProfileNotInitializedError` 当流控。
+- **`_classify_new_pool_items` profile 未就绪时静默跳过**（`api/app.py`）: 改用 `is_profile_ready()` 前置 gate，未就绪就 DEBUG 一行返回，不再 ERROR-level 打 stack trace。
+- **`CognitionCycle.run_if_due` 等 preference 层就绪**（`soul/cognition_cycle.py`）: 早期 awareness/insight 分析器在 preference 层为空时硬跑 LLM 必崩。改成在 `_run_awareness` 之前看 preference layer 是否非空，否则 `throttled=True` 静默返回。
+- **`xhs_producer` 用 `is_profile_ready()` 替代 try/except**（`runtime/xhs_producer.py`）: 之前每分钟一次 `WARNING xhs producer: soul profile unavailable`，现在 DEBUG 级别静默直到 profile 落地。
+- **profile-ready 转换钩子**（`runtime/refresh.py`）: `_loop_refresh` 每 tick 检测 `_is_initialized()` false→true 转换。一旦观测到，立刻调 `classify_pool_backlog(limit=100)` 把 init 窗口里堆的未分类候选一次性炒熟，不再等下个 cron tick。INFO 一行 `Soul profile became ready — kicking classify_pool_backlog`。
+- **`_build_debug_summary` topic fallback 改成 `_unclassified_`**（`recommendation/engine.py`）: 候选缺 `topic_group` / `topic_key` / `tags` 时不再贪婪从标题里抠 `[一-鿿]{2,4}` 当 topic 名（之前用户日志里看到的"屎屎"/"三花"/"165"），改打字面占位符 `_unclassified_`。**diversifier 实际 bucketing 逻辑保留 fallback**（不能让所有未分类塌成一桶），只动 summary 这一层。
+
+### 影响
+
+- **init 头 7 分钟**：4 次 `Background pool classification failed (SoulProfileNotInitializedError)` ERROR、2 次 `Awareness analyzer failed during cognition cycle` ERROR、8 次 `xhs producer: soul profile unavailable` WARNING **全部消失**（降级到 DEBUG 或直接 silent skip）。
+- **profile 一就绪立即 classify_pool_backlog**：原本要等下个 60s tick，现在同 tick 立即触发，候选 topic_group / style_key 提前 ~50s 就位。
+- **summary 日志里再也看不到"屎屎/165/三花"**：未分类候选明确打 `_unclassified_`，看的人不会以为模型疯了。
+- 不动任何 LLM prompt builder，不影响 LLM 缓存命中率。
+
+---
+
 ## v0.3.45: 「换一批」恒定亚秒级 — MMR embedding 提前到 discovery 暖入（2026-05-04）
 
 ### 背景

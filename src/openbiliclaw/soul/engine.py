@@ -227,6 +227,20 @@ class SoulEngine:
 
         return profile
 
+    def is_profile_ready(self) -> bool:
+        """Cheap, non-raising check for whether a soul profile exists.
+
+        Background-task consumers call this first to avoid using
+        ``SoulProfileNotInitializedError`` as flow control during the
+        ~7-minute init window — which would otherwise produce ERROR-level
+        traces for every classify / awareness / speculator tick that
+        runs before the profile lands.
+        """
+        try:
+            return bool(self._memory.get_layer("soul").data)
+        except Exception:
+            return False
+
     async def get_profile(self) -> OnionProfile:
         """Get the current soul profile.
 
