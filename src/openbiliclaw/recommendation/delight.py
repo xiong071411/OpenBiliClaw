@@ -105,10 +105,15 @@ class DelightWeights:
 #                  "common" tier (which doesn't read as surprise to the
 #                  user) while keeping the 0.60+ band that's genuinely
 #                  delightful. Expected: ~26/642 ≈ 4% pass rate.
-# CONSERVATIVE bar shifts to 0.65 (proportionally tighter for low-
-# exploration users — only the 0.65+ "scoring rationale = surprise" tier).
-DEFAULT_DELIGHT_THRESHOLD: float = 0.55
-CONSERVATIVE_DELIGHT_THRESHOLD: float = 0.65
+#   v0.3.41  0.57  ↑ 0.55 still admitted ~26/642 which the user judged
+#                  too many. 0.57 splits the "common" tail closer to 0.60
+#                  where the LLM's reasoning starts to read as actual
+#                  surprise rather than hedging. Expected: ~18-20/642
+#                  ≈ 3% pass rate, tracking closer to v0.3.35's target.
+# CONSERVATIVE bar shifts to 0.67 (proportionally tighter for low-
+# exploration users — only the 0.67+ "scoring rationale = surprise" tier).
+DEFAULT_DELIGHT_THRESHOLD: float = 0.57
+CONSERVATIVE_DELIGHT_THRESHOLD: float = 0.67
 _LOW_EXPLORATION_OPENNESS: float = 0.3
 _DEFAULT_WEIGHTS = DelightWeights()
 
