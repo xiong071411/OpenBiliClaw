@@ -75,6 +75,7 @@ class _ClassifyLLM:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         caller: str = "",
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         self.calls.append({"system_instruction": system_instruction, "user_input": user_input})
 

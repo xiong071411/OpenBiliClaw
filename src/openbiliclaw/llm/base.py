@@ -86,6 +86,7 @@ class LLMProvider(ABC):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         json_mode: bool = False,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         """Send a chat completion request.
 
@@ -94,6 +95,13 @@ class LLMProvider(ABC):
             temperature: Sampling temperature.
             max_tokens: Maximum tokens in response.
             json_mode: Whether to request structured JSON output.
+            reasoning_effort: Per-call override for the provider's
+                ``reasoning_effort`` setting (currently honoured by
+                DeepSeek; ignored by other providers). ``None`` means
+                "use the provider's configured default";
+                ``""`` means "explicitly disable thinking for this
+                call" (used by structured tasks like discovery's
+                ``_evaluate_batch`` that don't benefit from reasoning).
 
         Returns:
             Standardized LLMResponse.
@@ -212,6 +220,7 @@ class LLMRegistry:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         json_mode: bool = False,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         """Execute a completion request with sequential provider fallback."""
         last_error: Exception | None = None
@@ -232,6 +241,7 @@ class LLMRegistry:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     json_mode=json_mode,
+                    reasoning_effort=reasoning_effort,
                 )
                 self._rate_limited_until.pop(provider_name, None)
                 return response

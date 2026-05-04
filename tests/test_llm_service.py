@@ -30,6 +30,7 @@ class FakeRegistry:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         json_mode: bool = False,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         self.calls.append(messages)
         self.json_modes.append(json_mode)

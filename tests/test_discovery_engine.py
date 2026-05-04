@@ -56,6 +56,7 @@ class _SlowLLMService:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         caller: str = "",
+        reasoning_effort: str | None = None,
     ) -> object:
         self.active_calls += 1
         self.max_active_calls = max(self.max_active_calls, self.active_calls)
@@ -1013,6 +1014,7 @@ async def test_evaluate_batch_intra_batch_franchise_cap() -> None:
             temperature: float = 0.7,
             max_tokens: int = 4096,
             caller: str = "",
+            reasoning_effort: str | None = None,
         ) -> object:
             # 6 items, all "张雪机车" franchise, with descending scores.
             results = [

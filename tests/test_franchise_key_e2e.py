@@ -190,6 +190,7 @@ async def test_evaluator_propagates_llm_franchise_key_through_to_db(
             user_input: str,
             max_tokens: int,
             caller: str = "",
+            reasoning_effort: str | None = None,
         ) -> object:
             self.calls += 1
             # Inspect user_input to figure out the input order so the
@@ -305,6 +306,7 @@ async def test_evaluate_content_batch_default_size_30_uses_single_llm_call(
             user_input: str,
             max_tokens: int,
             caller: str = "",
+            reasoning_effort: str | None = None,
         ) -> object:
             self.call_count += 1
             input_data = json.loads(

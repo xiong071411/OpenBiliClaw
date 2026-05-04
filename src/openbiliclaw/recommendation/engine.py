@@ -827,6 +827,9 @@ class RecommendationEngine:
             system_instruction=messages[0]["content"],
             user_input=messages[1]["content"],
             max_tokens=8192,
+            # v0.3.51+: structured XHS classification — pure score +
+            # categorical fields, doesn't benefit from reasoning chain.
+            reasoning_effort="",
             caller="recommendation.evaluate_batch",
         )
         raw = str(getattr(response, "content", "")).strip()
@@ -1050,6 +1053,11 @@ class RecommendationEngine:
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
                 max_tokens=8192,
+                # v0.3.51+: expression generation is short copy
+                # writing per item — reasoning chain just bloats
+                # output (write_expression cost ~3x with reasoning
+                # vs without, no quality difference).
+                reasoning_effort="",
                 caller="recommendation.write_expression",
             )
             payload = json.loads(response.content.strip())

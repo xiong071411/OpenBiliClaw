@@ -47,6 +47,7 @@ class FakeLLMService:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         caller: str = "",
+        reasoning_effort: str | None = None,
     ) -> object:
         self.calls.append(
             {
@@ -113,6 +114,7 @@ class _SlowScoringLLMService(FakeLLMService):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         caller: str = "",
+        reasoning_effort: str | None = None,
     ) -> object:
         self.active_calls += 1
         self.max_active_calls = max(self.max_active_calls, self.active_calls)
@@ -285,8 +287,23 @@ async def test_trending_strategy_interleaves_rids_for_eval_fairness() -> None:
     can't starve smaller rids of evaluation slots."""
     from openbiliclaw.discovery.strategies.strategies import TrendingStrategy
 
-    # Pre-stage 50 score responses so the score path never runs out
-    score_payloads = [f'{{"score": 0.80, "reason": "r{i}"}}' for i in range(50)]
+    # Pre-stage 50 score responses. v0.3.51+ added an intra-batch
+    # style cap (=8 items / style) to ``_evaluate_batch``, so we
+    # rotate ``style_key`` across the responses — otherwise all 11
+    # ranking entries would heuristically default to ``news_brief``
+    # and trigger the cap, which is correct production behaviour but
+    # would mask the interleave-fairness invariant this test checks.
+    _STYLES = [
+        "deep_dive",
+        "fun_variety",
+        "story_doc",
+        "lifestyle",
+        "review_roundup",
+    ]
+    score_payloads = [
+        f'{{"score": 0.80, "reason": "r{i}", "style_key": "{_STYLES[i % len(_STYLES)]}"}}'
+        for i in range(50)
+    ]
     llm_service = FakeLLMService(['{"rids": [36, 181, 119]}', *score_payloads])
 
     bilibili_client = FakeRankingClient(

@@ -43,6 +43,7 @@ class FakeProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         json_mode: bool = False,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         self.call_count += 1
         if self.errors:

@@ -234,6 +234,14 @@ VALID_STYLE_KEYS: frozenset[str] = frozenset(
 # excursion from dumping 13 items of the same UP into one batch.
 _BATCH_FRANCHISE_CAP: int = 4
 
+# v0.3.51+: per-batch style cap. Mirrors the franchise cap above —
+# without it, a single eval_batch easily had 9-12 items of the same
+# style (fun_variety / story_doc / light_chat / practical_guide all
+# observed at 30-40% concentration in production). 8/30 = ~27% which
+# still lets a dominant style breathe but blocks single-style
+# domination of the pool.
+_BATCH_STYLE_CAP: int = 8
+
 # v0.3.50+: pool-wide franchise quota for ``_cache_results``. Once a
 # franchise has this many items in the pool, new same-franchise items
 # are skipped before they can compete for serve() slots. Sized at ~1.5%
@@ -917,12 +925,14 @@ class ContentDiscoveryEngine:
             llm_call = self._llm_service.complete_structured_task(
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
-                # v0.3.25+: 8192 → 16384 to leave headroom for the larger
-                # batch_size=30 default. 30 items × ~50 tokens of JSON
-                # each ≈ 1500 output tokens; the bump gives 10x slack
-                # so a verbose ``reason`` field doesn't truncate the
-                # array on the last few items.
+                # v0.3.51+: explicitly disable provider thinking. This
+                # task is structured scoring (return JSON array), not
+                # reasoning — production logs showed 8-16 min/batch
+                # with reasoning enabled, dropping to ~30s without.
+                # 16384 max_tokens is plenty for the 1500-3000 token
+                # output a 30-item JSON array now needs.
                 max_tokens=16384,
+                reasoning_effort="",
                 caller="discovery.evaluate_batch",
             )
             if self._concurrency is not None:
@@ -1016,6 +1026,46 @@ class ContentDiscoveryEngine:
                         f"{k}×{len(v)}"
                         for k, v in buckets.items()
                         if len(v) > cap
+                    ),
+                )
+
+        # v0.3.51+: same-style cap (mirrors v0.3.50 franchise cap).
+        # Production logs (2026-05-05) showed single-style concentration
+        # 7-12/30 in many eval batches (fun_variety×10, story_doc×11,
+        # light_chat×11, practical_guide×10). Pool inherits this skew
+        # because eval_batch keeps all 30 — diversifier at serve time
+        # can't unbias a pool that's already 30%+ same-style.
+        # Cap=8 (27% of a 30-batch) lets a style have a small foothold
+        # but stops single-style domination of the round.
+        style_cap = _BATCH_STYLE_CAP
+        if style_cap > 0 and batch:
+            style_buckets: dict[str, list[int]] = {}
+            for i, content in enumerate(batch):
+                if i >= len(results) or results[i] <= 0:
+                    continue
+                style_key = (content.style_key or "").strip().lower()
+                if not style_key:
+                    continue
+                style_buckets.setdefault(style_key, []).append(i)
+            style_dropped = 0
+            for style_key, indices in style_buckets.items():
+                if len(indices) <= style_cap:
+                    continue
+                indices.sort(key=lambda idx: results[idx], reverse=True)
+                for idx in indices[style_cap:]:
+                    results[idx] = 0.0
+                    batch[idx].relevance_score = 0.0
+                    style_dropped += 1
+            if style_dropped:
+                logger.info(
+                    "eval_batch style cap: dropped %d item(s) "
+                    "(cap=%d/style; offenders=%s)",
+                    style_dropped,
+                    style_cap,
+                    ", ".join(
+                        f"{k}×{len(v)}"
+                        for k, v in style_buckets.items()
+                        if len(v) > style_cap
                     ),
                 )
 

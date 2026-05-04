@@ -4,6 +4,61 @@
 
 ---
 
+## v0.3.51: discovery LLM 关 reasoning + style cap（2026-05-05 spec wave 1）
+
+### 背景
+
+跑日志诊断暴露两个问题（详见 `docs/plans/2026-05-05-discovery-runtime-fix-spec.md`）：
+
+**U1 — discovery `evaluate_batch` 每批 8-16 分钟**：
+日志数据 27 次 `discovery.evaluate_batch` 累计 ~3 小时 LLM 思考时间，最长单批 991s（16.5 min）。output tokens 8000-18000 / 30 items 主要被 reasoning chain 占用。但 evaluate_batch 任务是结构化打分（score/topic_group/style_key/franchise_key），**根本不需要思维链**。
+
+**U5 — style 集中度无 cap**：
+日志统计 13 次单 batch single style ≥ 7 条（≥23%），最高 fun_variety×10/30=33%、story_doc×11/30=37%。eval_batch 已经有 franchise cap（v0.3.50），**没有 style cap**。
+
+### 改动
+
+**U1 — 关闭 reasoning for 结构化任务**：
+
+新增 per-call `reasoning_effort` 透传通道：
+- `LLMProvider.complete()` ABC 加 `reasoning_effort: str | None = None` 参数
+- `OpenAIProvider` / `ClaudeProvider` / `GeminiProvider`：accept + ignore（DeepSeek-only feature）
+- `DeepSeekProvider.complete()`：`None` 用配置默认，非 `None` 临时覆盖 `self._reasoning_effort`，保留原 `try/finally` 语义
+- `LLMRegistry.complete()` / `LLMService.complete_with_core_memory()` / `LLMService.complete_structured_task()`：threading parameter through
+
+调用点显式 `reasoning_effort=""` 关掉 thinking：
+- `discovery.engine._evaluate_batch`
+- `recommendation.engine._classify_batch`（XHS classify_pool_backlog）
+- `recommendation.engine._precompute_batch`（write_expression）
+
+**保留 reasoning** 给真正需要的：`soul.speculate` / `soul.awareness` / `recommendation.delight_score`。
+
+**U5 — `_evaluate_batch` style cap**：
+
+跟 v0.3.50 franchise cap 同形：
+- 新常量 `_BATCH_STYLE_CAP = 8`（8/30 = 27%）
+- LLM 评分完成后按 `style_key` 分桶，超额按 score drop
+- INFO 日志：`eval_batch style cap: dropped N (cap=8/style; offenders=fun_variety×10)`
+- 跟 franchise cap 一样，empty style 被忽略（ingestion-time heuristic 默认值不会统统死锁）
+
+### 影响
+
+预期效果（按本次基线日志数据）：
+
+- discovery `evaluate_batch` elapsed 从 8-16 min 降到 30s 以下（30× 提速）
+- LLM 月成本下降 ~80%（reasoning tokens 是大头）
+- 单 batch single-style 从 30-37% 降到 ≤27%
+- 结构化输出 quality 不退化（任务不需要思考链）
+- 真需要 reasoning 的 caller（speculate / awareness / delight_score）不受影响
+
+测试：
+- 修了 12 个测试 stub（accept `reasoning_effort` kwarg）+ 1 个测试用例（`test_trending_strategy_interleaves_rids_for_eval_fairness` 加 style 多样化的 LLM responses 避免新 cap 误伤）
+- 830/830 通过
+
+不动 LLM prompt builder，prompt cache 命中率不受影响。
+
+---
+
 ## v0.3.50: discovery 三层 franchise/UP 配额（2026-05-05）
 
 ### 背景

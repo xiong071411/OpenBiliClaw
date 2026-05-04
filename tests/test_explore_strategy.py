@@ -45,6 +45,7 @@ class FakeLLMService:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         caller: str = "",
+        reasoning_effort: str | None = None,
     ) -> object:
         self.calls.append(
             {
@@ -91,6 +92,7 @@ class _SlowScoringLLMService(FakeLLMService):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         caller: str = "",
+        reasoning_effort: str | None = None,
     ) -> object:
         self.active_calls += 1
         self.max_active_calls = max(self.max_active_calls, self.active_calls)

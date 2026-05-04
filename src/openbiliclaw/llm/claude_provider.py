@@ -43,7 +43,12 @@ class ClaudeProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         json_mode: bool = False,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
+        # ``reasoning_effort`` is DeepSeek-specific; Claude has its own
+        # ``thinking`` mode controlled separately. Accept the kwarg for
+        # signature compatibility but don't act on it here.
+        del reasoning_effort
         # Extract system message if present
         system = ""
         chat_messages = []

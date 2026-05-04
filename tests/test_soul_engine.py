@@ -25,6 +25,7 @@ class FakeRegistry:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         json_mode: bool = False,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         self.calls.append(messages)
         return LLMResponse(content=self.content, provider="openai")

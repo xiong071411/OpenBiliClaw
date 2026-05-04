@@ -44,6 +44,7 @@ class FakeLLMService:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         caller: str = "",
+        reasoning_effort: str | None = None,
     ) -> object:
         self.calls.append(
             {

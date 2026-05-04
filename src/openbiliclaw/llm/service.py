@@ -65,12 +65,18 @@ class LLMService:
         max_tokens: int = 4096,
         json_mode: bool = False,
         caller: str = "",
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         """Execute a task with automatically injected core memory context.
 
         ``caller`` is an optional free-form tag (e.g. ``"soul.preference"``,
         ``"discovery.eval"``) attached to the usage row so the ``cost``
         report can break spend down by module.
+
+        ``reasoning_effort`` (v0.3.51+) lets a caller force-disable the
+        provider's thinking mode for tasks that don't benefit from it
+        (structured eval / classify / write-expression). ``None`` keeps
+        the provider default; ``""`` explicitly disables for this call.
         """
         core_memory_block = ""
         if self.memory is not None:
@@ -93,6 +99,7 @@ class LLMService:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 json_mode=json_mode,
+                reasoning_effort=reasoning_effort,
             )
         except LLMProviderError as exc:
             raise LLMProviderExecutionError(str(exc)) from exc
@@ -120,8 +127,16 @@ class LLMService:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         caller: str = "",
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
-        """Execute a JSON-mode task with core memory injection."""
+        """Execute a JSON-mode task with core memory injection.
+
+        ``reasoning_effort`` (v0.3.51+): pass ``""`` to disable the
+        provider's thinking mode for this call. Recommended for
+        structured tasks (eval / classify / write-expression) that
+        don't benefit from chain-of-thought — disabling it on
+        DeepSeek-V4 cuts a 30-item batch from ~10 min to ~30s.
+        """
         return await self.complete_with_core_memory(
             system_instruction=system_instruction,
             user_input=user_input,
@@ -130,6 +145,7 @@ class LLMService:
             max_tokens=max_tokens,
             json_mode=True,
             caller=caller,
+            reasoning_effort=reasoning_effort,
         )
 
     async def complete_with_tools(
