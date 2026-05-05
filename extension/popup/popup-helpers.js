@@ -541,6 +541,18 @@ export function getPoolStatusSummary(status) {
   const poolIsSufficient =
     runtime.pool_target_count > 0 && runtime.pool_available_count >= runtime.pool_target_count;
   if (runtime.manual_refresh_state === "running") {
+    // v0.3.18+ extension: when pool already has servable items, don't
+    // emphasise "正在补货" — that previously misled users on slow B站
+    // discovery rounds (v_voucher storms keep refresh "running" for
+    // many minutes even though pool is full). User can already swap
+    // right now; the background top-up is decorative.
+    if (runtime.pool_available_count > 0) {
+      return {
+        available: `还有 ${runtime.pool_available_count} 条可换`,
+        replenished: "后台继续在找更多",
+        topics: "可以先换一批,新的随时进",
+      };
+    }
     return {
       available: `还有 ${runtime.pool_available_count} 条可换`,
       replenished: "正在补货",

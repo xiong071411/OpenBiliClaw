@@ -194,6 +194,14 @@ class ContinuousRefreshController:
     # until the next natural refresh tick (and recommendation summary
     # would print fallback ``topic_group="title[:N]"`` until then).
     _profile_ready_observed: bool = False
+    # v0.3.61+: skip the first ``refresh_if_needed`` invocation after
+    # daemon start to give Bilibili a 30s cool-down window. Init's
+    # synchronous chunk (history fetch + favorites + following) hits
+    # the WBI search backend hard in the first ~10s; firing discovery
+    # search queries immediately afterwards routinely triggers
+    # v_voucher storm. One refresh tick of grace = much fewer
+    # exhausted retries on the first half-hour.
+    _init_grace_consumed: bool = False
 
     _signal_event_types = [
         "view",
@@ -551,8 +559,22 @@ class ContinuousRefreshController:
         while True:
             with suppress(Exception):
                 await self._on_profile_ready_if_first_time()
-            with suppress(Exception):
-                await self.refresh_if_needed()
+            # v0.3.61+: 30s init grace period. The very first refresh
+            # tick after daemon start lands while Bilibili's WBI
+            # rate-limit bucket is still saturated from init's history
+            # / favorites / following burst — firing discovery search
+            # immediately produces ~50% v_voucher exhaustion. Skipping
+            # the first refresh_if_needed gives the IP a single tick
+            # to cool down before discovery starts hammering it.
+            if not self._init_grace_consumed:
+                self._init_grace_consumed = True
+                logger.info(
+                    "Init grace period — skipping first refresh tick to let "
+                    "Bilibili WBI bucket cool down (next tick will run normally)"
+                )
+            else:
+                with suppress(Exception):
+                    await self.refresh_if_needed()
             await asyncio.sleep(self.check_interval_seconds)
 
     async def _loop_pool_precompute(self) -> None:

@@ -4,6 +4,68 @@
 
 ---
 
+## v0.3.61 + extension v0.3.18: v_voucher 风控缓解 + popup 状态解耦 (2026-05-05)
+
+### 背景
+
+v0.3.60 把 precompute drain 拆成独立 loop 后,popup 已经能拿到推荐了,但用户反映:
+1. `manual_refresh_state="running"` 长期挂起,refresh 因 B 站 v_voucher 风控反复重试
+2. popup 状态条 chip 显示"正在补货",尽管 pool 已经有 59+ 条可换内容
+
+### 三个修法
+
+#### 🔴 v_voucher mitigation(`discovery/strategies/search.py`)
+
+`_execute_search_queries` 升级:
+- **Per-query jitter**:`asyncio.sleep(0.5)` → `asyncio.sleep(0.5 + random.uniform(0, 0.5))`,desync 同时落到 WBI rate-limit bucket 的请求波
+- **Storm detection**:连续 3 个 query 返回空结果(说明 client.search 内部三轮 v_voucher 重试都 exhausted) → log warning + 中止本轮剩余 query。等下一个 60s refresh tick 再来,不深挖坑。
+
+```
+v_voucher storm detected (3 consecutive empty queries) — aborting
+remaining N query(ies) this round; next refresh tick (60s) gets a
+fresh attempt
+```
+
+#### 🟠 init 延迟首轮 refresh(`runtime/refresh.py`)
+
+新增 `_init_grace_consumed: bool = False` 字段。`_loop_refresh` 第一次跑时跳过 `refresh_if_needed`,只跑 profile-ready hook。第二次起恢复正常 60s 周期。
+
+```
+Init grace period — skipping first refresh tick to let Bilibili WBI
+bucket cool down (next tick will run normally)
+```
+
+为什么要这条:init 同步阶段(history/favorites/following 拉取)10 秒内打了 30+ 次 Bilibili API,WBI 桶基本被填满。立刻 fire discovery 搜索 → 50% v_voucher 退避。给 60s 缓冲,IP 凉一下。
+
+#### 🟡 popup 状态条解耦(`extension/popup/popup-helpers.js`)
+
+`getPoolStatusSummary` 当 `pool_available_count > 0` AND `manual_refresh_state="running"` 时改文案:
+
+| 之前 | 现在 |
+|------|------|
+| 当前可换:还有 59 条可换 | 当前可换:还有 59 条可换 |
+| 最近补进:**正在补货** | 最近补进:**后台继续在找更多** |
+| 现在在忙:后台还在继续给你找新的 | 现在在忙:可以先换一批,新的随时进 |
+
+不再把"正在补货"喂给已经能换一批的用户——避免误以为还得继续等。
+
+### 影响
+
+| 场景 | 之前 | 现在 |
+|------|------|------|
+| Init 后第一次 search 命中 v_voucher 比例 | ~50% | 预期 <10%(grace + jitter 双护) |
+| 一轮 v_voucher 风暴期间 | 把所有 queries 都打挂(每个 21s 退避) | 3 次 empty 后中止,~90s 即终止 |
+| Popup 状态条 | 即使 pool 满载也显示"正在补货" | 只在 pool 真空时显示 |
+
+### 致谢
+
+整套 v0.3.59 → v0.3.60 → v0.3.61 演进完全是用户的 systematic-debugging 流程驱动:
+- v0.3.59 → 我加了 drain 但放错位置(被 refresh 卡)
+- v0.3.60 → 用户调试出 drain 永远轮不到,建议拆独立 loop;我照修
+- v0.3.61 → 用户进一步发现 refresh 卡的根因是 v_voucher 风控,且 popup 状态条仍误导;我把这俩一起修
+
+---
+
 ## v0.3.60: precompute drain 拆成独立 loop,不再被慢 refresh 卡 (2026-05-05)
 
 ### 背景

@@ -207,20 +207,64 @@ class SearchStrategy(DiscoveryStrategy):
         client: SupportsSearchClient,
         request_plan: list[tuple[int, str, int]],
     ) -> list[object]:
-        """Execute search queries sequentially with delay."""
+        """Execute search queries sequentially with delay + storm backoff.
+
+        v0.3.61+: per-query delay now jitter-randomised in 0.5–1.0s to
+        avoid synchronised waves of WBI requests landing in the same
+        Bilibili rate-limit bucket. ``client.search`` already retries
+        v_voucher challenges 3× internally, so an empty list at this
+        layer means the keyword exhausted retries and the IP is being
+        challenged. Three consecutive empty results = "storm mode" —
+        we abort the rest of the plan rather than burn LLM-generated
+        queries against an IP that's currently being denied. The
+        remaining queries get filled with empty results so the strategy
+        can still gracefully return what it has, and the next refresh
+        tick (60s later) gets a fresh shot.
+        """
+        import random
+
+        STORM_TRIGGER = 3
         gathered: list[object] = []
+        consecutive_empty = 0
+        storm_aborted = False
         for i, (_, query, page) in enumerate(request_plan):
+            if storm_aborted:
+                gathered.append([])
+                continue
             if i > 0:
-                await asyncio.sleep(0.5)
+                # Jitter 0.5–1.0s. Steady-state cost: ~0.75s/query;
+                # under storm: backoff already happens inside client.search,
+                # so this is purely a desync between queries.
+                await asyncio.sleep(0.5 + random.uniform(0.0, 0.5))
             try:
                 result = await client.search(
                     query,
                     page=page,
                     page_size=self.page_size,
                 )
-                gathered.append(result)
             except Exception as exc:
                 gathered.append(exc)
+                # An exception path doesn't count as v_voucher storm
+                # evidence (could be 412, network blip, etc.); reset.
+                consecutive_empty = 0
+                continue
+            gathered.append(result)
+            # Storm detection: empty result after retries already
+            # consumed = IP is being rate-limited *now*. Burning the
+            # remaining queries just deepens the hole.
+            if isinstance(result, list) and not result:
+                consecutive_empty += 1
+                if consecutive_empty >= STORM_TRIGGER:
+                    logger.warning(
+                        "v_voucher storm detected (%d consecutive empty queries)"
+                        " — aborting remaining %d query(ies) this round; "
+                        "next refresh tick (60s) gets a fresh attempt",
+                        consecutive_empty,
+                        len(request_plan) - (i + 1),
+                    )
+                    storm_aborted = True
+            else:
+                consecutive_empty = 0
         return gathered
 
     async def _generate_queries(self, profile: SoulProfile) -> list[str]:
