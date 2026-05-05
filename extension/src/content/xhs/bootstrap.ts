@@ -944,10 +944,59 @@ function parseInitialStateText(text: string): unknown | null {
   }
 }
 
+// v0.3.12+ MAIN-world bridge cache. MV3 content scripts run in an
+// isolated JS world, so ``doc.defaultView.__INITIAL_STATE__`` is
+// always ``undefined`` — only ``xhs-state-bridge.ts`` (manifest world:
+// "MAIN") can see the page's globals. The bridge postMessages a
+// JSON-cloned snapshot whenever state appears or changes; we cache the
+// last-received snapshot here for synchronous reads from the bootstrap
+// path. One cache per content-script load (one per tab), naturally
+// scoped.
+let cachedMainWorldState: unknown = null;
+const STATE_BRIDGE_SOURCE = "obc-xhs-state";
+
+interface StateBridgeMessage {
+  source?: string;
+  state?: unknown;
+}
+
+export function ingestMainWorldStateMessage(data: unknown): boolean {
+  if (!isRecord(data)) return false;
+  const msg = data as StateBridgeMessage;
+  if (msg.source !== STATE_BRIDGE_SOURCE) return false;
+  if (msg.state === undefined || msg.state === null) return false;
+  cachedMainWorldState = msg.state;
+  return true;
+}
+
+// Auto-install the listener at module load. Guard on ``window`` so
+// node test runners don't crash.
+if (typeof window !== "undefined") {
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    ingestMainWorldStateMessage(event.data);
+  });
+}
+
+/** Test-only: reset cache between unit tests. */
+export function _resetMainWorldStateCacheForTesting(): void {
+  cachedMainWorldState = null;
+}
+
 export function extractBootstrapStateFromDocument(doc: Document): unknown | null {
+  // 1) MAIN-world bridge cache (the only path that actually works on
+  // post-2025 Xiaohongshu — the React/Vue runtime owns __INITIAL_STATE__
+  // and isolated-world ``defaultView`` cannot see page globals).
+  if (cachedMainWorldState !== null) return cachedMainWorldState;
+
+  // 2) Direct isolated-world access. Kept as a safety net for synthetic
+  // jsdom-style test docs where window globals are shared.
   const win = doc.defaultView as (Window & { __INITIAL_STATE__?: unknown }) | null;
   if (win?.__INITIAL_STATE__) return win.__INITIAL_STATE__;
 
+  // 3) Inline ``<script>`` text scan — works on legacy SSR pages that
+  // ship state as static HTML. Vanishingly rare on modern XHS but
+  // costs nothing to keep.
   const scripts = doc.querySelectorAll<HTMLScriptElement>("script");
   for (const script of Array.from(scripts)) {
     const parsed = parseInitialStateText(script.textContent ?? "");

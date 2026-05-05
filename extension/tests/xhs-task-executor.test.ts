@@ -872,3 +872,77 @@ test("extractOwnProfileUrlFromState builds a profile URL only for logged-in user
     "",
   );
 });
+
+// v0.3.12+ MAIN-world state bridge integration. The MV3 isolated world
+// can't read ``window.__INITIAL_STATE__``; ``xhs-state-bridge.ts`` runs
+// in MAIN world and postMessages a snapshot. ``bootstrap.ts``'s message
+// listener caches it for synchronous reads via
+// ``extractBootstrapStateFromDocument``.
+
+test("ingestMainWorldStateMessage caches snapshots from xhs-state-bridge", async () => {
+  const mod = await import("../src/content/xhs/bootstrap.ts");
+  mod._resetMainWorldStateCacheForTesting();
+
+  // Wrong source — must be ignored.
+  assert.equal(
+    mod.ingestMainWorldStateMessage({ source: "obc-xhs-sniffer", state: { user: {} } }),
+    false,
+  );
+
+  // Correct source — must cache.
+  assert.equal(
+    mod.ingestMainWorldStateMessage({
+      source: "obc-xhs-state",
+      state: { user: { loggedIn: true, userInfo: { nickname: "屎屎" } } },
+    }),
+    true,
+  );
+
+  const fakeDoc = {
+    defaultView: {} as unknown as Window,
+    querySelectorAll: () => [],
+  } as unknown as Document;
+  const recovered = mod.extractBootstrapStateFromDocument(fakeDoc) as {
+    user: { loggedIn: boolean; userInfo: { nickname: string } };
+  };
+  assert.equal(recovered.user.loggedIn, true);
+  assert.equal(recovered.user.userInfo.nickname, "屎屎");
+
+  mod._resetMainWorldStateCacheForTesting();
+});
+
+test("ingestMainWorldStateMessage rejects malformed payloads", async () => {
+  const mod = await import("../src/content/xhs/bootstrap.ts");
+  mod._resetMainWorldStateCacheForTesting();
+
+  assert.equal(mod.ingestMainWorldStateMessage(null), false);
+  assert.equal(mod.ingestMainWorldStateMessage("not an object"), false);
+  assert.equal(mod.ingestMainWorldStateMessage({ source: "obc-xhs-state" }), false);
+  assert.equal(
+    mod.ingestMainWorldStateMessage({ source: "obc-xhs-state", state: null }),
+    false,
+  );
+});
+
+test("extractBootstrapStateFromDocument prefers cache over doc.defaultView", async () => {
+  const mod = await import("../src/content/xhs/bootstrap.ts");
+  mod._resetMainWorldStateCacheForTesting();
+
+  mod.ingestMainWorldStateMessage({
+    source: "obc-xhs-state",
+    state: { user: { fromBridge: true } },
+  });
+
+  const fakeDoc = {
+    defaultView: { __INITIAL_STATE__: { user: { fromDoc: true } } } as unknown as Window,
+    querySelectorAll: () => [],
+  } as unknown as Document;
+
+  const result = mod.extractBootstrapStateFromDocument(fakeDoc) as {
+    user: { fromBridge?: boolean; fromDoc?: boolean };
+  };
+  assert.equal(result.user.fromBridge, true);
+  assert.equal(result.user.fromDoc, undefined);
+
+  mod._resetMainWorldStateCacheForTesting();
+});

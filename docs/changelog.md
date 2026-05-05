@@ -4,6 +4,54 @@
 
 ---
 
+## extension v0.3.12: MAIN-world state bridge — 修复 XHS 完全无数据 (2026-05-05)
+
+### 背景
+
+production logs 多个会话(2026-05-05 1h+)显示 XHS 入池为 0:`Event propagated: like = 0`、`self_info persisted = 0`、`ingest filter: dropped = 0`、`startup purge = 0`,**所有 XHS 数据获取路径全部静默失败**。
+
+### 根因
+
+MV3 content script 跑在 isolated JS world,`doc.defaultView.__INITIAL_STATE__` 永远是 `undefined` —— 只有 page 的 MAIN-world 脚本能看到 `window.__INITIAL_STATE__`。
+
+`bootstrap.ts:extractBootstrapStateFromDocument` 两条路都断:
+1. `doc.defaultView.__INITIAL_STATE__` —— isolated world 看不见 page globals
+2. 扫 `<script>` 标签 inline JSON —— XHS 是 SPA,state 是运行时 JS 赋值
+
+→ 函数永远返回 `null` → `extractSelfInfoFromState` 永远返回 `null` → bootstrap_profile / passive collector / search task **三条路全部抽不到 self_info,也抽不到 saved/liked/history notes**。
+
+诊断证据:在 XHS 页面 DevTools 跑读 state 的脚本,`loggedIn: ec {__v_isRef: true, _rawValue: true}` —— 用户 100% 已登录,但 isolated world 看不见。
+
+### 修法
+
+新建 `extension/src/main/xhs-state-bridge.ts` 跑在 MAIN world(manifest 同 `xhs-token-sniffer.js` 路径),复刻 token sniffer 的 postMessage 桥接套路:
+
+1. 轮询 `window.__INITIAL_STATE__` 出现(Vue mount 后才赋值)
+2. `safeJsonClone` 把 Vue 3 ref 树展平成 JSON-safe 形状(unwrap `__v_isRef`/`_rawValue`、断循环、丢 `__v_*`/`dep`/`deps` 内部键、丢 functions/symbols)
+3. `buildStateSnapshot` 白名单只挑 `bootstrap.ts:notesForScope` 实际读的 10 个 top-level keys(`user`, `saved`, `collect`, `collections`, `liked`, `likes`, `history`, `footprint`, `browseHistory`, `browsingHistory`),snapshot 大小有 2MB 上限,溢出降级到最小 `{user: {loggedIn, userInfo, userPageData}}`
+4. `window.postMessage({source: "obc-xhs-state", state})` 给 isolated world
+5. 重发触发器:popstate / visibilitychange=visible / click(SPA 路由变更),内置 `lastSnapshotJson` dedup
+
+`bootstrap.ts:extractBootstrapStateFromDocument` 三层兜底:
+1. **MAIN-world bridge cache**(主路径,新增):监听 `window.message` 缓存最新 snapshot,同步返回
+2. `doc.defaultView.__INITIAL_STATE__`(jsdom 测试可能用到)
+3. `<script>` 标签扫描(legacy SSR 兜底)
+
+### 测试覆盖
+
+- `extension/tests/xhs-state-bridge.test.ts`(11 cases):isVueRef 识别 / safeJsonClone 处理 ref+循环+Vue 内部键+throw getter / buildStateSnapshot 白名单 / Vue-wrapped XHS-shaped state 完整链路
+- `xhs-task-executor.test.ts` 加 3 case:ingestMainWorldStateMessage 缓存 + 拒绝 malformed payload + cache 优先级高于 doc.defaultView
+
+合计 184/184 通过。
+
+### 兼容性
+
+- 后端代码 0 改动 —— 修复完全在扩展端
+- 老扩展(v0.3.11 及之前)装在 v0.3.57 后端上 = 现状不变(XHS 仍然 0 数据)
+- 新扩展(v0.3.12)装在任何 v0.3.57+ 后端上 = self_info 真正流入,过滤生效,bootstrap_profile 可以读 saved/liked/history
+
+---
+
 ## v0.3.57: pool quality trio (2026-05-05)
 
 ### 背景
