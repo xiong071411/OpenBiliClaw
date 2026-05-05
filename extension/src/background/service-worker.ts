@@ -17,10 +17,6 @@ import {
 } from "./xhs-task-dispatcher.js";
 import {
   openExtensionUi,
-  buildChromeNotificationOptions,
-  buildCognitionNotificationId,
-  buildDelightNotificationId,
-  buildNotificationId,
   parseDelightBvid,
   parseNotificationBvid,
   parseCognitionUpdateId,
@@ -48,7 +44,6 @@ const RUNTIME_STREAM_URL = "ws://127.0.0.1:8420/api/runtime-stream?client=backgr
 const WS_RECONNECT_DELAY = 5_000;
 type PendingNotification = import("./notifications.js").PendingNotification;
 type PendingCognitionUpdate = import("./notifications.js").PendingCognitionUpdate;
-type PendingDelight = import("./notifications.js").PendingDelight;
 
 // ---------------------------------------------------------------------------
 // HTTP helpers (recommendation & cognition — still polled)
@@ -108,56 +103,32 @@ async function acknowledgeDelightSent(bvid: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * v0.3.14+: chrome.notifications.create() rejects when Chrome can't
- * download the image (transient CDN errors, sandbox / CORS quirks on
- * some Chromium variants). The previous flow let the rejection skip
- * ``acknowledgeNotificationSent``, so the SAME bvid was re-fetched
- * every minute and looped forever. We now ALWAYS ack — the user
- * already got the recommendation in the popup; missing the OS-level
- * toast is a cosmetic failure, not a delivery failure.
+ * v0.3.16+: OS-level Chrome toasts are disabled by user request.
  *
- * Errors are also surfaced via console.warn with the real message so
- * debugging "Unable to download all specified images" doesn't require
- * code-side detective work.
+ * The popup / side panel already surfaces every recommendation,
+ * cognition update, delight candidate and interest probe — duplicating
+ * them as Chrome toasts at the bottom-right of the screen is intrusive
+ * (and tripped a recurring "Unable to download all specified images"
+ * Chromium bug that polluted the service-worker console for weeks).
+ *
+ * We still poll ``/api/notifications/pending`` and call the ack
+ * endpoints so the backend's pending queue drains. Functionally this
+ * just hides the OS toast surface; popup state is unchanged.
  */
-async function safeNotify(
-  notificationId: string,
-  options: chrome.notifications.NotificationCreateOptions,
-): Promise<void> {
-  try {
-    await chrome.notifications.create(notificationId, options);
-  } catch (err) {
-    console.warn(
-      "[OpenBiliClaw] notifications.create failed (notification skipped, popup still has it):",
-      err instanceof Error ? err.message : String(err),
-      "iconUrl:",
-      options.iconUrl,
-    );
-  }
-}
-
 async function checkPendingNotification(): Promise<void> {
   try {
     const item = await fetchPendingNotification();
     if (item?.bvid) {
-      await safeNotify(buildNotificationId(item.bvid), buildChromeNotificationOptions(item));
-      // Ack regardless of toast success — popup already serves this
-      // recommendation; refusing to ack keeps the same bvid in the
-      // pending queue and triggers the toast every poll tick.
       await acknowledgeNotificationSent(item.bvid);
       return;
     }
     const cognition = await fetchPendingCognitionUpdate();
     if (cognition?.id) {
-      await safeNotify(
-        buildCognitionNotificationId(cognition.id),
-        buildChromeNotificationOptions(cognition),
-      );
       await acknowledgeCognitionUpdateSeen(cognition.id);
     }
   } catch (err) {
     console.warn(
-      "[OpenBiliClaw] Pending notification check failed:",
+      "[OpenBiliClaw] Pending notification ack failed:",
       err instanceof Error ? err.message : String(err),
     );
   }
@@ -175,19 +146,11 @@ function handleRuntimeEvent(event: Record<string, unknown>): void {
 
   const eventType = String(event.type ?? "");
 
+  // v0.3.16+: OS-level Chrome toasts are disabled by user request.
+  // Both interest.probe and delight.candidate surface inside the
+  // popup via its own runtime-stream WS handler — no chrome
+  // notification toast at the bottom-right of the screen.
   if (eventType === "interest.probe") {
-    const domain = String(event.domain ?? "");
-    if (!domain) return;
-    void chrome.notifications.create(
-      `openbiliclaw-probe:${domain}`,
-      {
-        type: "basic",
-        iconUrl: "icons/icon128.png",
-        title: `\u963F\u0042 \u60F3\u786E\u8BA4\uFF1A\u4F60\u5BF9\u300C${domain}\u300D\u611F\u5174\u8DA3\u5417\uFF1F`,
-        message: String(event.reason ?? "\u70B9\u51FB\u67E5\u770B\u8BE6\u60C5\uFF0C\u544A\u8BC9\u6211\u4F60\u600E\u4E48\u60F3\u3002"),
-        priority: 2,
-      },
-    );
     return;
   }
 
@@ -196,20 +159,8 @@ function handleRuntimeEvent(event: Record<string, unknown>): void {
   const bvid = String(event.bvid ?? "");
   if (!bvid) return;
 
-  const delight: PendingDelight = {
-    bvid,
-    title: String(event.title ?? ""),
-    delight_reason: String(event.delight_reason ?? ""),
-    delight_score: Number(event.delight_score ?? 0),
-    delight_hook: String(event.delight_hook ?? ""),
-    cover_url: String(event.cover_url ?? ""),
-  };
-
-  void chrome.notifications.create(
-    buildDelightNotificationId(delight.bvid),
-    buildChromeNotificationOptions(delight),
-  );
-  void acknowledgeDelightSent(delight.bvid);
+  // Still ack the backend so the same bvid isn't re-pushed forever.
+  void acknowledgeDelightSent(bvid);
 }
 
 function connectRuntimeStream(): void {

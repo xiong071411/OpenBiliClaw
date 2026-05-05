@@ -4,6 +4,33 @@
 
 ---
 
+## extension v0.3.16: 关掉所有 OS toast,通知收回 popup 内 (2026-05-05)
+
+### 背景
+
+用户反馈右下角弹的 Chrome OS 通知干扰太大,要求"所有通知都在插件里面进行就行"。再加上 v0.3.14/v0.3.15 修了 ack 循环 + 绝对 URL 之后,Chrome 内部 imageUtil 仍然偶发 `Uncaught (in promise) Error: Unable to download all specified images.`(我们 catch 不到的、内部 promise 链),console 还是不干净。
+
+### 修法
+
+把三处 `chrome.notifications.create` **全部去掉**:
+
+1. `service-worker.ts:checkPendingNotification`(轮询拉的 recommendation + cognition 通知)→ 现在只调 `acknowledgeNotificationSent` / `acknowledgeCognitionUpdateSeen`,让后端 pending 队列正常出队,但不弹 OS toast。Popup 自己有 WebSocket 订阅,推荐照常出现在卡片列表里。
+2. `service-worker.ts:handleRuntimeEvent` 处理 `interest.probe`(WS 推送的兴趣探针)→ 同上去掉,popup inbox 已经显示
+3. `service-worker.ts:handleRuntimeEvent` 处理 `delight.candidate`(WS 推送的惊喜推荐)→ 同上去掉,delight 已经在 popup 推荐列表里带 hook badge 显示。仍然 `acknowledgeDelightSent` 防止后端重发
+
+清理:删掉服务变得不再使用的 5 个 import(`buildChromeNotificationOptions` / `buildNotificationId` / `buildCognitionNotificationId` / `buildDelightNotificationId` / `PendingDelight` 类型),代码瘦了 ~30 行。
+
+### 影响
+
+- 用户屏幕右下角再也不会弹 Chrome 通知
+- service worker console 不再出现 `notifications.create failed` warn 或 Chrome 内部的 `Unable to download all specified images` reject
+- popup 体验完全不变(本来推荐就是从 popup 卡片列表 + WS 推送进来的,Chrome toast 只是冗余出口)
+- backend 不需要任何改动,pending 队列照常 ack 出队
+
+`chrome.notifications.onClicked` listener 留着没动(只是不会再 fire 了),保留以防以后需要做"toolbar icon badge → 点击展开 popup"之类轻量提醒。Notifications permission 在 manifest 里也保留——后续如果想做可选的 toast 提醒(默认关闭、用户在 popup 设置里 opt-in),不用改 manifest。
+
+---
+
 ## extension v0.3.15: 通知 iconUrl 改用 chrome.runtime.getURL 解决根因 (2026-05-05)
 
 ### 背景
