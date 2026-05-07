@@ -333,11 +333,35 @@ def observe_events(
 
 
 def promote_ready(state: SpeculativeState) -> tuple[list[SpeculativeInterest], SpeculativeState]:
-    """Extract speculations that have reached confirmation threshold."""
+    """Extract speculations ready to graduate from speculative to confirmed.
+
+    Two convergent promote paths:
+
+      1. **Natural** — ``status == "active"`` and behavioural signals have
+         pushed ``confirmation_count`` to ``confirmation_threshold``. The
+         user kept clicking on the topic; the system promotes
+         autonomously.
+      2. **User-driven** — ``status == "confirmed"``. The user picked
+         "喜欢" / 是 in the popup or CLI ``probe``;
+         ``user_confirm_speculation`` set ``status="confirmed"`` and
+         pre-loaded ``confirmation_count = threshold``. Without this
+         second branch the row got stuck in ``state.active`` forever:
+         ``promote_ready`` ignored it (status != "active"),
+         ``expire_stale`` ignored it (same gate), and ``_generate``
+         counted it toward ``len(state.active) >= max_active``,
+         eventually wedging probe generation entirely. Regression for
+         a v0.3.32-era report where ``openbiliclaw probe`` returned
+         "no active speculations" yet ``force_tick generated=0`` because
+         the active list silently held N confirmed-but-unmoved entries.
+    """
     promoted: list[SpeculativeInterest] = []
     remaining: list[SpeculativeInterest] = []
     for spec in state.active:
-        if spec.status == "active" and spec.confirmation_count >= spec.confirmation_threshold:
+        ready = (
+            spec.status == "active"
+            and spec.confirmation_count >= spec.confirmation_threshold
+        ) or spec.status == "confirmed"
+        if ready:
             spec.status = "promoted"
             promoted.append(spec)
             state.total_promoted += 1

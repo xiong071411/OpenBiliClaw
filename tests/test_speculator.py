@@ -173,6 +173,130 @@ def test_promote_none_ready():
     assert len(updated.active) == 1
 
 
+def test_promote_ready_handles_user_confirmed_status():
+    """Regression: ``user_confirm_speculation`` sets ``status="confirmed"``
+    (not "active") and pre-fills confirmation_count to threshold. Before
+    the fix, ``promote_ready`` only matched ``status == "active"``, so
+    confirmed rows piled up in ``state.active`` indefinitely — eventually
+    wedging probe generation because ``len(state.active) >= max_active``
+    short-circuited ``_generate``. Now both paths converge here."""
+    state = SpeculativeState(
+        active=[
+            SpeculativeInterest(
+                domain="用户主动确认的方向",
+                status="confirmed",
+                confirmation_count=3,
+                confirmation_threshold=3,
+            ),
+            SpeculativeInterest(
+                domain="自然累积未到阈值",
+                status="active",
+                confirmation_count=1,
+                confirmation_threshold=3,
+            ),
+            SpeculativeInterest(
+                domain="自然累积已到阈值",
+                status="active",
+                confirmation_count=3,
+                confirmation_threshold=3,
+            ),
+        ]
+    )
+    promoted, updated = promote_ready(state)
+
+    promoted_domains = sorted(s.domain for s in promoted)
+    assert promoted_domains == ["用户主动确认的方向", "自然累积已到阈值"]
+    # All promoted rows end up with status="promoted" so downstream
+    # consumers (pipeline._run_speculator_tick) can append them to
+    # profile.interest.likes uniformly.
+    assert all(s.status == "promoted" for s in promoted)
+    # The active list keeps only the still-incubating row.
+    assert [s.domain for s in updated.active] == ["自然累积未到阈值"]
+    assert updated.total_promoted == 2
+
+
+async def test_force_tick_unblocked_when_active_full_of_confirmed(
+    monkeypatch, tmp_path
+):
+    """Regression for the 'probe wedge' bug observed in production:
+    a profile with N=max_active rows all in ``status="confirmed"``
+    (because the user kept clicking 喜欢 but no tick ever ran) made
+    ``force_tick`` return ``generated=0`` forever. After the
+    ``promote_ready`` fix, the next tick must (1) drain those confirmed
+    rows out of ``state.active`` and (2) generate fresh speculations
+    into the now-empty slots."""
+    from openbiliclaw.soul.profile import OnionProfile
+
+    # Seed the on-disk state with 5 confirmed rows occupying every active slot.
+    state_dir = tmp_path / "memory"
+    state_dir.mkdir()
+    state_file = state_dir / "speculative_state.json"
+    confirmed_rows = [
+        {
+            "domain": f"已确认方向{i}",
+            "category": "",
+            "reason": "user clicked 喜欢",
+            "confidence": 0.5,
+            "weight": 0.5,
+            "created_at": datetime.now().isoformat(),
+            "ttl_days": 3,
+            "confirmation_threshold": 3,
+            "confirmation_count": 3,
+            "status": "confirmed",
+            "specifics": [{"name": "x", "confirmation_count": 0}],
+            "confirming_events": ["user_confirmed"],
+        }
+        for i in range(5)
+    ]
+    state_file.write_text(
+        json.dumps({"active": confirmed_rows, "cooldown": [], "total_rejected": 0,
+                    "total_promoted": 0, "last_generation_at": None})
+    )
+
+    # Stub LLM service to return 5 fresh probes; without the fix this
+    # never gets called because _generate short-circuits on active full.
+    fake_speculations = [
+        {
+            "domain": f"全新方向{i}",
+            "category": "科技",
+            "reason": "这是一段足够长的理由 用于通过质量门槛 的占位文本 abc",
+            "confidence": 0.55,
+            "specifics": ["sub-a", "sub-b"],
+            "experience_mode": "knowledge",
+            "entry_load": "light",
+        }
+        for i in range(5)
+    ]
+
+    class _FakeResponse:
+        def __init__(self, content):
+            self.content = content
+
+    class _FakeLLMService:
+        async def complete_structured_task(self, **_kw):
+            return _FakeResponse(json.dumps({"speculations": fake_speculations}))
+
+    speculator = InterestSpeculator(
+        llm_service=_FakeLLMService(),
+        data_dir=state_dir.parent,
+        max_active=5,
+    )
+
+    result = await speculator.force_tick(OnionProfile())
+
+    # The 5 confirmed rows graduated out of active...
+    assert len(result.promoted) == 5
+    assert all(s.status == "promoted" for s in result.promoted)
+    # ...and 5 brand-new probes filled the freed slots.
+    assert len(result.generated) == 5
+    new_domains = {s.domain for s in result.generated}
+    assert new_domains == {f"全新方向{i}" for i in range(5)}
+    # Final on-disk state: only the new probes remain in the active list.
+    persisted = speculator._load_state()
+    persisted_active_domains = {s.domain for s in persisted.active if s.status == "active"}
+    assert persisted_active_domains == {f"全新方向{i}" for i in range(5)}
+
+
 # ---------------------------------------------------------------------------
 # Expiry and cooldown
 # ---------------------------------------------------------------------------

@@ -4,6 +4,53 @@
 
 ---
 
+## v0.3.65: 修复 speculator 滞留 bug（confirmed 占满 active 槽位导致探针卡死）（2026-05-08）
+
+### 背景
+
+线上观察到 `openbiliclaw probe` 显示「暂时没有活跃的猜测」，但 `force_tick` 仍然返回 `generated=0`。dump `data/memory/speculative_state.json` 后看到 `active` list 里 5 项全是 `status="confirmed"`（不是 `"active"`），把 `max_active=5` 的额度全占满了 —— LLM 调用确实跑了、返回了 7 个候选、quality gate 也都过了，但 `_generate` 内部 `if len(state.active) >= self._max_active: break` 永远立即触发，一个候选都 append 不进去。
+
+### Root Cause
+
+状态机本来设计是：
+- `active` → 信号累积满 threshold → `promote_ready` 搬到 promoted 列表 → pipeline 加进 profile.likes
+- `active` → 用户确认（CLI/popup） → `confirmed`（`user_confirm_speculation` 同时把 `confirmation_count` 设为 threshold）
+- `active` → 用户拒绝 → `rejected` 进 cooldown
+- `active` → TTL 过期 → `rejected` 进 cooldown
+
+**但** `promote_ready` 只匹配 `status == "active"`，`expire_stale` 同样只处理 `"active"`。所以 `status="confirmed"` 的项进了**死循环**：
+- `promote_ready` 不收（status != "active"）
+- `expire_stale` 不收（status != "active"）
+- `_generate` 把它们计入 `len(state.active)` 触发满员判断 → 阻塞新生成
+
+用户每多 confirm 一个就多一个永远不动的尸体，最终 active list 撑满后**整个探针生成链路就卡死**。
+
+### 修复
+
+`speculator.py::promote_ready` 加一条 OR 分支：
+
+```python
+ready = (
+    spec.status == "active"
+    and spec.confirmation_count >= spec.confirmation_threshold
+) or spec.status == "confirmed"
+```
+
+这样两条 promote 路径汇聚到同一个出口：自然累积到阈值的 + 用户主动确认的，都从 `state.active` 搬出 → pipeline 自动加到 `profile.interest.likes`。
+
+### 测试
+
+新增两个回归 case 在 `tests/test_speculator.py`：
+- `test_promote_ready_handles_user_confirmed_status` — 单元层面验证 confirmed + active(threshold met) 两条路径都被正确收割
+- `test_force_tick_unblocked_when_active_full_of_confirmed` — E2E 复现报告场景：5 个 confirmed 占满 active 时，下次 force_tick 必须 (1) 把 5 个全部 promote (2) 在腾出的槽位生成新猜测
+
+### 影响
+
+- 已有用户 `data/memory/speculative_state.json` 里如果有滞留 confirmed 项，下次 daemon 跑 speculator tick 时会被自动清理 + 加进 `profile.interest.likes`。本次修复同时补做了之前漏掉的"晋升进正式兴趣"动作 —— 用户曾经手动 confirm 过的猜测方向终于会落到画像里。
+- 没有 schema 改动，state.json 文件格式不变。
+
+---
+
 ## v0.3.64: 小红书 bootstrap 拉取上限 50 → 300 (2026-05-06)
 
 ### 背景
