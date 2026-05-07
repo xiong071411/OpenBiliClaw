@@ -348,11 +348,17 @@ export async function executeTask(task: DyTask): Promise<void> {
     max_stagnant_scroll_rounds: task.max_stagnant_scroll_rounds ?? 5,
   };
 
-  const buildScopeUrl = await loadBuildScopeUrl();
-  const initialUrl = buildScopeUrl(scopes[0]!, "");
+  // Open the Douyin homepage first instead of jumping straight to
+  // /user/self. Direct profile-URL nav from a fresh tab tripped
+  // Douyin's risk control on real-browser e2e (2026-05-08): user
+  // saw the captcha intermediate page even when logged in. Routing
+  // through the homepage lets page bundle / cookies / risk-score
+  // settle naturally before we route to the profile, exactly the
+  // way a user would land on their own profile (douyin.com → click
+  // profile, not empty tab → /user/self).
   let tab: chrome.tabs.Tab;
   try {
-    tab = await chrome.tabs.create({ url: initialUrl, active: true });
+    tab = await chrome.tabs.create({ url: "https://www.douyin.com/", active: true });
   } catch {
     await postTaskResult({
       task_id: task.id,
@@ -375,8 +381,21 @@ export async function executeTask(task: DyTask): Promise<void> {
     cleanupTask();
     return;
   }
+
+  // Two-stage entry:
+  //   1. wait for douyin.com home to load → inject fetch-tap
+  //      (so any preload of the user's data goes through our hook)
+  //   2. navigate to scope 0's profile URL → wait for load → inject
+  //      fetch-tap again (the homepage → profile transition might
+  //      reset the page-bundle state)
+  //   3. send DY_SCOPE_EXECUTE for scope 0
   onTabReady(taskTabId, () => {
-    void injectFetchTapInto(taskTabId!).then(sendScopeExecuteMessage);
+    void injectFetchTapInto(taskTabId!).then(() => {
+      // Now nav to the actual scope URL via the same per-scope path
+      // navigateToCurrentScope uses for scopes 1+. This keeps the
+      // injection / sendMessage handshake symmetric across all scopes.
+      void navigateToCurrentScope();
+    });
   });
 }
 
