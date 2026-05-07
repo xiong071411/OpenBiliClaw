@@ -18,6 +18,7 @@ import {
   buildDyExecuteMessageData,
   computeDyTaskTimeoutMs,
   isValidDyTask,
+  pollDyTaskNow,
 } from "../src/background/dy-task-dispatcher.ts";
 
 test("buildDyTaskUrl routes bootstrap_profile to the douyin home", () => {
@@ -121,4 +122,15 @@ test("buildDyExecuteMessageData omits undefined fields (no leaking nullish paylo
   assert.equal("scopes" in data, false);
   assert.equal("max_items_per_scope" in data, false);
   assert.equal("max_scroll_rounds" in data, false);
+});
+
+test("pollDyTaskNow exists as the WS-driven immediate-poll entry point", () => {
+  // Service-worker.ts calls this from runtimeSocket.onmessage when
+  // backend broadcasts `dy_task_available`. We can't exercise the
+  // chrome.tabs lifecycle here (no chrome global, no fetch backend),
+  // but we MUST guarantee the export shape so the wire stays intact.
+  assert.equal(typeof pollDyTaskNow, "function");
+  // Calling it without chrome / network must not throw — pollNextTask
+  // catches its own fetch errors so the dispatcher stays alive.
+  assert.doesNotThrow(() => pollDyTaskNow());
 });

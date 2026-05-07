@@ -235,3 +235,134 @@ class TestDyTaskResult:
         task = queue.get(task_id)
         assert task is not None
         assert task["status"] == "pending"  # NOT completed yet
+
+
+class TestDyTaskKick:
+    """`POST /api/sources/dy/kick` broadcasts `dy_task_available` over
+    the runtime-stream so the extension dispatcher polls immediately
+    instead of waiting up to 60s for the next chrome.alarms tick."""
+
+    def test_kick_broadcasts_dy_task_available_event(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from types import SimpleNamespace
+
+        from openbiliclaw.runtime.events import RuntimeEventHub
+        from openbiliclaw.storage.database import Database
+
+        db = Database(tmp_path / "task.db")
+        db.initialize()
+
+        fake_config = SimpleNamespace(
+            data_path=tmp_path,
+            bilibili=SimpleNamespace(cookie="", browser_executable="", browser_headed=False),
+            sources=SimpleNamespace(
+                browser_cdp_url="",
+                browser_headed=False,
+                xiaohongshu=SimpleNamespace(
+                    daily_search_budget=20,
+                    daily_creator_budget=10,
+                    task_interval_seconds=45,
+                ),
+            ),
+            scheduler=SimpleNamespace(pool_target_count=300, account_sync_interval_hours=24),
+        )
+        monkeypatch.setattr("openbiliclaw.config.load_config", lambda: fake_config)
+
+        hub = RuntimeEventHub()
+        memory = RecordingMemoryManager()
+
+        from openbiliclaw.api.app import create_app
+
+        app = create_app(
+            database=db,
+            memory_manager=memory,
+            soul_engine=SimpleNamespace(),
+            runtime_controller=SimpleNamespace(memory_manager=memory),
+            recommendation_engine=None,
+            runtime_event_hub=hub,
+        )
+        client = TestClient(app)
+
+        # Subscribe to the hub BEFORE firing the kick — the publish
+        # path is async/queue-based, so a slow subscriber would still
+        # receive the event from its queue when it gets around to it.
+        import asyncio
+
+        async def collect_one_event() -> dict[str, object]:
+            queue = await hub.subscribe()
+            return await asyncio.wait_for(queue.get(), timeout=2.0)
+
+        loop = asyncio.new_event_loop()
+        queue = loop.run_until_complete(hub.subscribe())
+
+        try:
+            response = client.post("/api/sources/dy/kick")
+            assert response.status_code == 200
+            assert response.json() == {"ok": True}
+
+            # The kick endpoint awaited publish() inside the request
+            # handler, so by the time client.post returns the event is
+            # already in the queue.
+            event = loop.run_until_complete(asyncio.wait_for(queue.get(), timeout=2.0))
+            assert event["type"] == "dy_task_available"
+            assert event["source"] == "task_kick"
+        finally:
+            loop.run_until_complete(hub.unsubscribe(queue))
+            loop.close()
+
+    def test_kick_succeeds_even_when_event_hub_is_absent(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If the daemon was started without an event hub (degraded
+        config) the kick endpoint must still return 200 — it's a
+        best-effort wake-up, not a critical path."""
+        from types import SimpleNamespace
+
+        from openbiliclaw.storage.database import Database
+
+        db = Database(tmp_path / "task.db")
+        db.initialize()
+
+        fake_config = SimpleNamespace(
+            data_path=tmp_path,
+            bilibili=SimpleNamespace(cookie="", browser_executable="", browser_headed=False),
+            sources=SimpleNamespace(
+                browser_cdp_url="",
+                browser_headed=False,
+                xiaohongshu=SimpleNamespace(
+                    daily_search_budget=20,
+                    daily_creator_budget=10,
+                    task_interval_seconds=45,
+                ),
+            ),
+            scheduler=SimpleNamespace(pool_target_count=300, account_sync_interval_hours=24),
+        )
+        monkeypatch.setattr("openbiliclaw.config.load_config", lambda: fake_config)
+
+        memory = RecordingMemoryManager()
+
+        from openbiliclaw.api.app import create_app
+
+        app = create_app(
+            database=db,
+            memory_manager=memory,
+            soul_engine=SimpleNamespace(),
+            runtime_controller=SimpleNamespace(memory_manager=memory),
+            recommendation_engine=None,
+            # No runtime_event_hub — simulating degraded daemon state.
+        )
+        client = TestClient(app)
+
+        response = client.post("/api/sources/dy/kick")
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+
+        # Same for xhs.
+        response = client.post("/api/sources/xhs/kick")
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}

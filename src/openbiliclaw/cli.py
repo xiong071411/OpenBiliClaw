@@ -1972,7 +1972,35 @@ def _enqueue_xhs_bootstrap_task() -> str | None:
     if not task_id:
         console.print("  [yellow]小红书初始化信号未导入: 今日任务预算已用完。[/yellow]")
         return None
+    # Wake the extension dispatcher immediately via the runtime-stream
+    # WebSocket instead of waiting up to 60s for the next chrome.alarms
+    # tick. The kick is best-effort — if the daemon's API isn't running
+    # the existing alarm-based poll still picks up the task on next fire.
+    _kick_task_dispatcher("xhs")
     return task_id
+
+
+def _kick_task_dispatcher(source: str) -> None:
+    """Fire-and-forget POST to the daemon's task-kick endpoint.
+
+    The daemon broadcasts ``<source>_task_available`` over the
+    runtime-stream WebSocket, which the extension's service-worker
+    handles by triggering an immediate poll on the matching dispatcher.
+    Failures are silent: if the daemon isn't running the existing
+    chrome.alarms 60s poll fallback still picks the task up.
+    """
+    if source not in {"xhs", "dy"}:
+        return
+    import urllib.error
+    import urllib.request
+
+    url = f"http://127.0.0.1:8420/api/sources/{source}/kick"
+    req = urllib.request.Request(url, method="POST", data=b"")
+    # Short timeout — kick is best-effort. Daemon-not-running /
+    # network blip / connection-refused all degrade silently to the
+    # 60s alarm fallback.
+    with suppress(urllib.error.URLError, TimeoutError, OSError):
+        urllib.request.urlopen(req, timeout=1.0).close()
 
 
 def _collect_xhs_bootstrap_events(
@@ -2119,6 +2147,7 @@ def _enqueue_dy_bootstrap_task() -> str | None:
     if not task_id:
         console.print("  [yellow]抖音初始化信号未导入: 今日任务预算已用完。[/yellow]")
         return None
+    _kick_task_dispatcher("dy")
     return task_id
 
 

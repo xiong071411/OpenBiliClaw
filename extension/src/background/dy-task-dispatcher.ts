@@ -446,6 +446,17 @@ export function handleDyTaskAlarm(alarmName: string): void {
 }
 
 /**
+ * Trigger an immediate poll. Used by the runtime-stream WebSocket
+ * handler when the backend broadcasts ``dy_task_available``, so a
+ * freshly-enqueued bootstrap task is picked up in <100ms instead of
+ * the 0–60s next-alarm wait. Idempotent: pollNextTask() short-circuits
+ * if a task is already in flight.
+ */
+export function pollDyTaskNow(): void {
+  void pollNextTask();
+}
+
+/**
  * Public message handlers — service-worker.ts routes runtime messages
  * into these:
  *   - ``DY_TASK_RESULT``    → ``handleDyTaskResult`` (legacy single-shot)

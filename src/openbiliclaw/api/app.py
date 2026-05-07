@@ -2453,6 +2453,39 @@ def create_app(
 
         return {"ok": True}
 
+    # ── Wake-up kick endpoints ──────────────────────────────────────
+    #
+    # The extension's task dispatchers normally poll on a 60s
+    # chrome.alarms timer. That's fine for the steady state but
+    # introduces a 0–60s wait between CLI enqueue and extension pickup,
+    # which racing init's 30s collect window is the actual reason init
+    # sometimes prints "扩展未连接或任务仍在后台跑". These endpoints let
+    # the CLI broadcast a wake-up event over the existing
+    # /api/runtime-stream WebSocket so the dispatcher polls immediately
+    # instead of waiting for the next alarm. The 60s alarm stays as
+    # fallback for the WS-down case.
+
+    @app.post("/api/sources/xhs/kick")
+    async def xhs_task_kick() -> dict[str, Any]:
+        """Broadcast `xhs_task_available` so any subscribed extension
+        service-worker triggers an immediate poll. Idempotent and best
+        effort — failures here never affect task state."""
+        publish = getattr(getattr(ctx, "event_hub", None), "publish", None)
+        if callable(publish):
+            with suppress(Exception):
+                await publish({"type": "xhs_task_available", "source": "task_kick"})
+        return {"ok": True}
+
+    @app.post("/api/sources/dy/kick")
+    async def dy_task_kick() -> dict[str, Any]:
+        """Broadcast `dy_task_available` over runtime-stream. See
+        xhs_task_kick docstring for rationale."""
+        publish = getattr(getattr(ctx, "event_hub", None), "publish", None)
+        if callable(publish):
+            with suppress(Exception):
+                await publish({"type": "dy_task_available", "source": "task_kick"})
+        return {"ok": True}
+
     # ── Configuration management endpoints ──────────────────────────
 
     def _config_to_response(

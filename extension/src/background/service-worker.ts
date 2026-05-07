@@ -13,6 +13,7 @@ import {
   startXhsTaskPolling,
   handleXhsTaskAlarm,
   handleTaskResult,
+  pollXhsTaskNow,
   type XhsTaskResult,
 } from "./xhs-task-dispatcher.js";
 import {
@@ -20,6 +21,7 @@ import {
   handleDyTaskAlarm,
   handleDyTaskResult,
   handleDyScopeResult,
+  pollDyTaskNow,
   type DyScopeResult,
   type DyTaskResult,
 } from "./dy-task-dispatcher.js";
@@ -160,6 +162,22 @@ function handleRuntimeEvent(event: Record<string, unknown>): void {
   if (handleCookieSyncRuntimeEvent(event)) return;
 
   const eventType = String(event.type ?? "");
+
+  // Task-kick events: the backend broadcasts these from
+  // /api/sources/{xhs,dy}/kick when the CLI enqueues a bootstrap
+  // task. Poking the dispatcher here cuts the worst-case
+  // enqueue→pickup latency from ~60s (alarm interval) to ~50ms,
+  // which is what makes init's 30s collect window reliable.
+  // The chrome.alarms 60s poll stays as fallback for the
+  // WS-down case.
+  if (eventType === "xhs_task_available") {
+    pollXhsTaskNow();
+    return;
+  }
+  if (eventType === "dy_task_available") {
+    pollDyTaskNow();
+    return;
+  }
 
   // v0.3.16+: OS-level Chrome toasts are disabled by user request.
   // Both interest.probe and delight.candidate surface inside the
