@@ -9,7 +9,7 @@
 [![LINUX DO](https://img.shields.io/badge/LINUX_DO-Community-black?style=flat-square&logo=linux)](https://linux.do/)
 [![Discussion](https://img.shields.io/badge/LINUX_DO-Discussion-orange?style=flat-square&logo=discourse)](https://linux.do/t/topic/1978894)
 
-English | [中文](README.md)
+[Homepage](https://whiteguo233.github.io/OpenBiliClaw/) | English | [中文](README.md)
 
 </div>
 
