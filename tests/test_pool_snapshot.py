@@ -44,6 +44,34 @@ def test_build_pool_snapshot_marks_saturated_topics_and_styles(tmp_path):
     assert snapshot.source_deficits["bilibili"] == 33
 
 
+def test_runtime_pool_snapshot_does_not_turn_source_deficits_into_prefer_axes(tmp_path):
+    db = Database(tmp_path / "test.db")
+    db.initialize()
+    db.cache_content(
+        "BVsearch",
+        title="search item",
+        source="search",
+        relevance_score=0.8,
+        pool_expression="x",
+        pool_topic_label="x",
+    )
+
+    snapshot = build_pool_distribution_snapshot(
+        db,
+        pool_target_count=60,
+        source_targets={"bilibili": 48, "xiaohongshu": 6, "douyin": 6},
+    )
+
+    hints = snapshot.to_prompt_hints()
+
+    assert hints["source_deficits"] == {
+        "bilibili": 47,
+        "douyin": 6,
+        "xiaohongshu": 6,
+    }
+    assert hints["prefer_axes"] == []
+
+
 def test_prompt_hints_caps_positive_source_deficits_by_priority():
     snapshot = PoolDistributionSnapshot(
         pool_target_count=100,

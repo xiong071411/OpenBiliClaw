@@ -310,13 +310,13 @@ class SearchStrategy(DiscoveryStrategy):
         *,
         pool_snapshot: object | None = None,
     ) -> list[str]:
-        to_prompt_hints = getattr(pool_snapshot, "to_prompt_hints", None)
-        pool_hints = to_prompt_hints() if callable(to_prompt_hints) else None
-        prompt_messages = build_search_queries_prompt(
-            profile_summary=self._profile_summary(profile),
-            pool_hints=pool_hints,
-        )
         try:
+            to_prompt_hints = getattr(pool_snapshot, "to_prompt_hints", None)
+            pool_hints = to_prompt_hints() if callable(to_prompt_hints) else None
+            prompt_messages = build_search_queries_prompt(
+                profile_summary=self._profile_summary(profile),
+                pool_hints=pool_hints,
+            )
             response = await self.llm_service.complete_structured_task(
                 system_instruction=prompt_messages[0]["content"],
                 user_input=prompt_messages[1]["content"],

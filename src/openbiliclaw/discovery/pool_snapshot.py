@@ -74,10 +74,6 @@ def build_pool_distribution_snapshot(
         distribution_counts.get("franchise_key", {}),
         franchise_threshold,
     )
-    undercovered_axes = tuple(
-        source for source, deficit in sorted(source_deficits.items()) if deficit > 0
-    )
-
     return PoolDistributionSnapshot(
         pool_target_count=target_count,
         pool_available_count=pool_available_count,
@@ -87,7 +83,6 @@ def build_pool_distribution_snapshot(
         saturated_topics=saturated_topics,
         saturated_styles=saturated_styles,
         saturated_franchises=saturated_franchises,
-        undercovered_axes=undercovered_axes,
     )
 
 
