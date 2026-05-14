@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
+from openbiliclaw.discovery.pool_snapshot import build_pool_distribution_snapshot
 from openbiliclaw.recommendation.delight import DEFAULT_DELIGHT_THRESHOLD
 from openbiliclaw.soul.speculator import build_probe_axis, choose_next_probe_candidate
 
@@ -50,6 +51,17 @@ def _call_accepts_strategy_limits(fn: Any) -> bool:
     )
 
 
+def _call_accepts_pool_snapshot(fn: Any) -> bool:
+    """Return whether a discovery callable accepts ``pool_snapshot=``."""
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return True
+    return "pool_snapshot" in signature.parameters or any(
+        param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
+    )
+
+
 class SupportsRuntimeState(Protocol):
     def load_discovery_runtime_state(self) -> dict[str, object]: ...
     def save_discovery_runtime_state(self, state: dict[str, object]) -> None: ...
@@ -68,6 +80,7 @@ class SupportsEventDatabase(Protocol):
     def count_unread_recommendations(self) -> int: ...
     def count_pool_candidates(self) -> int: ...
     def count_pool_candidates_by_source(self) -> dict[str, int]: ...
+    def get_pool_distribution_counts(self) -> dict[str, dict[str, int]]: ...
     def trim_explore_cluster_overflow(self, *, max_per_cluster: int = 3) -> int: ...
     def trim_topic_group_overflow(self, *, max_per_group: int) -> int: ...
     def trim_pool_to_target_count(
@@ -127,6 +140,7 @@ class SupportsDiscoveryEngine(Protocol):
         limit: int = 30,
         *,
         strategy_limits: dict[str, int] | None = None,
+        pool_snapshot: Any | None = None,
     ) -> list[Any]: ...
 
 
@@ -1057,20 +1071,25 @@ class ContinuousRefreshController:
                 current_pool_count=current_pool_count,
                 pool_below_target=initial_pool_below_target,
             )
+            try:
+                pool_snapshot = build_pool_distribution_snapshot(
+                    self.database,
+                    pool_target_count=self.pool_target_count,
+                    source_targets=self._source_target_counts(),
+                )
+            except Exception:
+                logger.exception("Failed to build pool distribution snapshot")
+                pool_snapshot = None
             discover_fn = self.discovery_engine.discover
+            discover_kwargs: dict[str, Any] = {
+                "strategies": strategies,
+                "limit": effective_limit,
+            }
             if strategy_limits and _call_accepts_strategy_limits(discover_fn):
-                discovered = await discover_fn(
-                    profile,
-                    strategies=strategies,
-                    limit=effective_limit,
-                    strategy_limits=strategy_limits,
-                )
-            else:
-                discovered = await discover_fn(
-                    profile,
-                    strategies=strategies,
-                    limit=effective_limit,
-                )
+                discover_kwargs["strategy_limits"] = strategy_limits
+            if _call_accepts_pool_snapshot(discover_fn):
+                discover_kwargs["pool_snapshot"] = pool_snapshot
+            discovered = await discover_fn(profile, **discover_kwargs)
             all_discovered.extend(discovered)
             flattened_strategies.extend(strategies)
 

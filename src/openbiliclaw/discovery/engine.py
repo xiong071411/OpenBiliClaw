@@ -7,13 +7,14 @@ that matches the user's soul profile.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import re
 import time
 from abc import ABC, abstractmethod
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
 from openbiliclaw.discovery.strategies._utils import build_profile_summary
 from openbiliclaw.llm.json_utils import parse_llm_json_tolerant
@@ -406,6 +407,33 @@ class DiscoveryStrategy(ABC):
         return None
 
 
+def _strategy_accepts_pool_snapshot(fn: Any) -> bool:
+    """Return whether a strategy discover callable accepts ``pool_snapshot=``."""
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return True
+    return "pool_snapshot" in signature.parameters or any(
+        param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
+    )
+
+
+async def _call_strategy_discover(
+    strategy: DiscoveryStrategy,
+    profile: SoulProfile,
+    *,
+    limit: int,
+    pool_snapshot: Any | None,
+) -> list[DiscoveredContent]:
+    discover_fn: Any = strategy.discover
+    if _strategy_accepts_pool_snapshot(discover_fn):
+        return cast(
+            "list[DiscoveredContent]",
+            await discover_fn(profile, limit=limit, pool_snapshot=pool_snapshot),
+        )
+    return cast("list[DiscoveredContent]", await discover_fn(profile, limit=limit))
+
+
 class ContentDiscoveryEngine:
     """Orchestrates multiple discovery strategies.
 
@@ -473,6 +501,7 @@ class ContentDiscoveryEngine:
         *,
         fully_parallel: bool = False,
         strategy_limits: dict[str, int] | None = None,
+        pool_snapshot: Any | None = None,
     ) -> list[DiscoveredContent]:
         """Run discovery with selected (or all) strategies.
 
@@ -491,6 +520,8 @@ class ContentDiscoveryEngine:
                 ``limit`` still caps returned/cached results; this only
                 prevents a grouped refresh from giving every strategy the
                 full platform deficit.
+            pool_snapshot: Optional current pool distribution summary for
+                strategies that can use pool-aware discovery guidance.
 
         Returns:
             Combined, deduplicated, and scored list of discovered content.
@@ -509,6 +540,7 @@ class ContentDiscoveryEngine:
             limit=effective_limit,
             fully_parallel=fully_parallel,
             strategy_limits=strategy_limits,
+            pool_snapshot=pool_snapshot,
         )
         # Normalize topic_group using embeddings before dedup
         merged_primary = self._merge_and_rank(primary_results)
@@ -1234,6 +1266,7 @@ class ContentDiscoveryEngine:
         limit: int,
         fully_parallel: bool = False,
         strategy_limits: dict[str, int] | None = None,
+        pool_snapshot: Any | None = None,
     ) -> list[DiscoveredContent]:
         results: list[DiscoveredContent] = []
         run_entries = [
@@ -1262,7 +1295,12 @@ class ContentDiscoveryEngine:
                 s_t0 = time.monotonic()
                 logger.info("strategy %s: dispatch limit=%d", strategy.name, run_limit)
                 try:
-                    result = await strategy.discover(profile, limit=run_limit)
+                    result = await _call_strategy_discover(
+                        strategy,
+                        profile,
+                        limit=run_limit,
+                        pool_snapshot=pool_snapshot,
+                    )
                 finally:
                     logger.info(
                         "strategy %s: done in %.1fs",
@@ -1295,7 +1333,15 @@ class ContentDiscoveryEngine:
 
             # Phase 1: run search strategy first to get clean IP quota
             if search_entries:
-                tasks = [s.discover(profile, limit=run_limit) for s, run_limit in search_entries]
+                tasks = [
+                    _call_strategy_discover(
+                        s,
+                        profile,
+                        limit=run_limit,
+                        pool_snapshot=pool_snapshot,
+                    )
+                    for s, run_limit in search_entries
+                ]
                 gathered = await asyncio.gather(*tasks, return_exceptions=True)
                 results.extend(
                     self._collect_strategy_results([s for s, _ in search_entries], gathered)
@@ -1307,7 +1353,15 @@ class ContentDiscoveryEngine:
 
             # Phase 2: run remaining strategies concurrently
             if other_entries:
-                tasks = [s.discover(profile, limit=run_limit) for s, run_limit in other_entries]
+                tasks = [
+                    _call_strategy_discover(
+                        s,
+                        profile,
+                        limit=run_limit,
+                        pool_snapshot=pool_snapshot,
+                    )
+                    for s, run_limit in other_entries
+                ]
                 gathered = await asyncio.gather(*tasks, return_exceptions=True)
                 results.extend(
                     self._collect_strategy_results([s for s, _ in other_entries], gathered)

@@ -338,6 +338,31 @@ class _BackfillAwareStrategy(_RecordingStrategy):
         )
 
 
+class _PoolSnapshotStrategy(_RecordingStrategy):
+    def __init__(self) -> None:
+        super().__init__(
+            "snapshot-aware",
+            [
+                DiscoveredContent(
+                    bvid="BV1SNAP",
+                    relevance_score=0.9,
+                    source_strategy="snapshot-aware",
+                )
+            ],
+        )
+        self.pool_snapshots: list[object | None] = []
+
+    async def discover(
+        self,
+        profile: SoulProfile,
+        limit: int = 20,
+        *,
+        pool_snapshot: object | None = None,
+    ) -> list[DiscoveredContent]:
+        self.pool_snapshots.append(pool_snapshot)
+        return await super().discover(profile, limit=limit)
+
+
 @pytest.mark.asyncio
 async def test_register_strategy_replaces_existing_strategy_with_same_name() -> None:
     started: list[str] = []
@@ -365,6 +390,50 @@ async def test_register_strategy_replaces_existing_strategy_with_same_name() -> 
 
     assert started == ["douyin_direct"]
     assert [item.bvid for item in results] == ["dy:new"]
+
+
+@pytest.mark.asyncio
+async def test_discovery_engine_passes_pool_snapshot_to_supported_strategy() -> None:
+    pool_snapshot = object()
+    strategy = _PoolSnapshotStrategy()
+    engine = ContentDiscoveryEngine()
+    engine.register_strategy(strategy)
+
+    results = await engine.discover(
+        _build_profile(),
+        strategies=["snapshot-aware"],
+        limit=1,
+        pool_snapshot=pool_snapshot,
+    )
+
+    assert [item.bvid for item in results] == ["BV1SNAP"]
+    assert strategy.pool_snapshots == [pool_snapshot]
+
+
+@pytest.mark.asyncio
+async def test_discovery_engine_keeps_legacy_strategy_signature() -> None:
+    strategy = _RecordingStrategy(
+        "legacy",
+        [
+            DiscoveredContent(
+                bvid="BV1LEGACY",
+                relevance_score=0.9,
+                source_strategy="legacy",
+            )
+        ],
+    )
+    engine = ContentDiscoveryEngine()
+    engine.register_strategy(strategy)
+
+    results = await engine.discover(
+        _build_profile(),
+        strategies=["legacy"],
+        limit=1,
+        pool_snapshot=object(),
+    )
+
+    assert [item.bvid for item in results] == ["BV1LEGACY"]
+    assert strategy.limits == [1]
 
 
 def test_llm_eval_candidate_limit_uses_tighter_small_gap_window() -> None:
