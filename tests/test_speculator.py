@@ -612,14 +612,15 @@ def test_speculator_max_active_limit():
 
 
 def test_should_generate_respects_primary_cap():
-    """Skip generation when confirmed domains + active speculations >= cap."""
+    """Skip generation when active speculations reach the primary cap."""
     from openbiliclaw.soul.profile import InterestDomain, InterestLayer, OnionProfile
 
     with tempfile.TemporaryDirectory() as tmpdir:
         data_dir = Path(tmpdir)
-        # 12 confirmed domains + 2 active = 14, cap is 15 → should generate
+        # Many confirmed domains should not deadlock the probe loop; only active
+        # speculative fanout is capped.
         profile = OnionProfile(
-            interest=InterestLayer(likes=[InterestDomain(domain=f"域{i}") for i in range(12)])
+            interest=InterestLayer(likes=[InterestDomain(domain=f"域{i}") for i in range(30)])
         )
         state = SpeculativeState(
             active=[
@@ -634,15 +635,17 @@ def test_should_generate_respects_primary_cap():
         )
         assert speculator._should_generate(state, datetime.now(), profile) is True
 
-        # 14 confirmed + 2 active = 16 >= 15 → should NOT generate
-        profile2 = OnionProfile(
-            interest=InterestLayer(likes=[InterestDomain(domain=f"域{i}") for i in range(14)])
+        capped_state = SpeculativeState(
+            active=[
+                SpeculativeInterest(domain=f"猜{i}", status="active")
+                for i in range(15)
+            ]
         )
-        assert speculator._should_generate(state, datetime.now(), profile2) is False
+        assert speculator._should_generate(capped_state, datetime.now(), profile) is False
 
 
 def test_should_generate_respects_secondary_cap():
-    """Skip generation when confirmed specifics + active speculations >= cap."""
+    """Skip generation when active speculations reach the secondary cap."""
     from openbiliclaw.soul.profile import (
         InterestDomain,
         InterestLayer,
@@ -652,7 +655,8 @@ def test_should_generate_respects_secondary_cap():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         data_dir = Path(tmpdir)
-        # 3 domains with 20 specifics each = 60, cap is 60 → should NOT generate
+        # Rich confirmed specifics should not deadlock the probe loop; only
+        # active speculative fanout is capped.
         profile = OnionProfile(
             interest=InterestLayer(
                 likes=[
@@ -674,7 +678,15 @@ def test_should_generate_respects_secondary_cap():
             data_dir=data_dir,
             max_secondary_interests=60,
         )
-        assert speculator._should_generate(state, datetime.now(), profile) is False
+        assert speculator._should_generate(state, datetime.now(), profile) is True
+
+        capped_state = SpeculativeState(
+            active=[
+                SpeculativeInterest(domain=f"猜{i}", status="active")
+                for i in range(60)
+            ]
+        )
+        assert speculator._should_generate(capped_state, datetime.now(), profile) is False
 
 
 async def test_force_tick_ignores_interval():
@@ -713,52 +725,52 @@ async def test_speculator_generate_keeps_visible_experience_mix():
                             {
                                 "domain": "博弈论科普",
                                 "category": "知识解释",
-                                "reason": "系统性思维延伸。",
+                                "reason": "你一直在看结构化推演内容，这个方向能继续提供可验证的思考乐趣。",
                                 "bridge_type": "near",
                                 "confidence": 0.59,
                                 "experience_mode": "knowledge",
                                 "entry_load": "heavy",
-                                "specifics": ["纳什均衡"],
+                                "specifics": ["纳什均衡", "机制设计入门"],
                             },
                             {
                                 "domain": "AI治理",
                                 "category": "社会文化",
-                                "reason": "延续因果链兴趣。",
+                                "reason": "你对技术影响现实社会的链条敏感，这个方向能接住这种关注。",
                                 "bridge_type": "far",
                                 "confidence": 0.57,
                                 "experience_mode": "knowledge",
                                 "entry_load": "heavy",
-                                "specifics": ["监管辩论"],
+                                "specifics": ["监管辩论", "模型风险案例"],
                             },
                             {
                                 "domain": "建筑叙事",
                                 "category": "审美体验",
-                                "reason": "偏好结构和空间逻辑。",
+                                "reason": "你会被空间里的结构和叙事吸引，这个方向能把抽象秩序落到具体场景。",
                                 "bridge_type": "novel",
                                 "confidence": 0.55,
                                 "experience_mode": "knowledge",
                                 "entry_load": "heavy",
-                                "specifics": ["城市更新"],
+                                "specifics": ["城市更新", "公共空间改造"],
                             },
                             {
                                 "domain": "城市漫游",
                                 "category": "现实观察",
-                                "reason": "想从具体空间感受城市。",
+                                "reason": "你有从具体场景观察系统的习惯，这个方向入口轻但仍有结构感。",
                                 "bridge_type": "near",
                                 "confidence": 0.49,
                                 "experience_mode": "wander_observe",
                                 "entry_load": "light",
-                                "specifics": ["街区vlog"],
+                                "specifics": ["街区vlog", "城市步行路线"],
                             },
                             {
                                 "domain": "器物修复",
                                 "category": "实操动手",
-                                "reason": "对结构拆解有兴趣。",
+                                "reason": "你喜欢看结构怎么被拆开再复原，这个方向能给到更直接的动手反馈。",
                                 "bridge_type": "near",
                                 "confidence": 0.48,
                                 "experience_mode": "hands_on",
                                 "entry_load": "light",
-                                "specifics": ["旧物翻新"],
+                                "specifics": ["旧物翻新", "工具修复过程"],
                             },
                         ]
                     },
