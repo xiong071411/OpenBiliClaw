@@ -3876,16 +3876,39 @@ function bindSettings() {
     }
   }
 
+  const setVal = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.value = val ?? "";
+  };
+
+  const getVal = (id) => {
+    const el = document.getElementById(id);
+    return el ? el.value : "";
+  };
+
+  const getInt = (id, fallback) => {
+    const raw = getVal(id);
+    if (raw === "") return fallback;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  const getFloat = (id, fallback) => {
+    const raw = getVal(id);
+    if (raw === "") return fallback;
+    const parsed = parseFloat(raw);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  const checked = (id, fallback = false) => {
+    const el = document.getElementById(id);
+    return el ? el.checked : fallback;
+  };
+
   function populateForm(cfg) {
     // LLM
     providerSelect.value = cfg.llm?.default_provider || "openai";
     showProviderFields(providerSelect.value);
-
-    // Provider fields
-    const setVal = (id, val) => {
-      const el = document.getElementById(id);
-      if (el) el.value = val || "";
-    };
 
     setVal("cfgOpenaiKey", cfg.llm?.openai?.api_key);
     setVal("cfgOpenaiModel", cfg.llm?.openai?.model);
@@ -4001,27 +4024,6 @@ function bindSettings() {
   }
 
   function collectForm() {
-    const getVal = (id) => {
-      const el = document.getElementById(id);
-      return el ? el.value : "";
-    };
-    const getInt = (id, fallback) => {
-      const raw = getVal(id);
-      if (raw === "") return fallback;
-      const parsed = parseInt(raw, 10);
-      return Number.isFinite(parsed) ? parsed : fallback;
-    };
-    const getFloat = (id, fallback) => {
-      const raw = getVal(id);
-      if (raw === "") return fallback;
-      const parsed = parseFloat(raw);
-      return Number.isFinite(parsed) ? parsed : fallback;
-    };
-    const checked = (id, fallback = false) => {
-      const el = document.getElementById(id);
-      return el ? el.checked : fallback;
-    };
-
     return {
       language: getVal("cfgLanguage"),
       data_dir: getVal("cfgDataDir"),
@@ -4176,12 +4178,25 @@ function bindSettings() {
       suggestBtn.disabled = true;
       toast.hidden = true;
       try {
-        const suggestion = await fetchSourceShareSuggestion();
+        const suggestion = await fetchSourceShareSuggestion({
+          enabled_sources: {
+            bilibili: true,
+            xiaohongshu: checked("cfgXhsEnabled", true),
+            douyin: checked("cfgDouyinEnabled"),
+            youtube: checked("cfgYoutubeEnabled"),
+          },
+          configured_shares: {
+            bilibili: getInt("cfgPoolShareBilibili", 8),
+            xiaohongshu: getInt("cfgPoolShareXhs", 1),
+            douyin: getInt("cfgPoolShareDouyin", 1),
+            youtube: getInt("cfgPoolShareYoutube", 1),
+          },
+        });
         const shares = suggestion?.suggested_shares || {};
-        setVal("cfgPoolShareBilibili", shares.bilibili);
-        setVal("cfgPoolShareXhs", shares.xiaohongshu);
-        setVal("cfgPoolShareDouyin", shares.douyin);
-        setVal("cfgPoolShareYoutube", shares.youtube);
+        if (shares.bilibili !== undefined) setVal("cfgPoolShareBilibili", shares.bilibili);
+        if (shares.xiaohongshu !== undefined) setVal("cfgPoolShareXhs", shares.xiaohongshu);
+        if (shares.douyin !== undefined) setVal("cfgPoolShareDouyin", shares.douyin);
+        if (shares.youtube !== undefined) setVal("cfgPoolShareYoutube", shares.youtube);
         showToast("已按已有信号填入建议比例，保存后生效。", "success");
       } catch (err) {
         showToast(`生成建议失败: ${err.message}`, "error");

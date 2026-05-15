@@ -646,6 +646,13 @@ class ConfigUpdateIn(BaseModel):
     logging: dict[str, object] | None = None
 
 
+class SourceShareSuggestionIn(BaseModel):
+    """Optional overrides from a settings form that has not been saved yet."""
+
+    enabled_sources: dict[str, bool] | None = None
+    configured_shares: dict[str, int] | None = None
+
+
 class ConfigUpdateResponse(BaseModel):
     """Response after config save."""
 

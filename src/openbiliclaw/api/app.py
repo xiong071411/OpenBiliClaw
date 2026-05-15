@@ -63,6 +63,7 @@ from openbiliclaw.api.models import (
     SchedulerConfigOut,
     SourcesBrowserConfigOut,
     SourcesConfigOut,
+    SourceShareSuggestionIn,
     SourceShareSuggestionResponse,
     StorageConfigOut,
     XiaohongshuSourceConfigOut,
@@ -3546,11 +3547,22 @@ def create_app(
             reloaded=reloaded,
         )
 
-    @app.get(
-        "/api/config/source-share-suggestion",
-        response_model=SourceShareSuggestionResponse,
-    )
-    def source_share_suggestion() -> SourceShareSuggestionResponse:
+    def _normalize_enabled_sources_override(
+        raw_enabled: dict[str, bool] | None,
+        fallback: dict[str, bool],
+    ) -> dict[str, bool]:
+        if raw_enabled is None:
+            return fallback
+        enabled = {"bilibili": True}
+        for source in _SOURCE_SHARE_ORDER:
+            if source == "bilibili":
+                continue
+            enabled[source] = bool(raw_enabled.get(source, False))
+        return {source: enabled.get(source, False) for source in _SOURCE_SHARE_ORDER}
+
+    def _build_source_share_suggestion_response(
+        payload: SourceShareSuggestionIn | None = None,
+    ) -> SourceShareSuggestionResponse:
         """Suggest pool source shares from observed platform event counts."""
         from openbiliclaw.config import load_config
         from openbiliclaw.runtime.source_policy import (
@@ -3560,17 +3572,42 @@ def create_app(
 
         cfg = load_config()
         event_counts = _count_events_by_source_platform(ctx.database)
-        enabled_sources = source_enabled_map(cfg)
+        enabled_sources = _normalize_enabled_sources_override(
+            payload.enabled_sources if payload else None,
+            source_enabled_map(cfg),
+        )
         suggested_shares = suggest_pool_source_shares(
             event_counts,
             enabled_sources=enabled_sources,
-            configured_shares=cfg.scheduler.pool_source_shares,
+            configured_shares=(
+                payload.configured_shares
+                if payload and payload.configured_shares is not None
+                else cfg.scheduler.pool_source_shares
+            ),
         )
         return SourceShareSuggestionResponse(
             event_counts=event_counts,
             enabled_sources=enabled_sources,
             suggested_shares=suggested_shares,
         )
+
+    @app.get(
+        "/api/config/source-share-suggestion",
+        response_model=SourceShareSuggestionResponse,
+    )
+    def source_share_suggestion() -> SourceShareSuggestionResponse:
+        """Suggest pool source shares from saved config switches."""
+        return _build_source_share_suggestion_response()
+
+    @app.post(
+        "/api/config/source-share-suggestion",
+        response_model=SourceShareSuggestionResponse,
+    )
+    def source_share_suggestion_for_form(
+        payload: SourceShareSuggestionIn,
+    ) -> SourceShareSuggestionResponse:
+        """Suggest pool source shares from unsaved settings form state."""
+        return _build_source_share_suggestion_response(payload)
 
     # v0.3.57+: one-shot purge of self-authored xhs pool rows that
     # accumulated before the per-path filter was wired in. No-op on

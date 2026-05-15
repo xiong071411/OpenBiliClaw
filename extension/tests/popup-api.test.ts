@@ -306,6 +306,61 @@ test("fetchSourceShareSuggestion loads source-share recommendation", async () =>
   assert.equal(result.suggested_shares.youtube, 5);
 });
 
+test("fetchSourceShareSuggestion posts current settings overrides when provided", async () => {
+  const calls: Array<{ url: string; options: any }> = [];
+  globalThis.fetch = async (url: any, options: any) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return {
+          event_counts: { bilibili: 9, youtube: 4 },
+          enabled_sources: { bilibili: true, youtube: true },
+          suggested_shares: { bilibili: 6, youtube: 4 },
+        };
+      },
+    };
+  };
+
+  const result = await fetchSourceShareSuggestion({
+    enabled_sources: {
+      bilibili: true,
+      xiaohongshu: false,
+      douyin: false,
+      youtube: true,
+    },
+    configured_shares: {
+      bilibili: 6,
+      xiaohongshu: 2,
+      douyin: 1,
+      youtube: 2,
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0].url,
+    "http://127.0.0.1:8420/api/config/source-share-suggestion",
+  );
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers["Content-Type"], "application/json");
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    enabled_sources: {
+      bilibili: true,
+      xiaohongshu: false,
+      douyin: false,
+      youtube: true,
+    },
+    configured_shares: {
+      bilibili: 6,
+      xiaohongshu: 2,
+      douyin: 1,
+      youtube: 2,
+    },
+  });
+  assert.equal(result.suggested_shares.youtube, 4);
+});
+
 test("updateConfig sends PUT with embedding config", async () => {
   const calls: Array<{ url: string; options: any }> = [];
   globalThis.fetch = async (url: any, options: any) => {

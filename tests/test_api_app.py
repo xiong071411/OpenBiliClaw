@@ -3318,6 +3318,83 @@ class TestEmbeddingAndCompatProviderE2E:
             },
         }
 
+    def test_source_share_suggestion_post_uses_form_overrides(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """POST /api/config/source-share-suggestion should support the
+        extension settings page's unsaved switch/share state."""
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.config import Config, save_config
+
+        cfg = Config()
+        cfg.sources.xiaohongshu.enabled = True
+        cfg.sources.douyin.enabled = True
+        cfg.sources.youtube.enabled = False
+        cfg.scheduler.pool_source_shares = {
+            "bilibili": 8,
+            "xiaohongshu": 1,
+            "douyin": 1,
+            "youtube": 1,
+        }
+        config_path = tmp_path / "config.toml"
+        save_config(cfg, config_path)
+        monkeypatch.setattr("openbiliclaw.config.load_config", lambda *_a, **_kw: cfg)
+
+        class FakeDatabase:
+            def count_events_by_source_platform(self) -> dict[str, int]:
+                return {
+                    "bilibili": 900,
+                    "xiaohongshu": 100,
+                    "douyin": 9,
+                    "youtube": 400,
+                }
+
+        app = create_app(
+            memory_manager=object(),
+            database=FakeDatabase(),
+            soul_engine=object(),
+        )
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/config/source-share-suggestion",
+            json={
+                "enabled_sources": {
+                    "bilibili": True,
+                    "xiaohongshu": False,
+                    "douyin": False,
+                    "youtube": True,
+                },
+                "configured_shares": {
+                    "bilibili": 6,
+                    "xiaohongshu": 4,
+                    "douyin": 4,
+                    "youtube": 2,
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "event_counts": {
+                "bilibili": 900,
+                "xiaohongshu": 100,
+                "douyin": 9,
+                "youtube": 400,
+            },
+            "enabled_sources": {
+                "bilibili": True,
+                "xiaohongshu": False,
+                "douyin": False,
+                "youtube": True,
+            },
+            "suggested_shares": {
+                "bilibili": 6,
+                "youtube": 4,
+            },
+        }
+
 
 def test_events_endpoint_emits_activity_added_runtime_event() -> None:
     """v0.3.38 — POST /api/events publishes ``activity.added`` so the

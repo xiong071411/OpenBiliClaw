@@ -236,7 +236,16 @@ export async function fetchConfig() {
   return requestJson("/config?reveal_keys=true", { method: "GET" });
 }
 
-export async function fetchSourceShareSuggestion() {
+export async function fetchSourceShareSuggestion(overrides = null) {
+  if (overrides && typeof overrides === "object") {
+    return requestJson("/config/source-share-suggestion", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(overrides),
+    });
+  }
   return requestJson("/config/source-share-suggestion", { method: "GET" });
 }
 
