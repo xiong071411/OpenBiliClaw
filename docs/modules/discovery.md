@@ -39,7 +39,7 @@
 - **YtTaskQueue / Takeout parser** — YouTube 初始化画像走扩展任务桥读取观看历史 / 订阅 / 点赞；Google Takeout 导入走 `youtube.takeout` 离线解析，两条入口都转成统一行为事件。
 - **YouTube discovery strategies** — `yt_search` 由 LLM 从画像生成关键词后用 `scrapetube` 搜索，`yt_trending` 优先通过 YouTube InnerTube browse API 拉 trending feed，当前 `FEtrending` 失效时降级抓取公开 topic 页的 `ytInitialData` 视频，`yt_channel` 从 DB 中 YouTube follow 事件读取订阅频道并用 `scrapetube` / `yt-dlp` 拉最新视频；三者都输出 `source_platform="youtube"` 的 `DiscoveredContent` 并进入 LLM 打分过滤。
 - **DouyinDiscoveryService / DouyinDirectStrategy / DouyinDirectClient** — 抖音 discovery 走 opt-in 路径，服务层统一封装 search / hot / feed 三个公开来源，既可通过 `ContentDiscoveryEngine` 写入 `content_cache`，也可在 `openbiliclaw discover-douyin --no-cache` 下直接跑策略调试。
-- **DouyinPluginSearchClient** — search 子来源优先复用 `dy_tasks(type="search")` 插件签名链路，结果以 `dy-plugin-search` 进入 discovery；hot 子来源优先复用 `dy_tasks(type="hot")`，由扩展打开 `/hot/{sentence_id}` 后签名 related API，结果以 `dy-plugin-hot-related` 进入 discovery；feed 子来源复用 `dy_tasks(type="feed")`，由扩展在首页签名 `/aweme/v1/web/tab/feed/`，结果以 `dy-plugin-feed` 进入 discovery。每次入队前会把过期的 search / hot / feed pending discovery 任务标记为 failed，避免旧任务挡住当前 producer；`ContentDiscoveryEngine.register_strategy()` 会按 strategy name 替换旧实例，避免 `DouyinDiscoveryService(cache=True)` 多轮运行后累积多个 `douyin_direct` 并重复入队 search。`openbiliclaw search-douyin` 仍保留为独立 search smoke / 诊断命令，结果不转成 memory event。
+- **DouyinPluginSearchClient** — search 子来源优先复用 `dy_tasks(type="search")` 插件签名链路，结果以 `dy-plugin-search` 进入 discovery；hot 子来源优先复用 `dy_tasks(type="hot")`，由扩展后台打开 `/hot/{sentence_id}` 后签名 related API，结果以 `dy-plugin-hot-related` 进入 discovery；feed 子来源复用 `dy_tasks(type="feed")`，由扩展在后台首页签名 `/aweme/v1/web/tab/feed/`，结果以 `dy-plugin-feed` 进入 discovery。search / hot / feed discovery 任务都会用非激活 tab 执行，只有 `bootstrap_profile` 这类显式账号信号导入允许前台。每次入队前会把过期的 search / hot / feed pending discovery 任务标记为 failed，避免旧任务挡住当前 producer；`ContentDiscoveryEngine.register_strategy()` 会按 strategy name 替换旧实例，避免 `DouyinDiscoveryService(cache=True)` 多轮运行后累积多个 `douyin_direct` 并重复入队 search。`openbiliclaw search-douyin` 仍保留为独立 search smoke / 诊断命令，结果不转成 memory event。
 
 `BrowserManager` 有两个可替换后端，由 `[sources.browser].cdp_url` 决定：
 
@@ -477,9 +477,9 @@ discovery 不是“把整个找片过程都交给 LLM”。当前实现里，LLM
 | v0.3.1 trim_topic_group 每 tick 触发 | ✅ | 修复"trim 只在 discover 之后跑"的盲点：`_enforce_pool_cap` 路径上每 tick 都调一次，避免 pool 满 cap 时 topic 配额永远不收敛 |
 | v0.3.31 小红书来源族均衡 | ✅ | `xhs-extension-task/search/profile` 等 raw source 归并为 `xiaohongshu` 平台族参与配额，满池时会从 suppressed 高分小红书候选中复活 under-quota 库存，再按统一 cap trim 让出空间 |
 | v0.3.67-0.3.69 抖音 discovery 策略边界 | ✅ | `DouyinDiscoveryService` 现在封装 search / hot / feed 三个公开来源的统一策略边界，Cookie 从环境变量覆盖或扩展同步文件解析；`discover --source douyin` 走缓存路径，`discover-douyin` 可指定关键词、子来源并用 `--no-cache --no-evaluate` 调试；作者主页 `creator` 不再作为默认公开渠道 |
-| v0.3.68 抖音插件签名 search discovery | ✅ | `search-douyin` 入队 `dy_tasks(type="search")`，扩展在登录浏览器中用页面 acrawler 签名搜索 API 并回传 `dy_search` 候选；正式 `search` 子来源现在优先复用这条链路，以 `dy-plugin-search` 进入 discovery，不传播为画像事件 |
-| v0.3.68 抖音插件 hot-related discovery | ✅ | `hot` 子来源先取 hot board 的 `sentence_id`，再入队 `dy_tasks(type="hot")`；扩展打开 `/hot/{sentence_id}` 并签名 related API 回传 `dy_hot` 候选，正式以 `dy-plugin-hot-related` 进入 discovery |
-| v0.3.69 抖音插件首页 feed discovery | ✅ | `feed` 子来源入队 `dy_tasks(type="feed")`，扩展在登录首页签名 `/aweme/v1/web/tab/feed/` 并回传 `dy_feed` 候选，正式以 `dy-plugin-feed` 进入 discovery；CLI 公开来源收敛为 `search` / `hot` / `feed` |
+| v0.3.68 抖音插件签名 search discovery | ✅ | `search-douyin` 入队 `dy_tasks(type="search")`，扩展在登录浏览器后台 tab 中用页面 acrawler 签名搜索 API 并回传 `dy_search` 候选；正式 `search` 子来源现在优先复用这条链路，以 `dy-plugin-search` 进入 discovery，不传播为画像事件 |
+| v0.3.68 抖音插件 hot-related discovery | ✅ | `hot` 子来源先取 hot board 的 `sentence_id`，再入队 `dy_tasks(type="hot")`；扩展后台打开 `/hot/{sentence_id}` 并签名 related API 回传 `dy_hot` 候选，正式以 `dy-plugin-hot-related` 进入 discovery |
+| v0.3.69 抖音插件首页 feed discovery | ✅ | `feed` 子来源入队 `dy_tasks(type="feed")`，扩展在后台登录首页签名 `/aweme/v1/web/tab/feed/` 并回传 `dy_feed` 候选，正式以 `dy-plugin-feed` 进入 discovery；CLI 公开来源收敛为 `search` / `hot` / `feed` |
 | v0.3.69 抖音 runtime search 防重复 | ✅ | discovery engine 注册同名 strategy 时替换旧实例，避免 `douyin_direct` 在长期后台运行中累积成多个同名策略并重复创建 search 任务；扩展 search 任务单关键词 timeout 放宽到 120s，覆盖页面跳转与 acrawler 签名耗时 |
 | SearchStrategy LLM 评估 | ✅ | `SearchStrategy` 现在默认走 `evaluate_content()` LLM 打分（`llm_evaluation=True`），不再只用本地启发式（上限 0.62），可通过 `llm_evaluation=False` 关闭 |
 | 策略中间产物捕获 | ✅ | 4 个策略均支持 `last_intermediates` 属性，运行后可查看生成的搜索词、选择的分区、种子列表、探索域等中间产物 |
@@ -574,7 +574,7 @@ assert result.source_counts.get("dy-plugin-feed", 0) >= 0
 
 - `cache=True` 且传入 `discovery_engine` 时，服务会注册 `DouyinDirectStrategy`，再通过 `ContentDiscoveryEngine.discover(..., strategies=["douyin_direct"])` 走统一评估、压缩和缓存写入。注册按 strategy name 替换旧实例，所以长期 runtime 每轮只会保留一个 `douyin_direct`，不会把同一个关键词重复入队成多个 search 任务。
 - `cache=False` 时服务会直接执行 `DouyinDirectStrategy.discover()`，适合 CLI smoke、源接口排查和未来 API 预览，不会写入 `content_cache`。
-- `sources` 公开支持 `search`、`hot`、`feed`；CLI 中 `search` 会优先走插件签名链路并标记为 `dy-plugin-search`，`hot` 会优先走插件 hot-related 链路并标记为 `dy-plugin-hot-related`，`feed` 会走首页推荐流插件签名链路并标记为 `dy-plugin-feed`。hot 插件任务会带总目标数，dispatcher 累计达到目标后直接 finalise；小批量请求只展开少量 hot seed，降低 `/hot/{sentence_id}` 串行跳转导致的超时概率。插件任务空 / 超时 / 失败时 search / hot 会再回退 direct-cookie search / hot，feed 仅保留 direct-cookie 诊断 fallback。插件 discovery 入队前会清理超过等待窗口的 search / hot / feed pending 任务，避免 daemon 重启或旧版本重复入队后，新任务被陈旧队列阻塞；这些清理出来的 `failed/stale_pending` 不计入每日任务预算。
+- `sources` 公开支持 `search`、`hot`、`feed`；CLI 中 `search` 会优先走后台插件签名链路并标记为 `dy-plugin-search`，`hot` 会优先走后台插件 hot-related 链路并标记为 `dy-plugin-hot-related`，`feed` 会走后台首页推荐流插件签名链路并标记为 `dy-plugin-feed`。hot 插件任务会带总目标数，dispatcher 累计达到目标后直接 finalise；小批量请求只展开少量 hot seed，降低 `/hot/{sentence_id}` 串行跳转导致的超时概率。插件任务空 / 超时 / 失败时 search / hot 会再回退 direct-cookie search / hot，feed 仅保留 direct-cookie 诊断 fallback。插件 discovery 入队前会清理超过等待窗口的 search / hot / feed pending 任务，避免 daemon 重启或旧版本重复入队后，新任务被陈旧队列阻塞；这些清理出来的 `failed/stale_pending` 不计入每日任务预算。
 - runtime `DouyinDiscoveryProducer` 每轮把 `keywords_per_run` 收窄到 1，并按当前抖音缺口动态选子来源：缺口很小时只跑 feed，较小缺口优先 hot 再 feed，缺口较大只跑 search / hot，把可用预算留给更能补池的两个来源，避免大缺口仍被低产出的 feed 拖住。runtime 构造插件客户端时还会按本轮抖音缺口动态抬高 hot 任务预算（最多 60）；CLI smoke / 手动 discovery 仍可通过 `sources` / `keywords` 显式控制搜索面。扩展侧单关键词 search timeout 和后端默认等待窗口均为 180 秒，给首页打开、搜索页跳转、MAIN-world 签名 API 和 DOM 兜底解析留足窗口。
 - `DouyinDirectClient.get_hot_terms()` 会从 hot board 抽取 `sentence_id` 给插件 hot 任务使用；`get_hot_board()` 只作为 direct-cookie fallback，只有响应内直接携带 aweme 时才会产出视频。
 - CLI 创建 `DouyinDirectClient` 前会先读 `OPENBILICLAW_DOUYIN_COOKIE`（或 `cookie_env` 指向的变量），再回退到扩展同步的 `data/douyin_cookie.json`；后者由 `/api/sources/dy/cookie` 写入，不镜像到 `config.toml`。
@@ -635,7 +635,7 @@ distribution_counts = database.get_pool_distribution_counts()
 行为说明：
 
 - 配额单位是“平台族”，不是 raw `content_cache.source`。B 站的 `search` / `related_chain` / `trending` / `explore` 统一计入 `bilibili`；小红书的 `xhs-extension-*` 统一计入 `xiaohongshu`；抖音的 `dy-plugin-*` / `douyin*` 统一计入 `douyin`。
-- B 站缺口仍由 `ContentDiscoveryEngine.discover()` 的四个策略补齐；小红书缺口由 `XhsTaskProducer` / 浏览器插件任务链补齐；抖音缺口由 runtime `DouyinDiscoveryProducer` 调用 `DouyinDiscoveryService(cache=True)`，小缺口用 feed / hot 快速补零散名额，大缺口优先 search / hot 插件签名链路补池。
+- B 站缺口仍由 `ContentDiscoveryEngine.discover()` 的四个策略补齐；小红书缺口由 `XhsTaskProducer` / 浏览器插件任务链补齐；抖音缺口由 runtime `DouyinDiscoveryProducer` 调用 `DouyinDiscoveryService(cache=True)`，小缺口用 feed / hot 快速补零散名额，大缺口优先 search / hot 后台插件签名链路补池。
 - 如果池子已满但 `xiaohongshu` 或 `douyin` 低于配额，`reactivate_under_quota_pool_sources()` 会优先从 `pool_status='suppressed'` 且可打开的高分小平台候选中复活一批；如果某个平台族超过配额，`trim_pool_source_overflow()` 会先把该族压回目标内，即使总池子还没有达到 `pool_target_count`。
 - `trim_pool_to_target_count()` 继续负责总量硬上限：单轮 discovery 超过总池子目标时，会在平台配额保护后把总量裁回 `pool_target_count`。
 - B 站补货 limit 使用 `bilibili` 平台自身缺口，而不是“总池子缺口”；例如总池子缺 57 条但 B 站只缺 5 条时，本轮 B 站 discovery 总目标只请求 5 条，并分摊为 `search=2, related_chain=1, trending=1, explore=1`，避免四个策略各自按 5 条去过采样和 LLM 评估。

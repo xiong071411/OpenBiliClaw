@@ -21,7 +21,7 @@
 
 - **🎵 Douyin init-profile signals** — `openbiliclaw init --yes-douyin` can pull post / favorite / like / follow signals through the browser extension and feed them into preference analysis and the first soul profile.
 - **▶ YouTube init-profile signals** — `openbiliclaw init --yes-youtube` can pull watch history / subscriptions / likes through the browser extension; `openbiliclaw import-youtube` also supports Google Takeout offline imports.
-- **🎬 Douyin content discovery** — `openbiliclaw discover --source douyin` uses the logged-in browser plugin signing bridge for search, `/hot/{sentence_id}` → related for hot, and `/aweme/v1/web/tab/feed/` for the home feed; `openbiliclaw discover-douyin` debugs recall standalone.
+- **🎬 Douyin content discovery** — `openbiliclaw discover --source douyin` uses background logged-in browser plugin signing for search, `/hot/{sentence_id}` → related for hot, and `/aweme/v1/web/tab/feed/` for the home feed; `openbiliclaw discover-douyin` debugs recall standalone.
 - **⚖️ Configurable pool mix** — `[scheduler.pool_source_shares]` defaults the candidate pool to Bilibili / Xiaohongshu / Douyin = 8 / 1 / 1; when Douyin is below quota, the runtime producer backfills search / hot / feed.
 - **🔎 Douyin plugin search smoke** — `openbiliclaw search-douyin -k cat -w 180` uses the same page signing bridge to validate search recall without writing the recommendation pool.
 - **🔎 Standalone smoke command** — `openbiliclaw fetch-douyin` verifies the Douyin pull path without implicitly rebuilding the profile.
@@ -203,7 +203,7 @@ openbiliclaw setup-embedding
 # Manual content discovery
 openbiliclaw discover
 
-# Optional: Douyin discovery (requires [sources.douyin]; search / hot / feed use the plugin signer)
+# Optional: Douyin discovery (requires [sources.douyin]; search / hot / feed use background plugin signing)
 openbiliclaw discover --source douyin
 
 # Optional: standalone Douyin search / hot / feed recall debugging
@@ -350,7 +350,7 @@ Results go through multi-dimensional diversity selection: platform-family reserv
 
 For first-run profiling, `openbiliclaw init` can enqueue XHS, Douyin, and YouTube `bootstrap_profile` tasks. XHS opens Xiaohongshu in the user's logged-in browser session, navigates to the profile, parses saved / liked / explicit history state, and returns `partial` batches; the backend reuses recent XHS bootstrap tasks by default and marks a task `in_progress` before returning it to the extension so the same foreground favorites / likes pull is not opened repeatedly. Douyin visits post / favorite / like / follow scopes in the logged-in Douyin session and combines DOM extraction with a MAIN-world API harvester. YouTube visits watch history / subscriptions / liked videos pages and reads rendered DOM items. The backend converts all three sources into normal `view / favorite / like / follow` events and still does not crawl or log in to those sites directly.
 
-For steady-state Douyin content discovery, `DouyinDiscoveryService` uses the extension-backed `DouyinPluginSearchClient` for search, hot, and feed candidates. Search signs the normal search API and enters the pool as `dy-plugin-search`; hot reads hot-board `sentence_id`, opens `/hot/{sentence_id}`, resolves the redirected seed aweme, signs the related API, and enters the pool as `dy-plugin-hot-related`; feed signs `/aweme/v1/web/tab/feed/` on the logged-in homepage and enters the pool as `dy-plugin-feed`. Results either write through `ContentDiscoveryEngine` or preview via `discover-douyin --no-cache`. The cookie is resolved from `OPENBILICLAW_DOUYIN_COOKIE` first, then from the extension-synced `data/douyin_cookie.json`.
+For steady-state Douyin content discovery, `DouyinDiscoveryService` uses the extension-backed `DouyinPluginSearchClient` for search, hot, and feed candidates. Search signs the normal search API from a background tab and enters the pool as `dy-plugin-search`; hot reads hot-board `sentence_id`, opens `/hot/{sentence_id}` in a background tab, resolves the redirected seed aweme, signs the related API, and enters the pool as `dy-plugin-hot-related`; feed signs `/aweme/v1/web/tab/feed/` on a background logged-in homepage and enters the pool as `dy-plugin-feed`. Results either write through `ContentDiscoveryEngine` or preview via `discover-douyin --no-cache`. The cookie is resolved from `OPENBILICLAW_DOUYIN_COOKIE` first, then from the extension-synced `data/douyin_cookie.json`.
 
 ### Soul Engine
 
@@ -391,7 +391,7 @@ OpenBiliClaw/
 | LLM | Built-in Gemini / DeepSeek / OpenAI / Claude / OpenRouter / Ollama; any OpenAI-compatible endpoint works via custom base_url |
 | Bilibili API | Custom client (WBI signing · v_voucher auto-recovery · rate control) |
 | Xiaohongshu | Extension DOM/state extraction + task dispatch; scrolling init imports open `/explore` in the foreground, click the page's profile entry, then use bounded scrolling and partial batches; no backend crawling |
-| Douyin | Extension DOM + MAIN-world fetch/API harvester + task dispatch; init imports post / favorite / like / follow signals; search / hot / feed discovery use the logged-in plugin signer; no backend crawling |
+| Douyin | Extension DOM + MAIN-world fetch/API harvester + task dispatch; init imports post / favorite / like / follow signals; search / hot / feed discovery use background tabs and the logged-in plugin signer; no backend crawling |
 | Storage | SQLite + Embedding vector index |
 | Agent Framework | Lightweight custom framework |
 
@@ -410,7 +410,7 @@ OpenBiliClaw/
 
 | Version | Date | Key changes |
 |---|---|---|
-| **v0.3.69** | 2026-05-12 | Douyin discovery adds the home `feed` source; the pool adds `[scheduler.pool_source_shares]`, defaulting Bilibili / Xiaohongshu / Douyin to 8 / 1 / 1; YouTube init profiling adds `init --yes-youtube`, `fetch-youtube`, and `import-youtube`; XHS bootstrap reuses tasks from the last 6 hours and marks claimed tasks `in_progress`, preventing repeated foreground favorites / likes pulls |
+| **v0.3.69** | 2026-05-12 | Douyin discovery adds the home `feed` source and runs search / hot / feed plugin tasks in background tabs; the pool adds `[scheduler.pool_source_shares]`, defaulting Bilibili / Xiaohongshu / Douyin to 8 / 1 / 1; YouTube init profiling adds `init --yes-youtube`, `fetch-youtube`, and `import-youtube`; XHS bootstrap reuses tasks from the last 6 hours and marks claimed tasks `in_progress`, preventing repeated foreground favorites / likes pulls |
 | **v0.3.68** | 2026-05-11 | Douyin plugin search smoke now works and backs formal search discovery: `search-douyin` remains a standalone diagnostic command, while `discover-douyin --source search --keyword 猫 --limit 5 --no-cache --no-evaluate` returned 5 `dy-plugin-search` candidates |
 | **v0.3.67** | 2026-05-09 | Douyin bootstrap E2E hardening: `init --yes-douyin` feeds post / favorite / like / follow signals into preference analysis and the first soul profile; XHS / Douyin collect defaults now wait 180s to reduce foreground-tab focus races during two-source init; Douyin direct discovery Cookie can now come from the extension-synced `data/douyin_cookie.json`; `fetch-douyin` remains a pure pull smoke command; extension API harvester, backend partial merge/dedup, and CLI integration all have regression tests |
 | **v0.3.64** | 2026-05-06 | XHS bootstrap fetch ceiling 50→**300** per scope / scroll rounds 3→15. `openbiliclaw init` now pulls up to 300 saves/likes per scope (was 50). The scroll executor early-exits after 5 stagnant rounds with no new notes, so users with light XHS histories pay no extra cost while heavy users get a one-shot deep backfill that actually reflects their long-term taste. `OPENBILICLAW_XHS_BOOTSTRAP_MAX_ITEMS` / `OPENBILICLAW_XHS_BOOTSTRAP_SCROLL_ROUNDS` env overrides still honored. **No extension repackage required.** |

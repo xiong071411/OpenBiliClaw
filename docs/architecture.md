@@ -46,7 +46,7 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - `SourceAdapter` Protocol：每个内容源实现统一接口
 - `bilibili_adapter` — B 站 API 直连（WBI 签名、v_voucher 自动恢复）
 - `xiaohongshu_adapter` — 小红书扩展代理（被动收集 + 关键词搜索 + 创作者订阅 + `bootstrap_profile` 初始化画像任务，零后端爬取）
-- `dy_tasks` — 抖音扩展任务队列（`bootstrap_profile` 初始化画像任务；发布 / 收藏 / 点赞 / 关注信号由扩展以用户浏览器登录态抓取；`search` 任务用于插件签名搜索，回传 `dy_search` 候选；`hot` 任务用于 `/hot/{sentence_id}` → related API，回传 `dy_hot` 候选；`feed` 任务用于首页 `/aweme/v1/web/tab/feed/`，回传 `dy_feed` 候选；三者分别作为 `dy-plugin-search` / `dy-plugin-hot-related` / `dy-plugin-feed` discovery 来源）
+- `dy_tasks` — 抖音扩展任务队列（`bootstrap_profile` 初始化画像任务；发布 / 收藏 / 点赞 / 关注信号由扩展以用户浏览器登录态抓取；`search` 任务用于后台插件签名搜索，回传 `dy_search` 候选；`hot` 任务用于后台 `/hot/{sentence_id}` → related API，回传 `dy_hot` 候选；`feed` 任务用于后台首页 `/aweme/v1/web/tab/feed/`，回传 `dy_feed` 候选；三者分别作为 `dy-plugin-search` / `dy-plugin-hot-related` / `dy-plugin-feed` discovery 来源）
 - `yt_tasks` — YouTube 扩展任务队列（`bootstrap_profile` 初始化画像任务；观看历史 / 订阅 / 点赞由扩展以用户浏览器登录态读取 DOM 并分批回传）
 - `youtube.takeout` — Google Takeout 离线导入解析器，将 YouTube 观看历史 / 订阅 / 点赞转换为统一事件
 - `web_adapter` — 通用 Web（Playwright CDP + LLM 内容抽取）
@@ -63,7 +63,7 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 
 ### Runtime (`runtime/`)
 - 系统生命周期管理和服务编排
-- `ContinuousRefreshController` — 后台定时刷新候选池；按平台族配额评估 deficit，B 站缺货合并到一次 discover() 并行 fan-out，小红书缺口交给 xhs producer / 扩展任务链；抖音缺口交给 runtime `DouyinDiscoveryProducer`，通过 `DouyinDiscoveryService(cache=True)` 复用 search / hot / feed 插件签名链路补池
+- `ContinuousRefreshController` — 后台定时刷新候选池；按平台族配额评估 deficit，B 站缺货合并到一次 discover() 并行 fan-out，小红书缺口交给 xhs producer / 扩展任务链；抖音缺口交给 runtime `DouyinDiscoveryProducer`，通过 `DouyinDiscoveryService(cache=True)` 复用 search / hot / feed 后台插件签名链路补池
 - `_enforce_pool_cap` 每 tick 跑 `trim_topic_group_overflow` + under-quota suppressed 候选复活 + 必要时按 share quotas 修剪过额源
 - `AccountSyncService` — 历史记录、收藏夹、关注列表同步
 - `runtime-stream` — 浏览器扩展 background 以 `client=background` 连接后，若后端本地没有 B 站 Cookie，会推送 `bilibili_cookie_sync_requested`，扩展立即通过 `/api/bilibili/cookie` 回传当前浏览器 Cookie；后端持久化 Cookie、热重载 runtime 组件，并重新启动 refresh / account sync / auto update 后台任务，避免热重载取消后台循环后小红书 / 抖音 producer 停止；重复同步相同 Cookie 时不再重建 runtime，避免打断正在等待扩展回写的抖音 discovery。若 `[sources.douyin].enabled=true` 且后端没有环境变量或 `data/douyin_cookie.json`，会推送 `douyin_cookie_sync_requested` 并通过 `/api/sources/dy/cookie` 回传抖音 Cookie。后续推荐、惊喜和画像更新仍复用同一条 WebSocket 事件流
@@ -91,9 +91,9 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 
 ### Douyin Direct Discovery
 
-抖音 steady-state 内容发现走 opt-in 路径：`OPENBILICLAW_DOUYIN_COOKIE` 可显式覆盖，默认则复用浏览器扩展同步到 `data/douyin_cookie.json` 的 douyin.com Cookie。后端 `DouyinDirectClient` 仍保留 direct-cookie 诊断能力；公开 discovery 子来源收敛为 `search` / `hot` / `feed`，并优先走 `DouyinPluginSearchClient` 入队 `dy_tasks(type="search"|"hot"|"feed")`。search 让扩展在登录浏览器中打开搜索页，并在 MAIN world 调用页面 `byted_acrawler.frontierSign()` 签名搜索 API；hot 先取 hot board 的 `sentence_id`，扩展打开 `/hot/{sentence_id}`，从跳转后的 `/video/{aweme_id}` 解析 seed，再签名 `/aweme/v1/web/aweme/related/` 拉相关视频；feed 在登录首页签名 `/aweme/v1/web/tab/feed/` 拉首页推荐流。`DouyinDiscoveryService` 是这条链路的复用边界：默认把 `DouyinDirectStrategy` 注册到现有 `ContentDiscoveryEngine`，让候选继续走统一评估、去重、缓存和推荐；调试时也可以由 `openbiliclaw discover-douyin --no-cache --no-evaluate` 直接跑 strategy 预览召回。这样初始化强账号信号与后台补池请求分离，且 search / hot / feed 都能复用真实登录浏览器。
+抖音 steady-state 内容发现走 opt-in 路径：`OPENBILICLAW_DOUYIN_COOKIE` 可显式覆盖，默认则复用浏览器扩展同步到 `data/douyin_cookie.json` 的 douyin.com Cookie。后端 `DouyinDirectClient` 仍保留 direct-cookie 诊断能力；公开 discovery 子来源收敛为 `search` / `hot` / `feed`，并优先走 `DouyinPluginSearchClient` 入队 `dy_tasks(type="search"|"hot"|"feed")`。search 让扩展在登录浏览器的后台 tab 中打开搜索页，并在 MAIN world 调用页面 `byted_acrawler.frontierSign()` 签名搜索 API；hot 先取 hot board 的 `sentence_id`，扩展后台打开 `/hot/{sentence_id}`，从跳转后的 `/video/{aweme_id}` 解析 seed，再签名 `/aweme/v1/web/aweme/related/` 拉相关视频；feed 在后台首页签名 `/aweme/v1/web/tab/feed/` 拉首页推荐流。`DouyinDiscoveryService` 是这条链路的复用边界：默认把 `DouyinDirectStrategy` 注册到现有 `ContentDiscoveryEngine`，让候选继续走统一评估、去重、缓存和推荐；调试时也可以由 `openbiliclaw discover-douyin --no-cache --no-evaluate` 直接跑 strategy 预览召回。这样初始化强账号信号与后台补池请求分离，且 search / hot / feed 都能复用真实登录浏览器但不会抢用户焦点。
 
-`openbiliclaw search-douyin` 保留为同一插件签名搜索链路的独立 smoke：结果只保存在任务结果里用于诊断，不进入 `content_cache`，也不参与画像重建；正式 `discover-douyin --source search` / `discover --source douyin` 会把这些候选映射为 aweme-like JSON，以 `dy-plugin-search` 进入 discovery pool。`discover-douyin --source hot` / `--source feed` 复用同一任务桥但没有单独 smoke 命令，候选分别以 `dy-plugin-hot-related` / `dy-plugin-feed` 进入 discovery pool。
+`openbiliclaw search-douyin` 保留为同一后台插件签名搜索链路的独立 smoke：结果只保存在任务结果里用于诊断，不进入 `content_cache`，也不参与画像重建；正式 `discover-douyin --source search` / `discover --source douyin` 会把这些候选映射为 aweme-like JSON，以 `dy-plugin-search` 进入 discovery pool。`discover-douyin --source hot` / `--source feed` 复用同一后台任务桥但没有单独 smoke 命令，候选分别以 `dy-plugin-hot-related` / `dy-plugin-feed` 进入 discovery pool。
 
 ### LLM Providers (`llm/`)
 - 统一的多模型接口（OpenAI / Claude / Gemini / DeepSeek / Ollama / OpenRouter）
