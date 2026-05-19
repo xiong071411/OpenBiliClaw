@@ -4,11 +4,19 @@
 
 ---
 
-## v0.3.83-local: 手机 Web 前端操作台（2026-05-19）
+## v0.3.84-local: 手机 Web 前端操作台（2026-05-19）
 
 - 新增 `web/` Vite + TypeScript 手机 Web 前端，不依赖浏览器扩展即可在手机浏览器使用推荐流、画像、durable 聊天、消息/惊喜推荐、兴趣探针和低风险设置页；API 统一走 `/api`，runtime-stream 以 `client=web` 连接。
 - 新增 `scripts/deploy_web_frontend.sh`，构建后将 `web/dist/` 同步到 `bili.qingningplayer.top` 宝塔静态目录，并保留 `.well-known/`、`downloads/` 和宝塔隐藏文件。
 - 文档同步补齐 Web 前端模块、部署边界、安全约束和架构图；Web v1 明确不读取浏览器 Cookie、不展示完整 API Key，也不实现扩展专属采集/通知能力。
+
+---
+
+## v0.3.83: 插件设置页分组与 YouTube 配置补齐（2026-05-19）
+
+- 浏览器插件设置页按「模型 / 平台源 / 调度 / 通用 / 日志」分 tab，候选池来源占比移入平台源区，避免所有配置挤在同一个长列表里。
+- `[sources.youtube]` 补齐 `daily_search_budget` / `daily_trending_budget` / `daily_channel_budget` / `request_interval_seconds`，并通过 `/api/config` 与插件设置页 round-trip；runtime 会把前三个预算传给 `yt_search` / `yt_trending` / `yt_channel` 对应策略。
+- 后端包版本提升到 v0.3.83，准备发布 `backend-v0.3.83`；浏览器插件版本提升到 v0.3.34，准备发布 `extension-v0.3.34`。
 
 ---
 

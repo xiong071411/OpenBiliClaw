@@ -19,11 +19,12 @@
 
 ---
 
-## 📌 v0.3.82 + 本地 Web 操作台重要更新（2026-05-19）
+## 📌 v0.3.83 + 本地 Web 操作台重要更新（2026-05-19）
 
 - **📱 手机 Web 操作台** —— 本地分支新增 `web/` Vite + TypeScript 前端，手机浏览器可直接查看推荐、画像、聊天、消息和运行状态。
-- **🔑 Codex OAuth 实验认证** —— 可运行 `openbiliclaw login codex` 导入本机 Codex CLI 的 ChatGPT OAuth 凭据，并用 `[llm.openai].auth_mode="codex_oauth"` 作为 OpenAI provider 的认证来源。
-- **🧩 作者更新已同步** —— 合入上游 v0.3.79-v0.3.82：插件聊天输入体验、画像自动 bootstrap、推荐理由错位修复和一句话安装合约对齐。
+- **🧩 插件设置页分组** —— 后端设置按「模型 / 平台源 / 调度 / 通用 / 日志」分 tab，平台源和候选池占比放到一起，不再挤在一个长列表里。
+- **▶️ YouTube 配置补齐** —— `[sources.youtube]` 现在可配置 search / trending / channel 三条 discovery 策略预算，并可从插件设置页保存。
+- **🚀 作者更新已同步** —— 合入上游 v0.3.79-v0.3.83：Codex OAuth、插件聊天输入体验、画像自动 bootstrap、推荐理由错位修复、安装合约对齐和 YouTube 配置补齐。
 - **🔐 公开入口安全边界** —— Web v1 不展示完整 API Key / Cookie，不做扩展专属采集；服务器部署脚本会保留证书挑战目录和扩展下载目录。
 
 完整变更详见 [docs/changelog.md](docs/changelog.md)。
@@ -505,7 +506,7 @@ OpenBiliClaw/
 
 ## 📜 更新日志
 
-最新状态：**上游 v0.3.82 + 本地 v0.3.83-local 手机 Web 前端操作台（2026-05-19）**。README 顶部保留最新重要更新；完整历史见 [docs/changelog.md](docs/changelog.md)，发布包见 [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)。
+最新状态：**上游 v0.3.83 + 本地 v0.3.84-local 手机 Web 前端操作台（2026-05-19）**。README 顶部保留最新重要更新；完整历史见 [docs/changelog.md](docs/changelog.md)，发布包见 [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)。
 
 ## 🗺️ 后续规划
 

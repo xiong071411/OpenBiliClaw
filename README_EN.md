@@ -17,11 +17,12 @@
 
 ---
 
-## 📌 v0.3.82 + Local Web Console Highlights (2026-05-19)
+## 📌 v0.3.83 + Local Web Console Highlights (2026-05-19)
 
 - **📱 Mobile Web console** — this local branch adds a `web/` Vite + TypeScript frontend so a mobile browser can use recommendations, profile, chat, messages, and runtime status directly.
-- **🔑 Experimental Codex OAuth auth** — `openbiliclaw login codex` can import local Codex CLI ChatGPT OAuth credentials, then `[llm.openai].auth_mode="codex_oauth"` uses them for the OpenAI provider.
-- **🧩 Upstream updates synced** — merged upstream v0.3.79-v0.3.82: extension chat input polish, profile auto-bootstrap, recommendation reason binding fixes, and one-command install contract alignment.
+- **🧩 Tabbed extension settings** — backend settings are split into Models / Sources / Scheduler / General / Logs, with source toggles and pool shares grouped together.
+- **▶️ YouTube config parity** — `[sources.youtube]` can now tune search / trending / channel discovery budgets, and those fields are editable from the extension settings page.
+- **🚀 Upstream updates synced** — merged upstream v0.3.79-v0.3.83: Codex OAuth, extension chat input polish, profile auto-bootstrap, recommendation reason binding fixes, install contract alignment, and YouTube config parity.
 - **🔐 Public-entry safety boundary** — Web v1 never displays full API keys or cookies, and extension-only collection/notifications stay explicitly out of scope.
 
 Full changelog: [docs/changelog.md](docs/changelog.md).
@@ -442,7 +443,7 @@ OpenBiliClaw/
 
 ## 📜 Release History
 
-Latest state: **upstream v0.3.82 + local v0.3.83-local Mobile Web console (2026-05-19)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md), with packages on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases).
+Latest state: **upstream v0.3.83 + local v0.3.84-local Mobile Web console (2026-05-19)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md), with packages on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases).
 
 ## 🗺️ Roadmap
 
