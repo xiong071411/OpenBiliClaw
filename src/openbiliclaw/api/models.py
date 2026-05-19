@@ -34,6 +34,7 @@ class HealthResponse(BaseModel):
 
     status: str
     service: str
+    profile_ready: bool | None = None
 
 
 class RecommendationOut(BaseModel):
@@ -515,6 +516,7 @@ class LLMProviderConfigOut(BaseModel):
     api_key: str = ""
     model: str = ""
     base_url: str = ""
+    auth_mode: str = ""
     http_referer: str = ""
     x_title: str = ""
     reasoning_effort: str = ""
@@ -586,9 +588,7 @@ class YoutubeSourceConfigOut(BaseModel):
 
 class SourcesConfigOut(BaseModel):
     browser: SourcesBrowserConfigOut = Field(default_factory=SourcesBrowserConfigOut)
-    xiaohongshu: XiaohongshuSourceConfigOut = Field(
-        default_factory=XiaohongshuSourceConfigOut
-    )
+    xiaohongshu: XiaohongshuSourceConfigOut = Field(default_factory=XiaohongshuSourceConfigOut)
     douyin: DouyinSourceConfigOut = Field(default_factory=DouyinSourceConfigOut)
     youtube: YoutubeSourceConfigOut = Field(default_factory=YoutubeSourceConfigOut)
 

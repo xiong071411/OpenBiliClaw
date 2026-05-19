@@ -5,7 +5,7 @@
 OpenBiliClaw 采用分层架构设计，从上到下依次为：
 
 1. **用户交互层** — Chrome / Firefox 浏览器插件（B 站 + 小红书 + 抖音 + YouTube 页面行为采集 · 视频停留满意度信号 · 推荐展示 · durable 对话交互 · 后台 LLM 暂停开关 · 配置离线缓存 / 降级修复 UI · xhs/dy/yt 任务调度 / 初始化画像导入 · B 站 / 抖音 Cookie 自动同步）+ 手机 Web 操作台（推荐流 · 画像 · durable 聊天 · 消息/惊喜推荐 · 运行状态）
-2. **外部集成层** — OpenClaw adapter / skill wrappers / 本地 API 等对外接入边界
+2. **外部集成层** — OpenClaw adapter / skill wrappers / 本地 API / Codex CLI 凭据导入等对外接入边界
 3. **Agent 核心层** — 自研编排器 + Soul Engine + Discovery Engine + Recommendation Engine + Skill System
 4. **多源适配层（v0.3.0+）** — `SourceAdapter` 协议下的 B 站 / 小红书 / 抖音 / YouTube / 通用 Web 源
 5. **多层网状记忆存储** — Core / Episodic / Semantic / Working Memory（SQLite + 向量索引 + JSON）
@@ -78,7 +78,7 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - `ContinuousRefreshController` — 后台定时刷新候选池；按平台族配额评估 deficit，B 站缺货合并到一次 discover() 并行 fan-out，小红书缺口交给 xhs producer / 扩展任务链；抖音缺口交给 runtime `DouyinDiscoveryProducer`，通过 `DouyinDiscoveryService(cache=True)` 复用 search / hot / feed 后台插件签名链路补池
 - `background_llm_work_allowed()` — 共享 gate predicate；`scheduler.enabled=false` 会暂停 daemon-owned 后台 LLM / embedding 工作，`scheduler.pause_on_extension_disconnect=true` 时还要求浏览器插件 presence 在线或仍处于断开宽限窗口。该 gate 覆盖 refresh、pool precompute、soul pipeline、xhs/dy producer、proactive push、低频 account sync、startup one-shot 和 OpenClaw direct bootstrap
 - `_enforce_pool_cap` 每 tick 跑 `trim_topic_group_overflow` + under-quota suppressed 候选复活 + 必要时按 share quotas 修剪过额源
-- `AccountSyncService` — 历史记录、收藏夹、关注列表同步
+- `AccountSyncService` — 历史记录、收藏夹、关注列表同步；首次成功写入账号行为并完成 preference 分析后，若 soul 画像为空，会在同一进程生命周期内最多一次触发 `build_initial_profile([])` 自动 bootstrap
 - `runtime-stream` — 浏览器扩展 background 以 `client=background` 连接后，若后端本地没有 B 站 Cookie，会推送 `bilibili_cookie_sync_requested`，扩展立即通过 `/api/bilibili/cookie` 回传当前浏览器 Cookie；后端持久化 Cookie、热重载 runtime 组件，并重新启动 refresh / account sync / auto update 后台任务，避免热重载取消后台循环后小红书 / 抖音 producer 停止；重复同步相同 Cookie 时不再重建 runtime，避免打断正在等待扩展回写的抖音 discovery。若 `[sources.douyin].enabled=true` 且后端没有环境变量或 `data/douyin_cookie.json`，会推送 `douyin_cookie_sync_requested` 并通过 `/api/sources/dy/cookie` 回传抖音 Cookie。后续推荐、惊喜和画像更新仍复用同一条 WebSocket 事件流；同一连接也驱动 `PresenceTracker`，服务端 reader 会 `receive()` 检测 idle disconnect，避免浏览器断开后 presence 卡住
 
 ### Side Panel Durable Chat
@@ -110,6 +110,7 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 
 ### LLM Providers (`llm/`)
 - 统一的多模型接口（OpenAI / Claude / Gemini / DeepSeek / Ollama / OpenRouter）
+- `codex_auth.py` 提供实验性的 Codex CLI ChatGPT OAuth 凭据导入和刷新；`[llm.openai].auth_mode="codex_oauth"` 时仍注册为 `openai` provider，只替换认证来源，并限制 `base_url` 为 OpenAI 官方 API 域名
 - Provider 注册和切换；`LLMRegistry.complete()` 保留默认 fallback 链，`complete_provider()` 用于 per-module override 的精确 provider 调用，不会在指定 provider 错误时静默 spill 到 default
 - `LLMService` 通过内置 caller bucket 路由 `[llm.soul]` / `[llm.discovery]` / `[llm.recommendation]` / `[llm.evaluation]`，覆盖 `recommendation.delight_score`、`discovery.evaluate*`、`eval.*`、`sources.xhs.*` 等实际 caller；`model` 覆盖作为 per-call 参数传给 provider，不修改 provider 默认模型
 - 结构化输出共享解析：`llm/json_utils.py` 为 discovery eval-batch、recommendation copy、delight scorer、soul awareness/insight/profile/speculator 提供统一 JSON 容错，兼容 MiMo / OpenAI-compatible wrapper、fenced JSON、JSONL、schema echo 和 malformed `{ [ ... ] }`

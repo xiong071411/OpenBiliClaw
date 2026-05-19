@@ -17,9 +17,11 @@
 
 ---
 
-## 📌 v0.3.78 Highlights (2026-05-19)
+## 📌 v0.3.82 + Local Web Console Highlights (2026-05-19)
 
-- **📱 Mobile Web console** — new `web/` Vite + TypeScript frontend lets a mobile browser use recommendations, profile, chat, messages, and runtime status directly.
+- **📱 Mobile Web console** — this local branch adds a `web/` Vite + TypeScript frontend so a mobile browser can use recommendations, profile, chat, messages, and runtime status directly.
+- **🔑 Experimental Codex OAuth auth** — `openbiliclaw login codex` can import local Codex CLI ChatGPT OAuth credentials, then `[llm.openai].auth_mode="codex_oauth"` uses them for the OpenAI provider.
+- **🧩 Upstream updates synced** — merged upstream v0.3.79-v0.3.82: extension chat input polish, profile auto-bootstrap, recommendation reason binding fixes, and one-command install contract alignment.
 - **🔐 Public-entry safety boundary** — Web v1 never displays full API keys or cookies, and extension-only collection/notifications stay explicitly out of scope.
 
 Full changelog: [docs/changelog.md](docs/changelog.md).
@@ -42,7 +44,7 @@ This is the core differentiator: the system **guesses domains you might enjoy bu
 
 ### 🔒 100% local, 100% yours
 
-All data lives in a single SQLite file on your disk. LLM calls use your own API key. No cloud, no accounts, no one else can see your profile. How this Agent grows is entirely your call — send feedback, chat with it, swap LLMs, edit the database, whatever you want.
+All data lives in a single SQLite file on your disk. LLM calls use your own API key by default, with an experimental option to reuse local Codex CLI ChatGPT OAuth credentials. No cloud, no accounts, no one else can see your profile. How this Agent grows is entirely your call — send feedback, chat with it, swap LLMs, edit the database, whatever you want.
 
 > 💡 **How it compares**
 >
@@ -141,6 +143,8 @@ Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/do
 ```
 
 See the [Docker Deployment Guide](docs/docker-deployment.md).
+
+> 💡 **Docker users**: after the container starts, also run `docker exec -it openbiliclaw-backend openbiliclaw init` to generate your profile. Without init, the backend can start normally but will not produce recommendations.
 
 </details>
 
@@ -347,13 +351,14 @@ The whole loop stays local — OpenClaw just calls the CLI bridge; your profile 
                          │ REST API / WebSocket (presence + runtime stream)
 ┌────────────────────────▼────────────────────────────┐
 │                 Agent Orchestration                   │
-│            (Skills · Dialogue · Runtime Gate)       │
+│       (Skills · Dialogue · Runtime Gate · Account Sync) │
 ├─────────┬──────────┬───────────┬────────────────────┤
 │  Soul   │ Memory   │ Discovery │  Recommendation    │
 │  Engine │ System   │  Engine   │     Engine          │
 │(Sat.filter)│(5-Layer)│(Neg.anchor)│  (Expression)   │
 ├─────────┴──────────┴───────────┴────────────────────┤
-│  LLM · Bilibili API · Extension Proxy · Runtime Gate  │
+│ LLM (API Key/Codex OAuth) · Bilibili API · Extension Proxy │
+│ Runtime: Account sync -> Memory/Soul auto-bootstrap        │
 │ SQLite: events(inferred_satisfaction) · content_cache   │
 │         recommendations · chat_turns                    │
 └─────────────────────────────────────────────────────┘
@@ -416,7 +421,7 @@ OpenBiliClaw/
 | Backend | Python 3.11+ |
 | Browser Extension | TypeScript + Chrome Extension (Manifest V3) |
 | Mobile Web Frontend | Vite + TypeScript + native DOM |
-| LLM | Built-in Gemini / DeepSeek / OpenAI / Claude / OpenRouter / Ollama; any OpenAI-compatible endpoint works via custom base_url |
+| LLM | Built-in Gemini / DeepSeek / OpenAI / Claude / OpenRouter / Ollama; any OpenAI-compatible endpoint works via custom base_url; OpenAI can experimentally reuse Codex CLI OAuth |
 | Bilibili API | Custom client (WBI signing · v_voucher auto-recovery · rate control) |
 | Xiaohongshu | Extension DOM/state extraction + task dispatch; scrolling init imports open `/explore` in the foreground, click the page's profile entry, then use bounded scrolling and partial batches; no backend crawling |
 | Douyin | Extension DOM + MAIN-world fetch/API harvester + task dispatch; init imports post / favorite / like / follow signals; search / hot / feed discovery use background tabs and the logged-in plugin signer; no backend crawling |
@@ -437,7 +442,7 @@ OpenBiliClaw/
 
 ## 📜 Release History
 
-Latest: **v0.3.78: Mobile Web frontend console (2026-05-19)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md), with packages on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases).
+Latest state: **upstream v0.3.82 + local v0.3.83-local Mobile Web console (2026-05-19)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md), with packages on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases).
 
 ## 🗺️ Roadmap
 

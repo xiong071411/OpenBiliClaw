@@ -73,6 +73,7 @@ from openbiliclaw.api.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -562,19 +563,38 @@ def create_app(
                 }
             )
 
-    @app.get("/api/health", response_model=HealthResponse)
+    def _health_profile_ready() -> bool | None:
+        soul_engine = getattr(ctx, "soul_engine", None)
+        if soul_engine is None:
+            return None
+        is_ready_candidate = getattr(soul_engine, "is_profile_ready", None)
+        if not callable(is_ready_candidate):
+            return None
+        is_ready_fn = cast("Callable[[], bool]", is_ready_candidate)
+        try:
+            return bool(is_ready_fn())
+        except Exception:
+            logger.debug("Health profile readiness check failed", exc_info=True)
+            return None
+
+    @app.get("/api/health", response_model=HealthResponse, response_model_exclude_none=True)
     def health() -> HealthResponse | JSONResponse:
+        profile_ready = _health_profile_ready()
         if bool(getattr(ctx, "degraded", False)):
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "degraded",
-                    "service": "openbiliclaw-api",
-                    "reason": str(getattr(ctx, "degraded_reason", "")),
-                    "issues": _degraded_issues_payload(),
-                },
-            )
-        return HealthResponse(status="ok", service="openbiliclaw-api")
+            body: dict[str, object] = {
+                "status": "degraded",
+                "service": "openbiliclaw-api",
+                "reason": str(getattr(ctx, "degraded_reason", "")),
+                "issues": _degraded_issues_payload(),
+            }
+            if profile_ready is not None:
+                body["profile_ready"] = profile_ready
+            return JSONResponse(status_code=200, content=body)
+        return HealthResponse(
+            status="ok",
+            service="openbiliclaw-api",
+            profile_ready=profile_ready,
+        )
 
     @app.post("/api/bilibili/cookie", response_model=BilibiliCookieResponse)
     async def sync_bilibili_cookie(payload: BilibiliCookieIn) -> BilibiliCookieResponse:
@@ -3390,6 +3410,7 @@ def create_app(
                 api_key=_mask(p.api_key),
                 model=p.model,
                 base_url=p.base_url,
+                auth_mode=getattr(p, "auth_mode", ""),
                 http_referer=getattr(p, "http_referer", ""),
                 x_title=getattr(p, "x_title", ""),
                 reasoning_effort=getattr(p, "reasoning_effort", ""),
@@ -3487,9 +3508,7 @@ def create_app(
                     cfg.scheduler.speculation_confirmation_threshold
                 ),
                 speculation_max_active=cfg.scheduler.speculation_max_active,
-                speculation_max_primary_interests=(
-                    cfg.scheduler.speculation_max_primary_interests
-                ),
+                speculation_max_primary_interests=(cfg.scheduler.speculation_max_primary_interests),
                 speculation_max_secondary_interests=(
                     cfg.scheduler.speculation_max_secondary_interests
                 ),
@@ -3602,6 +3621,7 @@ def create_app(
                         "api_key",
                         "model",
                         "base_url",
+                        "auth_mode",
                         "http_referer",
                         "x_title",
                         "reasoning_effort",
@@ -3613,7 +3633,8 @@ def create_app(
                                 continue
                             existing = getattr(provider_cfg, field_name, "")
                             if (
-                                not new_value.strip()
+                                field_name != "auth_mode"
+                                and not new_value.strip()
                                 and isinstance(existing, str)
                                 and existing.strip()
                             ):
@@ -3641,9 +3662,8 @@ def create_app(
                 # contains ``*``.
                 if "api_key" in emb:
                     new_key = str(emb["api_key"])
-                    if (
-                        "*" not in new_key
-                        and (new_key.strip() or not cfg.llm.embedding.api_key.strip())
+                    if "*" not in new_key and (
+                        new_key.strip() or not cfg.llm.embedding.api_key.strip()
                     ):
                         cfg.llm.embedding.api_key = new_key
                 if "base_url" in emb:

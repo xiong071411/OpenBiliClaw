@@ -4,11 +4,55 @@
 
 ---
 
-## v0.3.78: 手机 Web 前端操作台（2026-05-19）
+## v0.3.83-local: 手机 Web 前端操作台（2026-05-19）
 
 - 新增 `web/` Vite + TypeScript 手机 Web 前端，不依赖浏览器扩展即可在手机浏览器使用推荐流、画像、durable 聊天、消息/惊喜推荐、兴趣探针和低风险设置页；API 统一走 `/api`，runtime-stream 以 `client=web` 连接。
 - 新增 `scripts/deploy_web_frontend.sh`，构建后将 `web/dist/` 同步到 `bili.qingningplayer.top` 宝塔静态目录，并保留 `.well-known/`、`downloads/` 和宝塔隐藏文件。
 - 文档同步补齐 Web 前端模块、部署边界、安全约束和架构图；Web v1 明确不读取浏览器 Cookie、不展示完整 API Key，也不实现扩展专属采集/通知能力。
+
+---
+
+## v0.3.82: 一句话安装合约对齐（2026-05-19）
+
+- 一句话安装合约补齐 YouTube opt-in：`agent_bootstrap.py` 现在像小红书 / 抖音一样要求 `--yes-youtube` / `--no-youtube`，并把该选择传给自动 `openbiliclaw init`；`install.sh` / `install.ps1` 状态块和 agent/Docker/CLI 文档同步打印 YouTube 决策，同时统一 LLM 默认推荐为 DeepSeek 并修正安装文档的模型菜单编号。
+- 后端包版本提升到 v0.3.82，准备发布 `backend-v0.3.82`。
+
+---
+
+## v0.3.81: 推荐理由错位修复（2026-05-19）
+
+- 批量推荐文案、discovery batch 评估和源无关内容分类现在都携带并按 `bvid/content_id` 绑定 LLM 结果；provider 乱序、漏项或返回部分数组时不再把推荐理由 / 评估理由写到错误视频。
+- 后端包版本提升到 v0.3.81，准备发布 `backend-v0.3.81`。
+
+---
+
+## v0.3.80: Docker 部署体验补强（2026-05-19）
+
+- 后台 `AccountSyncService` 首次同步账号行为并完成 preference 分析后，如果 soul 画像层为空（典型场景：Docker 部署未跑 init），会自动触发 `build_initial_profile([])` 生成初始画像；每进程生命周期最多尝试一次，失败不影响后续同步。
+- `/api/health` 新增可选 `profile_ready` 字段，返回 soul 画像是否已生成；字段缺失时保持旧响应兼容，不影响 HTTP 状态码和 Docker healthcheck 判定。
+- Docker 部署文档和 README 补充 init 步骤提示，并新增「后端启动但无推荐」排查说明。
+- 浏览器插件 Chat 入口文案拓宽为“想法 / 口味 / 自我描述 / 近期状态”方向，保留已有 placeholder 轮播机制，不再只暗示用户聊最近爱看的内容。
+- 浏览器插件版本提升到 v0.3.33，准备发布 `extension-v0.3.33`；Chrome / Edge / Brave 走 `openbiliclaw-extension-v0.3.33.zip`，Firefox 140+ 走 `openbiliclaw-extension-v0.3.33-firefox.zip`。
+- 后端包版本提升到 v0.3.80，准备发布 `backend-v0.3.80`。
+
+---
+
+## v0.3.79: Popup 聊天输入体验补强（2026-05-19）
+
+- 浏览器插件聊天 tab 新增多场景 placeholder 轮播，覆盖纪录片、测评、健身、怀旧动画、注意力、自我描述和近期状态等入口；输入框 focus 时暂停轮播，blur 且内容为空时恢复，避免用户正在输入时被提示语打断。
+- 聊天历史区域高度从固定 `220px` 改为 `clamp(220px, 45vh, 420px)`：小窗口保持原有保底高度，侧栏拉高时可展示更多长回复，最高限制在 420px，避免挤压输入区。
+- 偏好分析新增 prompt 预算保护：初始化 / bootstrap / feedback batch 不再只按事件条数分片，超长 chunk 会在本地继续拆分，单条超长事件会保守 compact，provider 返回 `n_keep >= n_ctx` 等 context-window 错误时会用更小 chunk 重试，避免一个巨大事件批次中断整轮画像初始化。
+- 浏览器插件版本提升到 v0.3.32，准备发布 `extension-v0.3.32`；Chrome / Edge / Brave 走 `openbiliclaw-extension-v0.3.32.zip`，Firefox 140+ 走 `openbiliclaw-extension-v0.3.32-firefox.zip`。
+
+---
+
+## v0.3.78: Codex OAuth 实验认证（2026-05-19）
+
+- 新增实验性 `[llm.openai].auth_mode = "codex_oauth"`：OpenAI provider 仍复用现有 `OpenAIProvider`，但 token 来源改为本机 Codex CLI 的 ChatGPT OAuth 凭据；`codex_auth.py` 负责导入 `~/.codex/auth.json`、写入 `~/.openbiliclaw/codex_auth.json`、临期刷新和 401 后强制刷新重试。
+- 新增 `openbiliclaw login codex`：支持默认导入 / 调用官方 `codex login` 后导入、`--import`、`--source`、`--status`、`--logout`；状态输出只展示账号和过期时间，不泄露 token。
+- 配置和本地 API 增加 `auth_mode` round-trip；`codex_oauth` 下 `api_key` 会被忽略，且 `base_url` 只允许留空或指向 OpenAI 官方 API 域名，避免把 ChatGPT OAuth token 发给第三方 OpenAI-compatible 代理。
+- 浏览器插件设置页同步支持 OpenAI `API Key` / `Codex OAuth` 认证方式选择，保存配置时会写入 `[llm.openai].auth_mode`；插件版本提升到 v0.3.31，准备发布 `extension-v0.3.31`。
+- 明确风险边界：该功能是非官方实验集成，OpenAI 官方 API 认证稳定入口仍是 Platform API key，Codex CLI token 格式、权限和刷新行为可能随上游变化失效。
 
 ---
 
