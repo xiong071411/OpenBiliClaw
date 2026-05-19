@@ -118,15 +118,40 @@ class LLMProvider(ABC):
         Returns:
             True if the provider is available.
         """
-        try:
-            resp = await self.complete(
-                [{"role": "user", "content": "hi"}],
-                max_tokens=5,
-            )
-            return bool(resp.content)
-        except Exception:
-            logger.exception("Health check failed for %s", self.name)
-            return False
+        probes = [
+            [
+                {"role": "system", "content": "你是健康检查助手，必须输出非空内容。"},
+                {"role": "user", "content": "请只输出这一行：OK"},
+            ],
+            [
+                {
+                    "role": "user",
+                    "content": "请用一句简短中文确认 API 连接正常，不要留空。",
+                }
+            ],
+            [
+                {
+                    "role": "user",
+                    "content": '请返回一个最小 JSON 对象：{"ok": true}',
+                }
+            ],
+        ]
+        last_error: Exception | None = None
+        for messages in probes:
+            try:
+                resp = await self.complete(
+                    messages,
+                    temperature=0,
+                    max_tokens=128,
+                )
+                if resp.content.strip():
+                    return True
+            except Exception as exc:
+                last_error = exc
+                logger.debug("Health check probe failed for %s: %s", self.name, exc)
+        if last_error is not None:
+            logger.error("Health check failed for %s: %s", self.name, last_error)
+        return False
 
 
 class LLMRegistry:

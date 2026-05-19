@@ -3512,7 +3512,7 @@ def create_app(
         )
 
     @app.get("/api/config", response_model=ConfigResponse)
-    def get_config(reveal_keys: bool = False) -> ConfigResponse:
+    def get_config(request: Request, reveal_keys: bool = False) -> ConfigResponse:
         """Return the current configuration (API keys masked by default)."""
         from openbiliclaw.config import (
             _collect_config_issues,
@@ -3523,10 +3523,14 @@ def create_app(
         issues = list(_collect_config_issues(cfg))
         if bool(getattr(ctx, "degraded", False)):
             issues.extend(getattr(ctx, "degraded_issues", []))
+        client_host = request.client.host if request.client else ""
+        forwarded_for = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+        effective_host = forwarded_for or client_host
+        local_request = effective_host in {"127.0.0.1", "::1", "localhost"}
         return _config_to_response(
             cfg,
             issues,
-            mask_keys=not reveal_keys,
+            mask_keys=not (reveal_keys and local_request),
             degraded=bool(getattr(ctx, "degraded", False)),
             degraded_reason=str(getattr(ctx, "degraded_reason", "")),
         )

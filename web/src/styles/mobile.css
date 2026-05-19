@@ -1,0 +1,92 @@
+@media (max-width: 520px) {
+  .app-header {
+    padding-top: 10px;
+  }
+
+  .runtime-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .view-head {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .view-actions {
+    justify-content: stretch;
+  }
+
+  .view-actions .btn {
+    flex: 1 1 128px;
+  }
+
+  .recommendation-card,
+  .message-card {
+    grid-template-columns: 1fr;
+  }
+
+  .cover-frame,
+  .message-media {
+    aspect-ratio: 16 / 9;
+  }
+
+  .cover-placeholder {
+    min-height: 184px;
+  }
+
+  .card-actions .btn,
+  .message-card .card-actions .btn {
+    flex: 1 1 98px;
+  }
+
+  .split-panel {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .split-panel strong,
+  .key-value span {
+    text-align: left;
+  }
+
+  .key-value {
+    align-items: flex-start;
+  }
+
+  .meter-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .meter-track {
+    grid-column: 1 / -1;
+  }
+
+  .chat-composer {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-composer .btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 370px) {
+  .app-main {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .bottom-nav {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+
+  .nav-button {
+    font-size: 0.68rem;
+  }
+
+  .btn {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+}

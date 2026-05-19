@@ -2,14 +2,14 @@
  * OpenBiliClaw — configurable local-backend endpoint.
  *
  * The popup settings page can override the backend host and port
- * (default 127.0.0.1:8420), so the extension can talk to either the local
+ * (default bili.qingningplayer.top:443 on this deployment), so the extension can talk to either the local
  * daemon or a daemon exposed on the LAN. Every fetch and WebSocket in the
  * extension goes through this module so a single source of truth resolves
  * the current host + port at call time.
  *
  * Storage:
  *   chrome.storage.local key ``popup_backend_endpoint`` =
- *     { host: "127.0.0.1", port: 8420 }
+ *     { host: "bili.qingningplayer.top", port: 443 }
  *
  * Both the popup (popup-backend-config.js) and the service worker / content
  * scripts read & write this same key. Each context subscribes to
@@ -18,8 +18,8 @@
  * WebSocket against the new origin).
  */
 
-export const DEFAULT_BACKEND_HOST = "127.0.0.1";
-export const DEFAULT_BACKEND_PORT = 8420;
+export const DEFAULT_BACKEND_HOST = "bili.qingningplayer.top";
+export const DEFAULT_BACKEND_PORT = 443;
 export const BACKEND_ENDPOINT_STORAGE_KEY = "popup_backend_endpoint";
 
 export interface BackendEndpoint {
@@ -175,19 +175,34 @@ export async function getBackendEndpoint(): Promise<BackendEndpoint> {
 
 export async function getBackendOrigin(): Promise<string> {
   const ep = await ensureLoaded();
-  return `http://${ep.host}:${ep.port}`;
+  return `${httpSchemeForEndpoint(ep)}://${ep.host}${portSuffixForEndpoint(ep)}`;
 }
 
 export async function apiUrl(path: string): Promise<string> {
   const ep = await ensureLoaded();
   const suffix = path.startsWith("/") ? path : `/${path}`;
-  return `http://${ep.host}:${ep.port}/api${suffix}`;
+  return `${httpSchemeForEndpoint(ep)}://${ep.host}${portSuffixForEndpoint(ep)}/api${suffix}`;
 }
 
 export async function wsUrl(path: string): Promise<string> {
   const ep = await ensureLoaded();
   const suffix = path.startsWith("/") ? path : `/${path}`;
-  return `ws://${ep.host}:${ep.port}/api${suffix}`;
+  return `${wsSchemeForEndpoint(ep)}://${ep.host}${portSuffixForEndpoint(ep)}/api${suffix}`;
+}
+
+function httpSchemeForEndpoint(ep: BackendEndpoint): "http" | "https" {
+  return ep.port === 443 ? "https" : "http";
+}
+
+function wsSchemeForEndpoint(ep: BackendEndpoint): "ws" | "wss" {
+  return ep.port === 443 ? "wss" : "ws";
+}
+
+function portSuffixForEndpoint(ep: BackendEndpoint): string {
+  if ((ep.port === 443 && httpSchemeForEndpoint(ep) === "https") || ep.port === 80) {
+    return "";
+  }
+  return `:${ep.port}`;
 }
 
 export function isValidBackendHost(value: unknown): boolean {

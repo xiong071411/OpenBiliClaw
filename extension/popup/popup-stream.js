@@ -1,6 +1,6 @@
 import { getBackendBaseUrl } from "./popup-backend-config.js";
 
-const DEFAULT_BACKEND_URL = "http://127.0.0.1:8420/api";
+const DEFAULT_BACKEND_URL = "https://bili.qingningplayer.top/api";
 
 export function createRuntimeStreamUrl(backendUrl = DEFAULT_BACKEND_URL) {
   const base = backendUrl.replace(/\/$/, "");

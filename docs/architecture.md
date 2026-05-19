@@ -4,7 +4,7 @@
 
 OpenBiliClaw 采用分层架构设计，从上到下依次为：
 
-1. **用户交互层** — Chrome 浏览器插件（B 站 + 小红书 + 抖音 + YouTube 页面行为采集 · 视频停留满意度信号 · 推荐展示 · durable 对话交互 · 后台 LLM 暂停开关 · 配置离线缓存 / 降级修复 UI · xhs/dy/yt 任务调度 / 初始化画像导入 · B 站 / 抖音 Cookie 自动同步）
+1. **用户交互层** — Chrome / Firefox 浏览器插件（B 站 + 小红书 + 抖音 + YouTube 页面行为采集 · 视频停留满意度信号 · 推荐展示 · durable 对话交互 · 后台 LLM 暂停开关 · 配置离线缓存 / 降级修复 UI · xhs/dy/yt 任务调度 / 初始化画像导入 · B 站 / 抖音 Cookie 自动同步）+ 手机 Web 操作台（推荐流 · 画像 · durable 聊天 · 消息/惊喜推荐 · 运行状态）
 2. **外部集成层** — OpenClaw adapter / skill wrappers / 本地 API 等对外接入边界
 3. **Agent 核心层** — 自研编排器 + Soul Engine + Discovery Engine + Recommendation Engine + Skill System
 4. **多源适配层（v0.3.0+）** — `SourceAdapter` 协议下的 B 站 / 小红书 / 抖音 / YouTube / 通用 Web 源
@@ -24,6 +24,13 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - adapter bootstrap、DTO 裁剪和异常翻译
 - 将现有 runtime / engine 能力暴露为 OpenClaw 可调用 skill
 - 提供 JSON CLI bridge，供仓库内真实 OpenClaw skill pack 调用
+
+### Mobile Web Frontend (`web/`)
+- Vite + TypeScript + 原生 DOM 的手机优先 Web 操作台
+- hash route 承载 `#/recommend`、`#/profile`、`#/chat`、`#/messages`、`#/settings`
+- 通过同源 `/api` 调用推荐、画像、durable 聊天、惊喜推荐、兴趣探针和运行状态接口
+- 以 `client=web` 连接 `/api/runtime-stream`，接收补货、画像更新、惊喜推荐和兴趣探针事件
+- 明确不读取浏览器跨站 Cookie、不展示完整 API Key，不替代扩展的跨站内容采集和系统通知能力
 
 ### User Soul Engine (`soul/`)
 - 行为数据分析和画像构建

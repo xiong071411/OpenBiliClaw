@@ -53,6 +53,10 @@ extension/node_modules/
 extension/dist/
 extension/openbiliclaw-extension-*.zip
 
+# Mobile web frontend
+web/node_modules/
+web/dist/
+
 # Raw screenshots (canonical copies live in docs/images/)
 screenshot/
 

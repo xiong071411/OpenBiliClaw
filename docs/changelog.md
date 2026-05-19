@@ -4,6 +4,14 @@
 
 ---
 
+## v0.3.78: 手机 Web 前端操作台（2026-05-19）
+
+- 新增 `web/` Vite + TypeScript 手机 Web 前端，不依赖浏览器扩展即可在手机浏览器使用推荐流、画像、durable 聊天、消息/惊喜推荐、兴趣探针和低风险设置页；API 统一走 `/api`，runtime-stream 以 `client=web` 连接。
+- 新增 `scripts/deploy_web_frontend.sh`，构建后将 `web/dist/` 同步到 `bili.qingningplayer.top` 宝塔静态目录，并保留 `.well-known/`、`downloads/` 和宝塔隐藏文件。
+- 文档同步补齐 Web 前端模块、部署边界、安全约束和架构图；Web v1 明确不读取浏览器 Cookie、不展示完整 API Key，也不实现扩展专属采集/通知能力。
+
+---
+
 ## v0.3.77: 浏览器插件局域网后端地址配置（2026-05-18）
 
 - 浏览器插件设置页的后端 endpoint 从“仅端口可改”扩展为“后端地址 + 端口”一起配置：Chrome / Firefox manifest 都加入 `http://*/*` 权限，用户可把后端运行在局域网另一台机器上（`openbiliclaw start --host 0.0.0.0 --port 8420`），再在插件设置页填写该机器的局域网 IP；新增 host 校验、endpoint 持久化和 manifest 权限回归测试。

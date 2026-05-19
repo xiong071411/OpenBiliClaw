@@ -6,14 +6,14 @@
  * sides read & write the same chrome.storage.local key, so a change in
  * the popup is picked up by the service worker via chrome.storage.onChanged.
  *
- * Default endpoint is 127.0.0.1:8420. Users can override the host to reach a
+ * Default endpoint is bili.qingningplayer.top:443 on this deployment. Users can override the host to reach a
  * LAN daemon, or override the port to dodge local port conflicts on Windows
  * (Hyper-V / WSL / Docker reserve random local ports — 18080, 19090, 13000
  * are common safe choices).
  */
 
-export const DEFAULT_BACKEND_HOST = "127.0.0.1";
-export const DEFAULT_BACKEND_PORT = 8420;
+export const DEFAULT_BACKEND_HOST = "bili.qingningplayer.top";
+export const DEFAULT_BACKEND_PORT = 443;
 export const BACKEND_ENDPOINT_STORAGE_KEY = "popup_backend_endpoint";
 
 const DEFAULT_ENDPOINT = {
@@ -139,17 +139,32 @@ export async function getBackendEndpointConfig() {
 
 export async function getBackendOrigin() {
   const ep = await ensureLoaded();
-  return `http://${ep.host}:${ep.port}`;
+  return `${httpSchemeForEndpoint(ep)}://${ep.host}${portSuffixForEndpoint(ep)}`;
 }
 
 export async function getBackendBaseUrl() {
   const ep = await ensureLoaded();
-  return `http://${ep.host}:${ep.port}/api`;
+  return `${httpSchemeForEndpoint(ep)}://${ep.host}${portSuffixForEndpoint(ep)}/api`;
 }
 
 export async function getBackendWsBaseUrl() {
   const ep = await ensureLoaded();
-  return `ws://${ep.host}:${ep.port}/api`;
+  return `${wsSchemeForEndpoint(ep)}://${ep.host}${portSuffixForEndpoint(ep)}/api`;
+}
+
+function httpSchemeForEndpoint(ep) {
+  return ep.port === 443 ? "https" : "http";
+}
+
+function wsSchemeForEndpoint(ep) {
+  return ep.port === 443 ? "wss" : "ws";
+}
+
+function portSuffixForEndpoint(ep) {
+  if ((ep.port === 443 && httpSchemeForEndpoint(ep) === "https") || ep.port === 80) {
+    return "";
+  }
+  return `:${ep.port}`;
 }
 
 export function isValidBackendHost(value) {

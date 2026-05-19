@@ -17,10 +17,10 @@
 
 ---
 
-## 📌 v0.3.77 Highlights (2026-05-18)
+## 📌 v0.3.78 Highlights (2026-05-19)
 
-- **🌐 Extension can connect to a LAN backend** — the settings page now has a backend host field, so the daemon can run on another machine in your LAN; Chrome and Firefox manifests both allow remote HTTP backend origins.
-- **⚙️ Background LLM controls moved back to settings** — the recommendation tab no longer shows the quick toggles; the settings page now explains that enabling them stops automatic replenishment, so an empty candidate pool may temporarily show no recommendations.
+- **📱 Mobile Web console** — new `web/` Vite + TypeScript frontend lets a mobile browser use recommendations, profile, chat, messages, and runtime status directly.
+- **🔐 Public-entry safety boundary** — Web v1 never displays full API keys or cookies, and extension-only collection/notifications stay explicitly out of scope.
 
 Full changelog: [docs/changelog.md](docs/changelog.md).
 
@@ -340,11 +340,11 @@ The whole loop stays local — OpenClaw just calls the CLI bridge; your profile 
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                   Chrome Extension                   │
-│      (Behavior · Recs · Chat · Runtime Toggles)       │
-│      (Cookies · XHS/DY/YT tasks · init bridge)        │
+│             Chrome Extension + Mobile Web             │
+│  Extension: behavior · cookies · XHS/DY/YT task bridge │
+│  Web: recommendations · profile · durable chat · status│
 └────────────────────────┬────────────────────────────┘
-                         │ REST API / WebSocket (presence + cookies)
+                         │ REST API / WebSocket (presence + runtime stream)
 ┌────────────────────────▼────────────────────────────┐
 │                 Agent Orchestration                   │
 │            (Skills · Dialogue · Runtime Gate)       │
@@ -403,6 +403,7 @@ OpenBiliClaw/
 │   ├── llm/                   # Multi-model LLM adapters + structured JSON tolerance
 │   └── storage/               # Data storage layer
 ├── extension/                 # Chrome browser extension (Bilibili + XHS + Douyin + YouTube + degraded config recovery)
+├── web/                       # Mobile Web console (Vite + TypeScript + hash route)
 ├── skills/                    # Built-in Skill definitions
 ├── docs/                      # Documentation
 └── tests/                     # Tests (650+)
@@ -414,6 +415,7 @@ OpenBiliClaw/
 |--------|-----------|
 | Backend | Python 3.11+ |
 | Browser Extension | TypeScript + Chrome Extension (Manifest V3) |
+| Mobile Web Frontend | Vite + TypeScript + native DOM |
 | LLM | Built-in Gemini / DeepSeek / OpenAI / Claude / OpenRouter / Ollama; any OpenAI-compatible endpoint works via custom base_url |
 | Bilibili API | Custom client (WBI signing · v_voucher auto-recovery · rate control) |
 | Xiaohongshu | Extension DOM/state extraction + task dispatch; scrolling init imports open `/explore` in the foreground, click the page's profile entry, then use bounded scrolling and partial batches; no backend crawling |
@@ -427,6 +429,7 @@ OpenBiliClaw/
 - [Project Spec](docs/spec.md) — Complete design & planning
 - [Architecture](docs/architecture.md) — System architecture deep dive
 - [Memory Design](docs/memory-design.md) — Multi-layer memory architecture
+- [Mobile Web Frontend](docs/modules/web.md) — mobile console, API boundary, and deploy script
 - [Discovery Engine](docs/modules/discovery.md) — multi-source discovery + platform mix + diversity selection
 - [Soul Engine](docs/modules/soul.md) — Deep profiling + MBTI + interest speculation
 - [CLI Reference](docs/modules/cli.md) · [Config Reference](docs/modules/config.md)
@@ -434,7 +437,7 @@ OpenBiliClaw/
 
 ## 📜 Release History
 
-Latest: **v0.3.77: Browser extension LAN backend host configuration (2026-05-18)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md), with packages on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases).
+Latest: **v0.3.78: Mobile Web frontend console (2026-05-19)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md), with packages on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases).
 
 ## 🗺️ Roadmap
 
