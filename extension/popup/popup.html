@@ -3894,16 +3894,16 @@
         <h3><span class="section-icon">&#x2699;&#xFE0F;</span> 通用</h3>
         <div class="settings-field">
           <label for="cfgBackendHost">后端地址</label>
-          <input id="cfgBackendHost" type="text" placeholder="bili.qingningplayer.top">
+          <input id="cfgBackendHost" type="text" placeholder="127.0.0.1">
           <p class="settings-hint">
-            当前部署默认连接 <code>bili.qingningplayer.top</code>。如需改回本机后端，填写 <code>127.0.0.1</code>。
+            默认 127.0.0.1（本机）。如需连接内网或 HTTPS 域名上的后端，填写对应主机名，如 <code>bili.qingningplayer.top</code>。
           </p>
         </div>
         <div class="settings-field">
           <label for="cfgBackendPort">后端端口</label>
-          <input id="cfgBackendPort" type="number" min="1" max="65535" step="1" placeholder="443">
+          <input id="cfgBackendPort" type="number" min="1" max="65535" step="1" placeholder="8420">
           <p class="settings-hint">
-            当前部署默认 443；端口为 443 时扩展会使用 HTTPS/WSS。
+            默认 8420。端口为 443 时扩展会使用 HTTPS/WSS；本机后端通常用 <code>openbiliclaw start --port 8420</code>。
           </p>
         </div>
         <div class="settings-field">

@@ -2,14 +2,14 @@
  * OpenBiliClaw — configurable local-backend endpoint.
  *
  * The popup settings page can override the backend host and port
- * (default bili.qingningplayer.top:443 on this deployment), so the extension can talk to either the local
+ * (default 127.0.0.1:8420), so the extension can talk to either the local
  * daemon or a daemon exposed on the LAN. Every fetch and WebSocket in the
  * extension goes through this module so a single source of truth resolves
  * the current host + port at call time.
  *
  * Storage:
  *   chrome.storage.local key ``popup_backend_endpoint`` =
- *     { host: "bili.qingningplayer.top", port: 443 }
+ *     { host: "127.0.0.1", port: 8420 }
  *
  * Both the popup (popup-backend-config.js) and the service worker / content
  * scripts read & write this same key. Each context subscribes to
@@ -18,8 +18,8 @@
  * WebSocket against the new origin).
  */
 
-export const DEFAULT_BACKEND_HOST = "bili.qingningplayer.top";
-export const DEFAULT_BACKEND_PORT = 443;
+export const DEFAULT_BACKEND_HOST = "127.0.0.1";
+export const DEFAULT_BACKEND_PORT = 8420;
 export const BACKEND_ENDPOINT_STORAGE_KEY = "popup_backend_endpoint";
 
 export interface BackendEndpoint {

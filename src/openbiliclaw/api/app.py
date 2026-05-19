@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import shutil
 import uuid
@@ -186,6 +187,29 @@ def _normalize_source_platform(source: object) -> str:
     if source_key in {"bilibili", "bili", ""}:
         return "bilibili"
     return source_key
+
+
+def _is_private_or_loopback_host(value: str) -> bool:
+    host = value.strip().lower().strip("[]")
+    if host in {"localhost", "testclient", "testserver"}:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private
+
+
+def _config_reveal_allowed(request: Request) -> bool:
+    """Allow raw config secrets only for local/test/private entry points."""
+
+    client_host = request.client.host if request.client else ""
+    forwarded_for = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+    effective_host = forwarded_for or client_host
+    host_header = request.headers.get("host", "").rsplit(":", 1)[0]
+    return _is_private_or_loopback_host(effective_host) and _is_private_or_loopback_host(
+        host_header
+    )
 
 
 def _cap_by_franchise(
@@ -3542,14 +3566,10 @@ def create_app(
         issues = list(_collect_config_issues(cfg))
         if bool(getattr(ctx, "degraded", False)):
             issues.extend(getattr(ctx, "degraded_issues", []))
-        client_host = request.client.host if request.client else ""
-        forwarded_for = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
-        effective_host = forwarded_for or client_host
-        local_request = effective_host in {"127.0.0.1", "::1", "localhost"}
         return _config_to_response(
             cfg,
             issues,
-            mask_keys=not (reveal_keys and local_request),
+            mask_keys=not (reveal_keys and _config_reveal_allowed(request)),
             degraded=bool(getattr(ctx, "degraded", False)),
             degraded_reason=str(getattr(ctx, "degraded_reason", "")),
         )
