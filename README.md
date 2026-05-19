@@ -19,12 +19,13 @@
 
 ---
 
-## 📌 v0.3.83 + 本地 Web 操作台重要更新（2026-05-19）
+## 📌 v0.3.85 + 本地 Web 操作台重要更新（2026-05-20）
 
 - **📱 手机 Web 操作台** —— 本地分支新增 `web/` Vite + TypeScript 前端，手机浏览器可直接查看推荐、画像、聊天、消息和运行状态。
-- **🧩 插件设置页分组** —— 后端设置按「模型 / 平台源 / 调度 / 通用 / 日志」分 tab，平台源和候选池占比放到一起，不再挤在一个长列表里。
-- **▶️ YouTube 配置补齐** —— `[sources.youtube]` 现在可配置 search / trending / channel 三条 discovery 策略预算，并可从插件设置页保存。
-- **🚀 作者更新已同步** —— 合入上游 v0.3.79-v0.3.83：Codex OAuth、插件聊天输入体验、画像自动 bootstrap、推荐理由错位修复、安装合约对齐和 YouTube 配置补齐。
+- **🎛️ 来源配置分块** —— 插件设置页「平台源」按 Bilibili / 小红书 / 抖音 / YouTube / 通用网页 / 候选池占比拆开，配置边界更清楚。
+- **📺 Bilibili discovery 开关** —— 新增 `[sources.bilibili].enabled`，默认开启；关闭后 B 站 search / related_chain / trending / explore 不再参与后台补池。
+- **🪵 完整日志路径** —— 插件日志 tab 用单个「完整日志路径」编辑后端日志文件位置，保存时仍兼容 `logging.directory` / `logging.filename`。
+- **🚀 作者更新已同步** —— 合入上游 v0.3.79-v0.3.85：Codex OAuth、自动 init 收敛、插件设置整理、YouTube 配置补齐和 Bilibili discovery 开关。
 - **🔐 公开入口安全边界** —— Web v1 不展示完整 API Key / Cookie，不做扩展专属采集；服务器部署脚本会保留证书挑战目录和扩展下载目录。
 
 完整变更详见 [docs/changelog.md](docs/changelog.md)。
@@ -186,7 +187,7 @@ Windows 原生（PowerShell，不需要 Docker / WSL2）：
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; iwr https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/scripts/install.ps1 -UseBasicParsing | iex
 ```
 
-脚本依赖 `git` 和 Python 3.11+。它会自动克隆仓库、安装依赖、启动后端、健康检查，再提示你补充 LLM、embedding、B 站 Cookie、小红书 opt-in、抖音 opt-in、YouTube opt-in 等决策。不确定的选项直接回车或选默认。
+脚本依赖 `git` 和 Python 3.11+。它会自动克隆仓库、安装依赖、启动后端、健康检查，再提示你补充 LLM、embedding、B 站 Cookie、小红书 opt-in、抖音 opt-in、YouTube opt-in 等决策；确认齐全后会自动运行 init，完成画像生成和首轮发现。不确定的选项直接回车或选默认。
 
 </details>
 
@@ -199,9 +200,7 @@ Windows 原生（PowerShell，不需要 Docker / WSL2）：
 请按照 https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/docker-deployment.md 的说明帮我用 Docker Compose 部署 OpenBiliClaw 后端(务必用 Bash 的 curl 下载这个文档,不要用 WebFetch)
 ```
 
-详见 [Docker 部署指南](docs/docker-deployment.md)。
-
-> 💡 **Docker 用户注意**：容器启动后还需要执行 `docker exec -it openbiliclaw-backend openbiliclaw init` 生成画像。不跑 init，后端能正常启动但不会有推荐。
+详见 [Docker 部署指南](docs/docker-deployment.md)。Docker 主路径同样走 `agent_bootstrap.py --mode docker`，会在确认 LLM、embedding、B 站 Cookie 和各来源 opt-in 后自动运行 init；`docker exec ... openbiliclaw init` 只作为高级手动 fallback。
 
 </details>
 
@@ -506,7 +505,7 @@ OpenBiliClaw/
 
 ## 📜 更新日志
 
-最新状态：**上游 v0.3.83 + 本地 v0.3.84-local 手机 Web 前端操作台（2026-05-19）**。README 顶部保留最新重要更新；完整历史见 [docs/changelog.md](docs/changelog.md)，发布包见 [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)。
+最新状态：**上游 v0.3.85 + 本地 v0.3.86-local 手机 Web 前端操作台（2026-05-20）**。README 顶部保留最新重要更新；完整历史见 [docs/changelog.md](docs/changelog.md)，发布包见 [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)。
 
 ## 🗺️ 后续规划
 

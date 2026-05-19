@@ -4,11 +4,37 @@
 
 ---
 
-## v0.3.84-local: 手机 Web 前端操作台（2026-05-19）
+## v0.3.86-local: 手机 Web 前端操作台（2026-05-20）
 
 - 新增 `web/` Vite + TypeScript 手机 Web 前端，不依赖浏览器扩展即可在手机浏览器使用推荐流、画像、durable 聊天、消息/惊喜推荐、兴趣探针和低风险设置页；API 统一走 `/api`，runtime-stream 以 `client=web` 连接。
 - 新增 `scripts/deploy_web_frontend.sh`，构建后将 `web/dist/` 同步到 `bili.qingningplayer.top` 宝塔静态目录，并保留 `.well-known/`、`downloads/` 和宝塔隐藏文件。
 - 文档同步补齐 Web 前端模块、部署边界、安全约束和架构图；Web v1 明确不读取浏览器 Cookie、不展示完整 API Key，也不实现扩展专属采集/通知能力。
+
+---
+
+## v0.3.85 / extension v0.3.36: 插件配置页来源与日志整理（2026-05-20）
+
+- `[sources.bilibili].enabled` 新增 Bilibili discovery 开关；关闭后 B 站 search / related_chain / trending / explore 不再参与后台补池，`pool_source_shares.bilibili` 会保留但从运行时有效配比中剔除。
+- 插件设置页「平台源」tab 按 Bilibili / 小红书 / 抖音 / YouTube / 通用网页 / 候选池配比拆成独立分块，并把 B 站登录调试项文案改成「调试：B 站登录时显示浏览器窗口」。
+- `/api/config` 的 logging 响应新增只读 `file_path`，返回由 `directory` + `filename` 解析后的完整日志文件路径。
+- 浏览器插件设置页「日志」tab 将原来的「日志目录」+「日志文件名」收敛为单个「完整日志路径」输入；保存时仍拆回 `logging.directory` / `logging.filename` 写入 `config.toml`，兼容现有后端配置结构。
+- 后端包版本提升到 v0.3.85，准备发布 `backend-v0.3.85`；浏览器插件版本提升到 v0.3.36，准备发布 `extension-v0.3.36`。
+
+---
+
+## extension v0.3.35: 插件聊天页贴底布局修复（2026-05-20）
+
+- 浏览器插件聊天 tab 激活时会隐藏底部活动栏，让聊天输入框成为 side panel 底部固定区域；聊天记录区改为独立 flex 滚动，优先占用输入框上方空间。
+- 压缩聊天消息、状态提示和输入区间距，空状态提示不再占位；textarea 保留两行起步并限制最大高度，长内容在输入框内部滚动。
+- 浏览器插件版本提升到 v0.3.35，准备发布 `extension-v0.3.35`；Chrome / Edge / Brave 走 `openbiliclaw-extension-v0.3.35.zip`，Firefox 140+ 走 `openbiliclaw-extension-v0.3.35-firefox.zip`。本次不发布后端包。
+
+---
+
+## v0.3.84: 安装渠道自动 init 收敛（2026-05-20）
+
+- `agent_bootstrap.py` 新增交互确认模式和扩展 Cookie 等待流程：Bash / PowerShell / Docker / AI agent 安装渠道会在确认 embedding、B 站 Cookie 来源和小红书 / 抖音 / YouTube opt-in 后自动运行 init，不再把手动 `openbiliclaw init` 作为主路径。
+- Docker bootstrap 会把宿主机确认后的 `config.toml` 与 Cookie 文件同步到容器 `/app/runtime`，并用容器 runtime config 判断是否具备 init 条件；`docker exec ... openbiliclaw init` 保留为高级手动 fallback。
+- 后端包版本提升到 v0.3.84，准备发布 `backend-v0.3.84`。
 
 ---
 

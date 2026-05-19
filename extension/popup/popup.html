@@ -326,6 +326,7 @@
       gap: 12px;
       min-height: 0;
       padding-bottom: 4px;
+      flex: 1;
     }
 
     .view[hidden] {
@@ -2368,7 +2369,10 @@
     .chat-shell {
       padding: 14px;
       min-height: 0;
-      flex-shrink: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
 
     .chat-intro {
@@ -2395,11 +2399,9 @@
       display: flex;
       flex-direction: column;
       gap: 10px;
-      min-height: 72px;
-      max-height: clamp(220px, 45vh, 420px);
+      flex: 1;
       overflow-y: auto;
       padding-right: 4px;
-      margin-top: 12px;
     }
 
     /* Collapse the conversation surface entirely when no messages
@@ -2412,9 +2414,9 @@
     .chat-message {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 5px;
       max-width: 92%;
-      padding: 12px 14px;
+      padding: 10px 12px;
       border-radius: 18px 18px 18px 8px;
       background: rgba(247, 250, 255, 0.98);
       border: 1px solid rgba(231, 238, 248, 0.96);
@@ -2436,7 +2438,7 @@
 
     .chat-content {
       font-size: 12px;
-      line-height: 1.75;
+      line-height: 1.65;
       color: var(--text-main);
       white-space: pre-wrap;
     }
@@ -2504,15 +2506,17 @@
     .chat-form {
       display: flex;
       flex-direction: column;
-      gap: 10px;
-      margin-top: 12px;
+      gap: 8px;
+      margin-top: auto;
+      flex-shrink: 0;
+      padding-top: 8px;
     }
 
     .chat-input-shell {
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      padding: 12px;
+      gap: 6px;
+      padding: 10px 12px;
       border-radius: 18px;
       border: 1px solid rgba(231, 238, 248, 0.96);
       background: rgba(255, 255, 255, 0.96);
@@ -2528,20 +2532,29 @@
     }
 
     .chat-input {
-      min-height: 88px;
+      min-height: 68px;
+      max-height: 88px;
       border: 0;
-      padding: 10px 12px;
+      padding: 8px 10px;
       border-radius: 14px;
       background: transparent;
       line-height: 1.6;
       resize: none;
+      overflow-y: auto;
     }
 
     .chat-status {
-      min-height: 16px;
       font-size: 11px;
       line-height: 1.5;
       color: var(--text-secondary);
+    }
+
+    .chat-status:empty {
+      display: none;
+    }
+
+    .chat-status:not(:empty) {
+      min-height: 16px;
     }
 
     .footer {
@@ -2555,6 +2568,10 @@
       display: flex;
       flex-direction: column;
       gap: 10px;
+    }
+
+    .shell:has(#viewChat:not([hidden])) .footer {
+      display: none;
     }
 
     .footer-head {
@@ -3163,6 +3180,10 @@
       gap: 12px;
     }
 
+    .settings-source-card {
+      border-radius: 18px;
+    }
+
     .settings-section h3 {
       font-size: 14px;
       font-weight: 800;
@@ -3567,17 +3588,12 @@
       </section>
 
       <section id="viewChat" class="view" role="tabpanel" aria-labelledby="tabChat" hidden>
-        <div class="view-intro">
-          <p class="view-kicker">Chat</p>
-          <h2>说说你最近怎么想</h2>
-          <p>你是什么样的人、怎么想、喜欢什么、讨厌什么，为什么会停下来，都可以直接说。</p>
-        </div>
         <div class="chat-shell">
           <div id="chatMessages" class="chat-messages"></div>
           <form id="chatForm" class="chat-form">
             <label class="chat-input-shell">
               <span class="chat-input-label">写点你的想法和口味</span>
-              <textarea id="chatInput" class="chat-input" placeholder="比如：我喜欢慢慢讲清楚的长视频，讨厌标题党；最近总想看能帮我理清问题的内容。"></textarea>
+              <textarea id="chatInput" class="chat-input" rows="2" placeholder="说说你最近怎么想——你是什么样的人、怎么想、喜欢什么、讨厌什么，为什么会停下来，都可以直接说。"></textarea>
             </label>
             <button id="chatSendButton" class="action-button action-primary" type="submit">发出去</button>
             <p id="chatStatus" class="chat-status" aria-live="polite"></p>
@@ -3868,8 +3884,12 @@
 
       <div id="settingsPanelSources" class="settings-panel" data-settings-panel="sources" role="tabpanel" aria-labelledby="settingsTabSources" hidden>
       <!-- Bilibili -->
-      <div class="settings-section">
+      <div class="settings-section settings-source-card" data-source-card="bilibili">
         <h3><span class="section-icon">&#x1F4FA;</span> Bilibili</h3>
+        <div class="settings-field-row">
+          <input id="cfgBilibiliEnabled" type="checkbox">
+          <label for="cfgBilibiliEnabled">启用 Bilibili discovery</label>
+        </div>
         <div class="settings-field">
           <label for="cfgBiliAuth">认证方式</label>
           <select id="cfgBiliAuth">
@@ -3888,21 +3908,12 @@
         </div>
         <div class="settings-field-row">
           <input id="cfgBiliBrowserHeaded" type="checkbox">
-          <label for="cfgBiliBrowserHeaded">B 站登录浏览器显示窗口</label>
+          <label for="cfgBiliBrowserHeaded">调试：B 站登录时显示浏览器窗口</label>
         </div>
       </div>
 
-      <!-- Sources -->
-      <div class="settings-section">
-        <h3><span class="section-icon">&#x1F310;</span> 多平台源</h3>
-        <div class="settings-field">
-          <label for="cfgSourcesBrowserCdp">通用网页 CDP URL</label>
-          <input id="cfgSourcesBrowserCdp" type="text" placeholder="http://localhost:9222">
-        </div>
-        <div class="settings-field-row">
-          <input id="cfgSourcesBrowserHeaded" type="checkbox">
-          <label for="cfgSourcesBrowserHeaded">通用网页回退浏览器显示窗口</label>
-        </div>
+      <div class="settings-section settings-source-card" data-source-card="xiaohongshu">
+        <h3><span class="section-icon">&#x1F4D5;</span> 小红书</h3>
         <div class="settings-field-row">
           <input id="cfgXhsEnabled" type="checkbox">
           <label for="cfgXhsEnabled">启用小红书 discovery</label>
@@ -3919,6 +3930,10 @@
           <label for="cfgXhsTaskInterval">小红书任务间隔秒数</label>
           <input id="cfgXhsTaskInterval" type="number" min="0" step="1" placeholder="45">
         </div>
+      </div>
+
+      <div class="settings-section settings-source-card" data-source-card="douyin">
+        <h3><span class="section-icon">&#x1F3B5;</span> 抖音</h3>
         <div class="settings-field-row">
           <input id="cfgDouyinEnabled" type="checkbox">
           <label for="cfgDouyinEnabled">启用抖音 discovery</label>
@@ -3943,6 +3958,10 @@
           <label for="cfgDouyinRequestInterval">抖音 direct 请求间隔秒数</label>
           <input id="cfgDouyinRequestInterval" type="number" min="0" step="1" placeholder="2">
         </div>
+      </div>
+
+      <div class="settings-section settings-source-card" data-source-card="youtube">
+        <h3><span class="section-icon">&#x25B6;</span> YouTube</h3>
         <div class="settings-field-row">
           <input id="cfgYoutubeEnabled" type="checkbox">
           <label for="cfgYoutubeEnabled">启用 YouTube discovery</label>
@@ -3964,6 +3983,22 @@
           <input id="cfgYoutubeRequestInterval" type="number" min="0" step="1" placeholder="2">
         </div>
         <p class="settings-hint">YouTube 没有独立插件 producer；这些值会限制 yt_search / yt_trending / yt_channel 三个 discovery 策略的单轮规模。</p>
+      </div>
+
+      <div class="settings-section settings-source-card" data-source-card="browser">
+        <h3><span class="section-icon">&#x1F310;</span> 通用网页源</h3>
+        <div class="settings-field">
+          <label for="cfgSourcesBrowserCdp">通用网页 CDP URL</label>
+          <input id="cfgSourcesBrowserCdp" type="text" placeholder="http://localhost:9222">
+        </div>
+        <div class="settings-field-row">
+          <input id="cfgSourcesBrowserHeaded" type="checkbox">
+          <label for="cfgSourcesBrowserHeaded">通用网页回退浏览器显示窗口</label>
+        </div>
+      </div>
+
+      <div class="settings-section settings-source-card" data-source-card="pool">
+        <h3><span class="section-icon">&#x1F4E6;</span> 候选池来源占比</h3>
         <div class="settings-field">
           <label for="cfgPoolShareBilibili">候选池 B 站占比</label>
           <input id="cfgPoolShareBilibili" type="number" min="1" step="1" placeholder="8">
@@ -3994,7 +4029,7 @@
           <label for="cfgBackendHost">后端地址</label>
           <input id="cfgBackendHost" type="text" placeholder="127.0.0.1">
           <p class="settings-hint">
-            默认 127.0.0.1（本机）。如需连接内网或 HTTPS 域名上的后端，填写对应主机名，如 <code>bili.qingningplayer.top</code>。
+            默认 127.0.0.1（本机）。支持局域网 IP（如 <code>192.168.1.100</code>）或远程服务器域名（如 <code>my-server.example.com</code>）；公网部署建议通过反向代理启用 HTTPS。
           </p>
         </div>
         <div class="settings-field">
@@ -4110,12 +4145,8 @@
           </select>
         </div>
         <div class="settings-field">
-          <label for="cfgLogDirectory">日志目录</label>
-          <input id="cfgLogDirectory" type="text" placeholder="logs">
-        </div>
-        <div class="settings-field">
-          <label for="cfgLogFilename">日志文件名</label>
-          <input id="cfgLogFilename" type="text" placeholder="openbiliclaw.log">
+          <label for="cfgLogPath">完整日志路径</label>
+          <input id="cfgLogPath" type="text" placeholder="logs/openbiliclaw.log">
         </div>
         <div class="settings-field">
           <label for="cfgLogMaxFileSize">单日志文件上限 MB</label>

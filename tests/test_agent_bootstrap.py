@@ -112,6 +112,115 @@ def test_init_decisions_accept_existing_embedding_but_still_require_sources(tmp_
     assert decisions["embedding"]["source"] == "config"
 
 
+def test_init_decisions_required_for_all_optional_sources(tmp_path: Path) -> None:
+    _write_minimal_config(tmp_path, embedding_provider="ollama", embedding_model="bge-m3")
+    args = bootstrap.build_arg_parser().parse_args(["--project-dir", str(tmp_path)])
+
+    decisions = bootstrap.detect_init_decisions(tmp_path, args, embedding_touched=False)
+
+    assert decisions["missing"] == ["xhs", "douyin", "youtube"]
+
+
+def test_build_init_command_appends_all_source_flags_for_local(tmp_path: Path) -> None:
+    command = bootstrap.build_init_command(
+        "local", tmp_path, "--no-xhs", "--no-douyin", "--yes-youtube"
+    )
+
+    assert command[-4:] == ["init", "--no-xhs", "--no-douyin", "--yes-youtube"]
+
+
+def test_interactive_answers_apply_source_flags() -> None:
+    answers = bootstrap.InitConfirmationAnswers(
+        embedding_provider="ollama",
+        embedding_model="bge-m3",
+        xhs=False,
+        douyin=True,
+        youtube=False,
+        cookie_mode="manual",
+        bilibili_cookie="SESSDATA=test; bili_jct=test; DedeUserID=1",
+    )
+
+    argv = bootstrap.confirmation_answers_to_bootstrap_args(answers)
+
+    assert argv == [
+        "--embedding-provider",
+        "ollama",
+        "--embedding-model",
+        "bge-m3",
+        "--no-xhs",
+        "--yes-douyin",
+        "--no-youtube",
+        "--bilibili-cookie",
+        "SESSDATA=test; bili_jct=test; DedeUserID=1",
+    ]
+
+
+def test_collect_interactive_confirmations_requires_input_func() -> None:
+    with pytest.raises(RuntimeError, match="interactive confirmation requires a terminal"):
+        bootstrap.collect_interactive_confirmations(input_func=None)
+
+
+def test_wait_for_cookie_sync_returns_when_cookie_appears(tmp_path: Path) -> None:
+    calls = {"count": 0}
+
+    def detector(_project_dir: Path) -> dict[str, object]:
+        calls["count"] += 1
+        missing = ["bilibili.cookie"] if calls["count"] == 1 else []
+        return {"missing": missing}
+
+    assert (
+        bootstrap.wait_for_cookie_sync(
+            tmp_path,
+            timeout_seconds=1,
+            interval_seconds=0,
+            detector=detector,
+        )
+        is True
+    )
+
+
+def test_wait_for_cookie_sync_times_out(tmp_path: Path) -> None:
+    assert (
+        bootstrap.wait_for_cookie_sync(
+            tmp_path,
+            timeout_seconds=0.01,
+            interval_seconds=0,
+            detector=lambda _project_dir: {"missing": ["bilibili.cookie"]},
+        )
+        is False
+    )
+
+
+def test_docker_runtime_config_copy_commands(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (tmp_path / "config.toml").write_text("[llm]\n", encoding="utf-8")
+    (data_dir / "bilibili_cookie.json").write_text('{"cookie":"x"}', encoding="utf-8")
+
+    commands = bootstrap.build_docker_runtime_sync_commands(tmp_path)
+
+    assert [
+        "docker",
+        "cp",
+        str(tmp_path / "config.toml"),
+        "openbiliclaw-backend:/app/runtime/config.toml",
+    ] in commands
+    assert [
+        "docker",
+        "cp",
+        str(data_dir / "bilibili_cookie.json"),
+        "openbiliclaw-backend:/app/runtime/data/bilibili_cookie.json",
+    ] in commands
+
+
+def test_docker_secret_detector_command_reads_runtime_config() -> None:
+    command = bootstrap.build_docker_missing_secrets_command()
+
+    assert command[:3] == ["docker", "exec", "openbiliclaw-backend"]
+    assert "/app/runtime/config.toml" in " ".join(command)
+    assert "/app/runtime/data/bilibili_cookie.json" in " ".join(command)
+
+
 def test_build_init_command_appends_explicit_source_flags_for_docker(tmp_path: Path) -> None:
     command = bootstrap.build_init_command(
         "docker", tmp_path, "--yes-xhs", "--yes-douyin", "--no-youtube"

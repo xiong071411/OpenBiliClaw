@@ -17,12 +17,13 @@
 
 ---
 
-## 📌 v0.3.83 + Local Web Console Highlights (2026-05-19)
+## 📌 v0.3.85 + Local Web Console Highlights (2026-05-20)
 
 - **📱 Mobile Web console** — this local branch adds a `web/` Vite + TypeScript frontend so a mobile browser can use recommendations, profile, chat, messages, and runtime status directly.
-- **🧩 Tabbed extension settings** — backend settings are split into Models / Sources / Scheduler / General / Logs, with source toggles and pool shares grouped together.
-- **▶️ YouTube config parity** — `[sources.youtube]` can now tune search / trending / channel discovery budgets, and those fields are editable from the extension settings page.
-- **🚀 Upstream updates synced** — merged upstream v0.3.79-v0.3.83: Codex OAuth, extension chat input polish, profile auto-bootstrap, recommendation reason binding fixes, install contract alignment, and YouTube config parity.
+- **🎛️ Source settings are split into cards** — the extension settings Source tab now separates Bilibili, Xiaohongshu, Douyin, YouTube, generic Web, and pool-share controls.
+- **📺 Bilibili discovery switch** — `[sources.bilibili].enabled` is now configurable and defaults to on; disabling it removes Bilibili discovery from background pool replenishment.
+- **🪵 Full log path editing** — the extension Logging tab edits one full backend log path while still saving compatible `logging.directory` / `logging.filename` values.
+- **🚀 Upstream updates synced** — merged upstream v0.3.79-v0.3.85: Codex OAuth, auto-init convergence, settings organization, YouTube config parity, and the Bilibili discovery switch.
 - **🔐 Public-entry safety boundary** — Web v1 never displays full API keys or cookies, and extension-only collection/notifications stay explicitly out of scope.
 
 Full changelog: [docs/changelog.md](docs/changelog.md).
@@ -130,7 +131,7 @@ Native Windows (PowerShell, no Docker or WSL2 required):
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; iwr https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/scripts/install.ps1 -UseBasicParsing | iex
 ```
 
-The script needs `git` and Python 3.11+. It clones the repo, installs dependencies, starts the backend, runs a health check, then asks for LLM, embedding, Bilibili cookie, Xiaohongshu opt-in, Douyin opt-in, and YouTube opt-in choices. If unsure, press Enter or choose the default.
+The script needs `git` and Python 3.11+. It clones the repo, installs dependencies, starts the backend, runs a health check, then asks for LLM, embedding, Bilibili cookie, Xiaohongshu opt-in, Douyin opt-in, and YouTube opt-in choices. Once the confirmations are complete it automatically runs init to build the first profile and discovery pool. If unsure, press Enter or choose the default.
 
 </details>
 
@@ -143,9 +144,7 @@ Good if you already have Docker Desktop installed. v0.3.11+ includes an Ollama e
 Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/docker-deployment.md to deploy the OpenBiliClaw backend via Docker Compose (use Bash `curl` to fetch the document, NOT WebFetch).
 ```
 
-See the [Docker Deployment Guide](docs/docker-deployment.md).
-
-> 💡 **Docker users**: after the container starts, also run `docker exec -it openbiliclaw-backend openbiliclaw init` to generate your profile. Without init, the backend can start normally but will not produce recommendations.
+See the [Docker Deployment Guide](docs/docker-deployment.md). The primary Docker path also goes through `agent_bootstrap.py --mode docker`; after LLM, embedding, Bilibili cookie, and source opt-in confirmations it automatically runs init. `docker exec ... openbiliclaw init` remains an advanced manual fallback.
 
 </details>
 
@@ -443,7 +442,7 @@ OpenBiliClaw/
 
 ## 📜 Release History
 
-Latest state: **upstream v0.3.83 + local v0.3.84-local Mobile Web console (2026-05-19)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md), with packages on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases).
+Latest state: **upstream v0.3.85 + local v0.3.86-local Mobile Web console (2026-05-20)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md), with packages on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases).
 
 ## 🗺️ Roadmap
 

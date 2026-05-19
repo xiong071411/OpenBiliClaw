@@ -48,7 +48,10 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -60,6 +63,8 @@ DEFAULT_HEALTH_PATH = "/api/health"
 HEALTH_TIMEOUT_SECONDS = 90
 HEALTH_POLL_INTERVAL = 2.0
 LOCAL_NO_PROXY_HOSTS = ("localhost", "127.0.0.1", "::1")
+DOCKER_CONTAINER_NAME = "openbiliclaw-backend"
+DOCKER_RUNTIME_ROOT = "/app/runtime"
 
 SUPPORTED_PROVIDERS = ("openai", "claude", "gemini", "deepseek", "ollama", "openrouter")
 REMOTE_PROVIDERS = ("openai", "claude", "gemini", "deepseek", "openrouter")
@@ -149,6 +154,19 @@ class BootstrapResult:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class InitConfirmationAnswers:
+    """Explicit user decisions required before auto-init may run."""
+
+    embedding_provider: str
+    embedding_model: str
+    xhs: bool
+    douyin: bool
+    youtube: bool
+    cookie_mode: str
+    bilibili_cookie: str = ""
+
+
 def emit(result: BootstrapResult) -> None:
     """Emit a machine-parseable status line for the caller agent."""
 
@@ -166,6 +184,120 @@ def info(message: str) -> None:
 
     print(f"[bootstrap] {message}")
     sys.stdout.flush()
+
+
+def confirmation_answers_to_bootstrap_args(answers: InitConfirmationAnswers) -> list[str]:
+    """Convert interactive answers to the same explicit flags agents pass."""
+
+    args = [
+        "--embedding-provider",
+        answers.embedding_provider,
+        "--embedding-model",
+        answers.embedding_model,
+        "--yes-xhs" if answers.xhs else "--no-xhs",
+        "--yes-douyin" if answers.douyin else "--no-douyin",
+        "--yes-youtube" if answers.youtube else "--no-youtube",
+    ]
+    if answers.cookie_mode == "manual" and answers.bilibili_cookie:
+        args.extend(["--bilibili-cookie", answers.bilibili_cookie])
+    return args
+
+
+def _ask_yes_no(
+    input_func: Any,
+    prompt: str,
+    *,
+    default: bool = False,
+) -> bool:
+    suffix = "Y/n" if default else "y/N"
+    raw = str(input_func(f"{prompt} [{suffix}]: ")).strip().lower()
+    if not raw:
+        return default
+    return raw in {"y", "yes", "1", "true", "是", "好", "同意"}
+
+
+def collect_interactive_confirmations(input_func: Any | None = input) -> InitConfirmationAnswers:
+    """Ask the user for init decisions in human-run installer flows."""
+
+    if input_func is None or (input_func is input and not sys.stdin.isatty()):
+        raise RuntimeError("interactive confirmation requires a terminal")
+
+    print("")
+    print("OpenBiliClaw init choices")
+    print("Embedding default: local Ollama bge-m3 (free/offline/no extra API key).")
+    embedding_choice = str(
+        input_func("Embedding provider [ollama] (enter to accept default): ")
+    ).strip()
+    embedding_provider = embedding_choice or "ollama"
+    model_default = "bge-m3" if embedding_provider == "ollama" else ""
+    embedding_model = str(
+        input_func(f"Embedding model [{model_default}] (enter to accept default): ")
+    ).strip() or model_default
+
+    print("")
+    print("Optional source data is disabled by default unless you explicitly opt in.")
+    xhs = _ask_yes_no(
+        input_func,
+        "Include Xiaohongshu likes/favorites in the initial profile?",
+        default=False,
+    )
+    douyin = _ask_yes_no(
+        input_func,
+        "Include Douyin post/favorite/like/follow data in the initial profile?",
+        default=False,
+    )
+    youtube = _ask_yes_no(
+        input_func,
+        "Include YouTube history/subscriptions/likes in the initial profile?",
+        default=False,
+    )
+
+    print("")
+    print("Bilibili auth default: browser extension sync.")
+    cookie_mode_raw = str(
+        input_func("Bilibili cookie source: extension/manual/existing [extension]: ")
+    ).strip().lower()
+    cookie_mode = cookie_mode_raw or "extension"
+    bilibili_cookie = ""
+    if cookie_mode == "manual":
+        bilibili_cookie = str(input_func("Paste Bilibili Cookie header: ")).strip()
+    elif cookie_mode not in {"extension", "existing"}:
+        cookie_mode = "extension"
+
+    return InitConfirmationAnswers(
+        embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+        xhs=xhs,
+        douyin=douyin,
+        youtube=youtube,
+        cookie_mode=cookie_mode,
+        bilibili_cookie=bilibili_cookie,
+    )
+
+
+def apply_confirmation_answers_to_args(
+    args: argparse.Namespace,
+    answers: InitConfirmationAnswers,
+) -> None:
+    """Mutate parsed args with interactive choices where flags were omitted."""
+
+    if args.embedding_provider is None:
+        args.embedding_provider = answers.embedding_provider
+    if args.embedding_model is None:
+        args.embedding_model = answers.embedding_model
+    if not args.yes_xhs and not args.no_xhs:
+        args.yes_xhs = answers.xhs
+        args.no_xhs = not answers.xhs
+    if not args.yes_douyin and not args.no_douyin:
+        args.yes_douyin = answers.douyin
+        args.no_douyin = not answers.douyin
+    if not args.yes_youtube and not args.no_youtube:
+        args.yes_youtube = answers.youtube
+        args.no_youtube = not answers.youtube
+    if answers.cookie_mode == "manual" and answers.bilibili_cookie and not args.bilibili_cookie:
+        args.bilibili_cookie = answers.bilibili_cookie
+    if answers.cookie_mode == "extension":
+        args.wait_for_extension_cookie = True
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +500,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--skip-init",
         action="store_true",
         help="Do not run 'openbiliclaw init' after the backend is healthy.",
+    )
+    parser.add_argument(
+        "--interactive-confirm",
+        action="store_true",
+        help="Ask required init confirmations from the terminal before auto-init.",
+    )
+    parser.add_argument(
+        "--wait-for-extension-cookie",
+        action="store_true",
+        help="After backend health, wait for the browser extension to sync Bilibili cookie.",
     )
     parser.add_argument(
         "--skip-install",
@@ -1595,6 +1737,98 @@ def docker_compose_up(project_dir: Path) -> None:
     run_streaming([docker, "compose", "up", "-d", "--build"], cwd=project_dir)
 
 
+def build_docker_runtime_sync_commands(project_dir: Path) -> list[list[str]]:
+    """Return docker commands that copy confirmed host config into runtime volume."""
+
+    commands = [
+        [
+            "docker",
+            "exec",
+            DOCKER_CONTAINER_NAME,
+            "mkdir",
+            "-p",
+            f"{DOCKER_RUNTIME_ROOT}/data",
+        ],
+        [
+            "docker",
+            "cp",
+            str(project_dir / "config.toml"),
+            f"{DOCKER_CONTAINER_NAME}:{DOCKER_RUNTIME_ROOT}/config.toml",
+        ],
+    ]
+    cookie_file = project_dir / "data" / "bilibili_cookie.json"
+    if cookie_file.exists():
+        commands.append(
+            [
+                "docker",
+                "cp",
+                str(cookie_file),
+                f"{DOCKER_CONTAINER_NAME}:{DOCKER_RUNTIME_ROOT}/data/bilibili_cookie.json",
+            ]
+        )
+    return commands
+
+
+def sync_docker_runtime_config(project_dir: Path) -> None:
+    """Copy bootstrap-written config into the running Docker runtime volume."""
+
+    for command in build_docker_runtime_sync_commands(project_dir):
+        run_streaming(command, cwd=project_dir)
+
+
+def build_docker_missing_secrets_command() -> list[str]:
+    """Return command that inspects secrets inside the backend container."""
+
+    script = r"""
+import json
+import tomllib
+from pathlib import Path
+
+config_path = Path("/app/runtime/config.toml")
+cookie_path = Path("/app/runtime/data/bilibili_cookie.json")
+data = tomllib.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+llm = data.get("llm", {})
+provider = str(llm.get("default_provider", "") or "").strip() or "openai"
+remote = {"openai", "claude", "gemini", "deepseek", "openrouter"}
+provider_cfg = llm.get(provider, {})
+api_key = str(provider_cfg.get("api_key", "") or "").strip()
+bilibili = data.get("bilibili", {})
+cookie_inline = str(bilibili.get("cookie", "") or "").strip()
+cookie_on_disk = False
+if cookie_path.exists():
+    try:
+        cookie_on_disk = bool(str(json.loads(cookie_path.read_text(encoding="utf-8")).get("cookie", "")).strip())
+    except json.JSONDecodeError:
+        cookie_on_disk = False
+missing = []
+if provider in remote and not api_key:
+    missing.append(f"llm.{provider}.api_key")
+if not (cookie_inline or cookie_on_disk):
+    missing.append("bilibili.cookie")
+print(json.dumps({
+    "provider": provider,
+    "missing": missing,
+    "has_cookie_inline": bool(cookie_inline),
+    "has_cookie_file": cookie_on_disk,
+}))
+""".strip()
+    return ["docker", "exec", DOCKER_CONTAINER_NAME, "python", "-c", script]
+
+
+def detect_docker_missing_secrets(_project_dir: Path) -> dict[str, Any]:
+    """Return missing secrets from the running Docker runtime config."""
+
+    proc = subprocess.run(
+        build_docker_missing_secrets_command(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "docker secret detection failed")
+    return json.loads(proc.stdout)
+
+
 # ---------------------------------------------------------------------------
 # Health check
 
@@ -1617,6 +1851,24 @@ def wait_for_health(host: str, port: int, timeout: float = HEALTH_TIMEOUT_SECOND
             last_error = str(exc)
         time.sleep(HEALTH_POLL_INTERVAL)
     info(f"health check timed out: {last_error}")
+    return False
+
+
+def wait_for_cookie_sync(
+    project_dir: Path,
+    *,
+    timeout_seconds: float = 300.0,
+    interval_seconds: float = 2.0,
+    detector: Callable[[Path], dict[str, Any]] = detect_missing_secrets,
+) -> bool:
+    """Wait until Bilibili cookie arrives via extension sync."""
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() <= deadline:
+        missing = detector(project_dir).get("missing", [])
+        if "bilibili.cookie" not in missing:
+            return True
+        time.sleep(interval_seconds)
     return False
 
 
@@ -1648,6 +1900,28 @@ def run(args: argparse.Namespace) -> int:
             emit(BootstrapResult("error", str(exc), {"step": "reuse"}))
             return 2
         emit(BootstrapResult("ok", "secrets_reused", reuse_summary))
+
+    if args.interactive_confirm:
+        try:
+            answers = collect_interactive_confirmations()
+        except RuntimeError as exc:
+            emit(BootstrapResult("error", str(exc), {"step": "interactive_confirm"}))
+            return 2
+        apply_confirmation_answers_to_args(args, answers)
+        emit(
+            BootstrapResult(
+                "ok",
+                "init_confirmations_set",
+                {
+                    "embedding_provider": args.embedding_provider,
+                    "embedding_model": args.embedding_model,
+                    "xhs": "yes" if args.yes_xhs else "no",
+                    "douyin": "yes" if args.yes_douyin else "no",
+                    "youtube": "yes" if args.yes_youtube else "no",
+                    "cookie_mode": answers.cookie_mode,
+                },
+            )
+        )
 
     if args.provider:
         apply_provider_override(project_dir, args.provider)
@@ -1873,13 +2147,45 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     healthy = wait_for_health(args.host, args.port)
-    final_status = detect_missing_secrets(project_dir)
-    init_decisions = detect_init_decisions(
-        project_dir,
-        args,
-        embedding_touched=embedding_touched or auto_embedding_to_ollama,
-    )
     if healthy:
+        status_detector: Callable[[Path], dict[str, Any]] = detect_missing_secrets
+        if mode == "docker":
+            try:
+                sync_docker_runtime_config(project_dir)
+            except RuntimeError as exc:
+                emit(BootstrapResult("error", str(exc), {"step": "docker_config_sync"}))
+                return 4
+            status_detector = detect_docker_missing_secrets
+
+        final_status = status_detector(project_dir)
+        if args.wait_for_extension_cookie and final_status["missing"] == ["bilibili.cookie"]:
+            emit(
+                BootstrapResult(
+                    "progress",
+                    "waiting_for_extension_cookie",
+                    {
+                        "timeout_seconds": 300,
+                        "hint": "Install the browser extension and log in to bilibili.com.",
+                    },
+                )
+            )
+            if wait_for_cookie_sync(project_dir, detector=status_detector):
+                final_status = status_detector(project_dir)
+                emit(BootstrapResult("ok", "extension_cookie_synced", final_status))
+            else:
+                emit(
+                    BootstrapResult(
+                        "needs_secrets",
+                        "extension_cookie_wait_timeout",
+                        final_status,
+                    )
+                )
+
+        init_decisions = detect_init_decisions(
+            project_dir,
+            args,
+            embedding_touched=embedding_touched or auto_embedding_to_ollama,
+        )
         label = "complete" if not final_status["missing"] else "running_with_missing_secrets"
         if not final_status["missing"] and init_decisions["missing"] and not args.skip_init:
             label = "needs_decisions"
@@ -1964,6 +2270,12 @@ def run(args: argparse.Namespace) -> int:
 
         return 0
 
+    final_status = detect_missing_secrets(project_dir)
+    init_decisions = detect_init_decisions(
+        project_dir,
+        args,
+        embedding_touched=embedding_touched or auto_embedding_to_ollama,
+    )
     emit(
         BootstrapResult(
             "error",
