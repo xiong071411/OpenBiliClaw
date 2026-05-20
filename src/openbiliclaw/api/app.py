@@ -3607,6 +3607,7 @@ def create_app(
                     daily_trending_budget=cfg.sources.youtube.daily_trending_budget,
                     daily_channel_budget=cfg.sources.youtube.daily_channel_budget,
                     request_interval_seconds=cfg.sources.youtube.request_interval_seconds,
+                    min_interval_minutes=cfg.sources.youtube.min_interval_minutes,
                 ),
             ),
             scheduler=SchedulerConfigOut(
@@ -3874,6 +3875,7 @@ def create_app(
                         "daily_trending_budget",
                         "daily_channel_budget",
                         "request_interval_seconds",
+                        "min_interval_minutes",
                     ):
                         if key in yt_data:
                             setattr(cfg.sources.youtube, key, int(yt_data[key]))
