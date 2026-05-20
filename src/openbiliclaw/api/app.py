@@ -290,8 +290,8 @@ def create_app(
     )
 
     def _webui_html() -> HTMLResponse:
-        html = resources.files("openbiliclaw.webui").joinpath("index.html").read_text(
-            encoding="utf-8"
+        html = (
+            resources.files("openbiliclaw.webui").joinpath("index.html").read_text(encoding="utf-8")
         )
         return HTMLResponse(html)
 
@@ -935,9 +935,12 @@ def create_app(
         get_recommendations = ctx.database.get_recommendations
         signature = inspect.signature(get_recommendations)
         if "include_feedbacked" in signature.parameters:
-            rows = get_recommendations(limit=limit, include_feedbacked=include_feedbacked)
+            rows = cast(
+                "list[dict[str, Any]]",
+                get_recommendations(limit=limit, include_feedbacked=include_feedbacked),
+            )
         else:
-            rows = get_recommendations(limit=limit)
+            rows = cast("list[dict[str, Any]]", get_recommendations(limit=limit))
         if include_feedbacked:
             return rows
         return [row for row in rows if not _is_feedbacked_recommendation_row(row)]
@@ -1403,7 +1406,9 @@ def create_app(
                     content_id=str(row.get("content_id", "") or row.get("bvid", "")),
                     content_url=str(row.get("content_url", "") or ""),
                     source_platform=str(row.get("source_platform", "") or "bilibili"),
-                    feedback_type=str(row.get("feedback_type") or row.get("feedback") or "") or None,
+                    feedback_type=(
+                        str(row.get("feedback_type") or row.get("feedback") or "") or None
+                    ),
                     pool_status=str(row.get("pool_status") or "") or None,
                 )
                 for row in rows

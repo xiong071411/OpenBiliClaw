@@ -326,9 +326,7 @@ class Database:
         for top_level_key in ("watch_seconds", "video_duration_seconds"):
             if top_level_key in kwargs and kwargs[top_level_key] is not None:
                 classifier_event[top_level_key] = kwargs[top_level_key]
-        inferred_satisfaction, satisfaction_reason = classify_event_satisfaction(
-            classifier_event
-        )
+        inferred_satisfaction, satisfaction_reason = classify_event_satisfaction(classifier_event)
 
         cursor = self._execute_write(
             "INSERT INTO events "
@@ -2304,10 +2302,14 @@ class Database:
         otherwise five 原神 / 提瓦特 items can land in one popup view.
         """
         self._ensure_fresh_read()
-        feedback_clause = "" if include_feedbacked else """
+        feedback_clause = (
+            ""
+            if include_feedbacked
+            else """
               AND COALESCE(r.feedback_type, r.feedback, '') = ''
               AND COALESCE(c.pool_status, '') != 'feedbacked'
         """
+        )
         cursor = self.conn.execute(
             f"""
             SELECT
@@ -2503,8 +2505,7 @@ class Database:
         as ``unknown`` so the upgrade is non-blocking.
         """
         existing_columns = {
-            str(row["name"])
-            for row in self.conn.execute("PRAGMA table_info(events)").fetchall()
+            str(row["name"]) for row in self.conn.execute("PRAGMA table_info(events)").fetchall()
         }
         required_columns = {
             "inferred_satisfaction": "TEXT",
@@ -2513,9 +2514,7 @@ class Database:
         for column_name, column_type in required_columns.items():
             if column_name in existing_columns:
                 continue
-            self.conn.execute(
-                f"ALTER TABLE events ADD COLUMN {column_name} {column_type}"
-            )
+            self.conn.execute(f"ALTER TABLE events ADD COLUMN {column_name} {column_type}")
 
     def _ensure_recommendation_feedback_columns(self) -> None:
         """Backfill recommendation feedback columns for existing databases."""
