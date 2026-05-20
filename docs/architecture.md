@@ -39,7 +39,7 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - 自我编辑和遗忘机制
 
 ### Content Discovery (`discovery/`)
-- 多策略内容发现（B 站 search · trending · related_chain · explore + 小红书 `xiaohongshu` + 抖音 `douyin` + YouTube `yt_search` / `yt_trending` / `yt_channel`），按 `runtime.source_policy` 生成的平台有效配比并行调度；默认保存的 share 为 B 站 / 小红书 / 抖音 / YouTube = 8 / 1 / 1 / 1，但默认只启用 B 站，关闭的平台不会占候选池 quota
+- 多策略内容发现（B 站 search · trending · related_chain · explore + 小红书 `xiaohongshu` + 抖音 `douyin` + YouTube `yt_search` / `yt_trending` / `yt_channel`），按 `runtime.source_policy` 生成的平台有效配比补池；默认保存的 share 为 B 站 / 小红书 / 抖音 / YouTube = 8 / 1 / 1 / 1，但默认只启用 B 站，关闭的平台不会占候选池 quota。B 站仍在主 refresh 计划内并行 fan-out；XHS / 抖音 / YouTube 低于 quota 时分别交给独立 producer。
 - 内容评估（基于用户 Soul，LLM 批量打分）；eval-batch 会读取近期 negative exemplars，按话术 / 商业意图 / 标题结构压低相似候选，评分缓存随最新事件 id 版本化
 - 候选分层、去重和缓存写入；写入时 `pool_status='suppressed'` 的旧候选在重新发现时自动复活成 `'fresh'`
 - v0.3.0+ 多样性栈：trending 按 rid 交错 / explore 按 domain 交错 / `_compress_topic_repeats` 单次压缩 / `trim_topic_group_overflow` 跨源跨轮配额（任意 topic_group ≤ 池子 10%）/ deficit-source 合并 + 并行 fan-out
@@ -51,6 +51,7 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - `dy_tasks` — 抖音扩展任务队列（`bootstrap_profile` 初始化画像任务；发布 / 收藏 / 点赞 / 关注信号由扩展以用户浏览器登录态抓取；任务 poll 时标记 `in_progress`，CLI 可复用近期 bootstrap；`search` 任务用于后台插件签名搜索，回传 `dy_search` 候选；`hot` 任务用于后台 `/hot/{sentence_id}` → related API，回传 `dy_hot` 候选；`feed` 任务用于后台首页 `/aweme/v1/web/tab/feed/`，回传 `dy_feed` 候选；三者分别作为 `dy-plugin-search` / `dy-plugin-hot-related` / `dy-plugin-feed` discovery 来源）
 - `yt_tasks` — YouTube 扩展任务队列（`bootstrap_profile` 初始化画像任务；观看历史 / 订阅 / 点赞由扩展以用户浏览器登录态读取 DOM 并分批回传；任务 poll 时标记 `in_progress`，CLI 可复用近期 bootstrap）
 - `youtube.takeout` — Google Takeout 离线导入解析器，将 YouTube 观看历史 / 订阅 / 点赞转换为统一事件
+- `YoutubeDiscoveryProducer` — 后端直连的 YouTube steady-state discovery loop；在 YouTube 平台族低于 quota 时调用 `yt_search` / `yt_trending` / `yt_channel`，并用 SQLite execution ledger 控制每日执行预算
 - `web_adapter` — 通用 Web（Playwright CDP + LLM 内容抽取）
 - `SourceRecipe` — 源任务持久化与分发
 
@@ -68,8 +69,8 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - 降级模式启动：生产 `create_app()` 遇到 LLM registry 配置错误时保留 `/api/health`、`/api/config`、`/api/runtime-status` 和 `/api/runtime-stream`，让 popup 设置页仍能保存修复配置；其他 API 返回 503，避免半初始化 runtime 继续跑推荐/发现链路
 - 配置热重载：`RuntimeContext` 重建 registry / service / engine 时会从 `[llm.soul]` / `[llm.discovery]` / `[llm.recommendation]` / `[llm.evaluation]` 注入同一份 module override；热重载后的 speculator tick 作为 detached task 注册到 `BackgroundTaskRegistry`，不阻塞 `/api/config` 响应
 - `AutoUpdateService` — 后端自动更新只查询 GitHub `/tags` 并过滤 `backend-v*`（兼容 legacy `v*` / 裸 semver），明确忽略 `extension-v*`；当前 GitHub Releases 由扩展 artifact 占用，不能用 `/releases/latest` 判断后端源码是否最新
-- `ContinuousRefreshController` — 后台定时刷新候选池；按平台族配额评估 deficit，B 站缺货合并到一次 discover() 并行 fan-out，小红书缺口交给 xhs producer / 扩展任务链；抖音缺口交给 runtime `DouyinDiscoveryProducer`，通过 `DouyinDiscoveryService(cache=True)` 复用 search / hot / feed 后台插件签名链路补池
-- `background_llm_work_allowed()` — 共享 gate predicate；`scheduler.enabled=false` 会暂停 daemon-owned 后台 LLM / embedding 工作，`scheduler.pause_on_extension_disconnect=true` 时还要求浏览器插件 presence 在线或仍处于断开宽限窗口。该 gate 覆盖 refresh、pool precompute、soul pipeline、xhs/dy producer、proactive push、低频 account sync、startup one-shot 和 OpenClaw direct bootstrap
+- `ContinuousRefreshController` — 后台定时刷新候选池；按平台族配额评估 deficit，B 站缺货合并到一次 discover() 并行 fan-out，小红书缺口交给 xhs producer / 扩展任务链；抖音缺口交给 runtime `DouyinDiscoveryProducer`，通过 `DouyinDiscoveryService(cache=True)` 复用 search / hot / feed 后台插件签名链路补池；YouTube 缺口交给 `YoutubeDiscoveryProducer` 后端直连补池，主 refresh replenishment plan 不再 inline 调度 `yt_*`
+- `background_llm_work_allowed()` — 共享 gate predicate；`scheduler.enabled=false` 会暂停 daemon-owned 后台 LLM / embedding 工作，`scheduler.pause_on_extension_disconnect=true` 时还要求浏览器插件 presence 在线或仍处于断开宽限窗口。该 gate 覆盖 refresh、pool precompute、soul pipeline、xhs/dy/youtube producer、proactive push、低频 account sync、startup one-shot 和 OpenClaw direct bootstrap
 - `_enforce_pool_cap` 每 tick 跑 `trim_topic_group_overflow` + under-quota suppressed 候选复活 + 必要时按 share quotas 修剪过额源
 - `AccountSyncService` — 历史记录、收藏夹、关注列表同步；使用历史游标 + 已见 bvid/mid 集合只把新增账号信号送进画像分析；首次成功写入账号行为并完成 preference 分析后，若 soul 画像为空，会在同一进程生命周期内最多一次触发 `build_initial_profile([])` 自动 bootstrap
 - `/api/sources/{xhs,dy,yt}/task-result` — 插件 bootstrap partial / final 结果完整保留在任务表；传播到 memory / profile pipeline 前读取 `source_bootstrap_state.json`，跳过跨任务已见 note/video/item key，避免旧收藏 / 历史再次触发画像更新

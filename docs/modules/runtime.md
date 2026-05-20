@@ -9,6 +9,7 @@
 | 功能 | 状态 | 说明 |
 |------|------|------|
 | 后台刷新控制 | ✅ | `ContinuousRefreshController` 按 scheduler 配置补充候选池，并通过 source policy 计算各平台有效配比。 |
+| YouTube 后台 discovery producer | ✅ | `YoutubeDiscoveryProducer` 独立运行 `yt_search` / `yt_trending` / `yt_channel`，只在 YouTube 平台族低于 quota 时由 `_loop_youtube_producer()` tick，按每日 ledger 和 `min_interval_minutes` 控制执行。 |
 | 运行时频率配置 | ✅ | `refresh_check_interval_seconds`、行为触发阈值、trending / explore 间隔、单轮发现上限、主动推送间隔和 speculator idle tick 都从 `[scheduler]` 读取，配置热重载后重建 runtime 生效。 |
 | 浏览器 presence gate | ✅ | `background_llm_work_allowed()` 结合 `scheduler.enabled` 与 `pause_on_extension_disconnect` 控制 daemon-owned 后台 LLM / embedding 工作。 |
 | Runtime event stream | ✅ | `/api/runtime-stream` 向扩展推送状态、Cookie sync 请求、配置重载和 presence 事件。 |
@@ -68,6 +69,21 @@ result = await service.sync_now()
 - 收藏夹：使用稳定排序后的 `favorite_signature` 和 `favorite_bvids`，签名变化时只导入新增 bvid。
 - 关注列表：使用 `following_signature` 和 `following_mids`，签名变化时只导入新增 mid。
 
+### YoutubeDiscoveryProducer
+
+```python
+from openbiliclaw.runtime.youtube_producer import YoutubeDiscoveryProducer
+
+result = await producer.produce_if_due(limit=20)
+```
+
+`produce_if_due()` 返回 `{"discovered": int, "reason": str, ...}`。常见 `reason`：
+
+- `ok`：至少完成了一轮可运行策略；结果已通过 `ContentDiscoveryEngine.discover()` 进入统一评估 / 缓存路径。
+- `throttled`：距离上次执行未达到 `min_interval_minutes`。
+- `budget_exhausted`：当天 `yt_search` / `yt_trending` / `yt_channel` 的执行 ledger 已耗尽。
+- `disabled` / `no_profile` / `error`：分别表示配置关闭、画像不可用或所有策略失败。
+
 ### Source Bootstrap Task Results
 
 XHS / 抖音 / YouTube 的插件任务桥保留两层去重：
@@ -118,3 +134,5 @@ XHS / 抖音 / YouTube 的插件任务桥保留两层去重：
 `restart_background_tasks()` 在启动后置 one-shot 时只调度 `_safe_post_reload_speculate()`，不会 await speculator 的 `force_tick()`。这保证 popup 保存配置的 HTTP 响应不被一次画像猜测卡住；异常由 helper 吞掉并记录 debug，下一轮正常调度仍会继续。
 
 刷新调度不使用 `scheduler.discovery_cron`。该字段仅保留为旧配置兼容；实际触发由 `refresh_check_interval_seconds` 轮询、候选池缺口、`signal_event_threshold`、`trending_refresh_hours`、`explore_refresh_hours` 和 `discovery_limit` 共同决定。
+
+`ContinuousRefreshController.run_forever()` 当前并行启动 refresh、pool precompute、soul pipeline、XHS producer、Douyin producer、YouTube producer 和 proactive push 七条 loop。共享的 `background_llm_work_allowed()` gate 覆盖所有 daemon-owned LLM / embedding 工作；YouTube 与 XHS / Douyin 一样会在 gate 关闭时跳过 tick。不同点是 YouTube 不通过扩展任务队列做 steady-state discovery，而是在后端直接调用 YouTube strategies；`yt_tasks` 只保留给 bootstrap profile 导入。
