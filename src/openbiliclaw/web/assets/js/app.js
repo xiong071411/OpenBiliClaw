@@ -234,11 +234,55 @@
 
     function openPanel(id) { document.getElementById(id)?.classList.add("is-open"); }
     function closePanel(id) {
-      document.getElementById(id)?.classList.remove("is-open");
+      const panel = document.getElementById(id);
+      panel?.classList.remove("is-open", "from-mobile-menu");
       if (id === "messagesDrawer") {
         state.messageListSnapshot = null;
         state.messageListDomLocked = false;
       }
+    }
+
+    function isMobileViewport() {
+      return window.matchMedia?.("(max-width: 820px)").matches;
+    }
+
+    function syncMobileSearch() {
+      const input = $("#mobileSearchInput");
+      if (input && input.value !== state.query) input.value = state.query || "";
+    }
+
+    function openMobileMenu() {
+      syncMobileSearch();
+      renderRail();
+      document.body.classList.add("mobile-menu-open");
+      document.getElementById("mobileMenu")?.classList.add("is-open");
+    }
+
+    function closeMobileMenu() {
+      document.body.classList.remove("mobile-menu-open");
+      document.getElementById("mobileMenu")?.classList.remove("is-open");
+    }
+
+    function openMobilePanel(id, options = {}) {
+      closeMobileMenu();
+      if (id === "messagesDrawer") {
+        hydrateInboxFromSpeculations(state.profile?.speculative_interests);
+        state.messageListSnapshot = getRenderableMessages();
+        returnToMessages();
+        renderMessages();
+        void refreshProfile().catch(() => {});
+      }
+      if (id === "activityDrawer") renderActivityHistory();
+      if (id === "settingsModal") setActiveSettingsPanel(options.settingsPanel || "models");
+      const panel = document.getElementById(id);
+      panel?.classList.add("from-mobile-menu");
+      openPanel(id);
+    }
+
+    function returnToMobileMenu(event) {
+      const panel = event.target.closest(".drawer, .overlay");
+      if (panel?.id) closePanel(panel.id);
+      openMobileMenu();
     }
 
     function platformName(value) {
@@ -303,13 +347,14 @@
       } catch {
         return "";
       }
-      return `/api/image-proxy?url=${encodeURIComponent(url)}`;
+      const base = getApiBase() || DEFAULT_API_BASE;
+      return `${base}/image-proxy?url=${encodeURIComponent(url)}`;
     }
 
     function coverImg(item) {
       const url = imageProxyUrl(item.cover_url);
       if (!url) return "";
-      return `<img src="${escapeHtml(url)}" alt="${escapeHtml(item.title)} 的封面" loading="lazy">`;
+      return `<img src="${escapeHtml(url)}" alt="${escapeHtml(item.title)} 的封面" loading="lazy" referrerpolicy="no-referrer">`;
     }
 
     function contentUrl(item) {
@@ -500,25 +545,39 @@
 
     function renderRail() {
       const profile = state.profile;
-      if (profile?.personality_portrait) $("#profilePortrait").textContent = valueList(profile.personality_portrait);
+      const portraitText = profile?.personality_portrait ? valueList(profile.personality_portrait) : "偏好结构化解释、长视频和跨学科桥接，对“为什么”比“是什么”更敏感。";
+      if ($("#profilePortrait")) $("#profilePortrait").textContent = portraitText;
+      if ($("#mobileProfilePortrait")) $("#mobileProfilePortrait").textContent = portraitText;
       const chips = [
         ...asArray(profile?.core_traits),
         ...asArray(profile?.cognitive_style),
         ...asArray(profile?.likes).map((item) => typeof item === "object" ? item.domain || item.name || item.title || valueList(item) : item)
       ].map(valueList).filter((text) => text && text.length <= 10 && !/[，。；、,.]/.test(text)).slice(0, 8);
-      $("#profileChips").replaceChildren(...(chips.length ? chips : ["长解释", "机制控", "跨平台", "反信息茧房"]).map((text) => {
-        const chip = document.createElement("span"); chip.className = "chip"; chip.textContent = text; return chip;
-      }));
+      const chipTexts = chips.length ? chips : ["长解释", "机制控", "跨平台", "反信息茧房"];
+      ["#profileChips", "#mobileProfileChips"].forEach((selector) => {
+        const target = $(selector);
+        if (!target) return;
+        target.replaceChildren(...chipTexts.map((text) => {
+          const chip = document.createElement("span"); chip.className = "chip"; chip.textContent = text; return chip;
+        }));
+      });
       const mbtiText = formatPersonalityType(profile?.mbti || profile?.personality_type) || "—";
       const opennessText = formatPercent(profile?.exploration_openness ?? profile?.openness) || "—";
       const depthText = formatPercent(profile?.style?.depth_preference ?? profile?.depth_preference ?? profile?.deep_preference ?? profile?.long_video_affinity) || "—";
-      $("#railMbti").textContent = mbtiText;
-      $("#railOpenness").textContent = opennessText;
-      $("#railDepth").textContent = depthText;
+      [["#railMbti", mbtiText], ["#mobileRailMbti", mbtiText], ["#railOpenness", opennessText], ["#mobileRailOpenness", opennessText], ["#railDepth", depthText], ["#mobileRailDepth", depthText]].forEach(([selector, value]) => {
+        const target = $(selector);
+        if (target) target.textContent = value;
+      });
       const activityItems = state.activityItems.length ? state.activityItems : asArray(state.activity?.items);
-      $("#activityList").innerHTML = activityItems.length
+      const activityHtml = activityItems.length
         ? activityItems.slice(0, 5).map((item) => `<div class="activity-item"><p>${escapeHtml(typeof item === "object" ? item.summary || item.detail || item.kind || valueList(item) : item)}</p></div>`).join("")
         : `<div class="empty-state">还没有新的动态；实时流收到 activity.added 后会自动刷新。</div>`;
+      ["#activityList", "#mobileActivityList"].forEach((selector) => {
+        const target = $(selector);
+        if (target) target.innerHTML = activityHtml;
+      });
+      const mobileCount = $("#mobileMessageCount");
+      if (mobileCount) mobileCount.textContent = String(getRenderableMessages().length);
     }
 
     function renderActivityHistory() {
@@ -915,6 +974,8 @@
       if (metric) metric.textContent = String(count);
       const dot = $("#messagesDot");
       if (dot) dot.hidden = count <= 0;
+      const mobileCount = $("#mobileMessageCount");
+      if (mobileCount) mobileCount.textContent = String(count);
       return count;
     }
 
@@ -1563,6 +1624,7 @@
       image.src = url;
       image.alt = "";
       image.loading = "lazy";
+      image.referrerPolicy = "no-referrer";
       image.addEventListener("error", () => {
         image.remove();
         thumb.classList.remove("has-image");
@@ -1858,6 +1920,17 @@
         input.setAttribute("placeholder", CHAT_PLACEHOLDERS[chatPlaceholderIndex]);
       }, 5000);
     }
+
+    safeBind("#mobileMenuBtn", "click", openMobileMenu);
+    safeBind("#mobileMenuClose", "click", closeMobileMenu);
+    safeBind("#mobileSearchInput", "input", (event) => { state.query = event.target.value || ""; const desktopInput = $("#searchInput"); if (desktopInput) desktopInput.value = state.query; renderAll(); });
+    safeBind("#mobileSearchForm", "submit", (event) => { event.preventDefault(); state.query = $("#mobileSearchInput")?.value || ""; const desktopInput = $("#searchInput"); if (desktopInput) desktopInput.value = state.query; renderAll(); closeMobileMenu(); });
+    document.querySelectorAll("[data-mobile-panel]").forEach((button) => {
+      button.addEventListener("click", () => openMobilePanel(button.dataset.mobilePanel, { settingsPanel: button.dataset.settings }));
+    });
+    document.querySelectorAll("[data-mobile-back]").forEach((button) => {
+      button.addEventListener("click", returnToMobileMenu);
+    });
 
     safeBind("#profileBtn", "click", () => openPanel("profileDrawer"));
     safeBind("#profileMemoryMoreBtn", "click", loadMoreProfileMemory);
