@@ -36,6 +36,9 @@
           <span class="nav-action-text">设置</span>
         </button>
       </nav>
+      <button class="icon-btn mobile-menu-btn" id="mobileMenuBtn" type="button" aria-label="打开手机菜单">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke-linecap="round"/></svg>
+      </button>
     </header>
 
     <div class="fatal-banner" id="fatalBanner" role="alert"></div>
@@ -157,10 +160,45 @@
     </main>
   </div>
 
+  <section class="mobile-menu" id="mobileMenu" aria-label="手机菜单">
+    <div class="mobile-menu-panel">
+      <div class="mobile-menu-head">
+        <div><p class="eyebrow">OpenBiliClaw</p><h2>菜单</h2></div>
+        <button class="icon-btn" id="mobileMenuClose" type="button" aria-label="关闭手机菜单">×</button>
+      </div>
+      <form class="mobile-search" id="mobileSearchForm">
+        <input id="mobileSearchInput" type="search" placeholder="搜索推荐、UP 主、兴趣方向或解释文本">
+        <button class="pill-btn dark" type="submit">搜索</button>
+      </form>
+      <div class="mobile-menu-list" aria-label="手机功能入口">
+        <button class="mobile-menu-item" data-mobile-panel="profileDrawer" type="button"><span>我的画像</span><small id="mobileProfileHint">查看完整画像和近期记忆</small></button>
+        <button class="mobile-menu-item" data-mobile-panel="chatDrawer" type="button"><span>聊聊口味</span><small>告诉阿B你的偏好和边界</small></button>
+        <button class="mobile-menu-item" data-mobile-panel="messagesDrawer" type="button"><span>消息</span><small><span id="mobileMessageCount">0</span> 条待处理</small></button>
+        <button class="mobile-menu-item" data-mobile-panel="settingsModal" data-settings="models" type="button"><span>设置</span><small>模型、平台源和调度配置</small></button>
+      </div>
+      <section class="mobile-summary-card" aria-label="阿B 眼里的你">
+        <div class="mobile-summary-head"><p class="eyebrow">Profile</p><button class="small-btn" data-mobile-panel="profileDrawer" type="button">查看画像</button></div>
+        <h3>阿B 眼里的你</h3>
+        <div class="profile-chip-row" id="mobileProfileChips"></div>
+        <p class="video-meta" id="mobileProfilePortrait">偏好结构化解释、长视频和跨学科桥接。</p>
+        <div class="kv">
+          <div class="kv-row"><span>MBTI 推断</span><strong id="mobileRailMbti">—</strong></div>
+          <div class="kv-row"><span>探索开放度</span><strong id="mobileRailOpenness">—</strong></div>
+          <div class="kv-row"><span>深度偏好</span><strong id="mobileRailDepth">—</strong></div>
+        </div>
+      </section>
+      <section class="mobile-summary-card" aria-label="后台刚记住的事">
+        <div class="mobile-summary-head"><p class="eyebrow">Activity</p><button class="small-btn" data-mobile-panel="activityDrawer" type="button">查看全部</button></div>
+        <h3>后台刚记住的事</h3>
+        <div class="activity-list" id="mobileActivityList"></div>
+      </section>
+    </div>
+  </section>
+
   <section class="drawer" id="profileDrawer" aria-label="画像详情" data-od-id="profile-drawer">
     <div class="scrim" data-close="profileDrawer"></div>
     <div class="drawer-panel">
-      <div class="drawer-head"><div><p class="eyebrow">Soul profile</p><h2>我的画像</h2></div><button class="icon-btn" data-close="profileDrawer" type="button">×</button></div>
+      <div class="drawer-head"><button class="small-btn mobile-back-btn" data-mobile-back type="button">← 返回菜单</button><div><p class="eyebrow">Soul profile</p><h2>我的画像</h2></div><button class="icon-btn" data-close="profileDrawer" type="button">×</button></div>
       <div class="profile-list" id="profileDetails"></div>
       <div class="drawer-actions"><button class="pill-btn dark" id="profileMemoryMoreBtn" type="button" hidden="">加载更多近期记忆</button></div>
     </div>
@@ -169,7 +207,7 @@
   <section class="drawer" id="chatDrawer" aria-label="聊天调教" data-od-id="chat-drawer">
     <div class="scrim" data-close="chatDrawer"></div>
     <div class="drawer-panel">
-      <div class="drawer-head"><div><p class="eyebrow">Dialogue</p><h2>聊聊口味</h2></div><button class="icon-btn" data-close="chatDrawer" type="button">×</button></div>
+      <div class="drawer-head"><button class="small-btn mobile-back-btn" data-mobile-back type="button">← 返回菜单</button><div><p class="eyebrow">Dialogue</p><h2>聊聊口味</h2></div><button class="icon-btn" data-close="chatDrawer" type="button">×</button></div>
       <div class="chat-log" id="chatLog"></div>
       <form class="chat-input" id="chatForm"><input id="chatInput" placeholder="说说你最近怎么想——你是什么样的人、喜欢什么、讨厌什么，都可以直接说。"><button class="pill-btn primary" type="submit">发送</button></form>
     </div>
@@ -178,7 +216,7 @@
   <section class="drawer" id="messagesDrawer" aria-label="消息中心" data-od-id="messages-drawer">
     <div class="scrim" data-close="messagesDrawer"></div>
     <div class="drawer-panel" id="messagesPanel">
-      <div class="drawer-head" id="messagesHead"><div><p class="eyebrow">Inbox</p><h2>消息</h2></div><button class="icon-btn" data-close="messagesDrawer" type="button">×</button></div>
+      <div class="drawer-head" id="messagesHead"><button class="small-btn mobile-back-btn" data-mobile-back type="button">← 返回菜单</button><div><p class="eyebrow">Inbox</p><h2>消息</h2></div><button class="icon-btn" data-close="messagesDrawer" type="button">×</button></div>
       <div class="message-list" id="messageList"></div>
       <div class="message-chat-view" id="messageChatView" hidden>
         <div class="drawer-head message-chat-head">
@@ -197,7 +235,7 @@
   <section class="drawer" id="activityDrawer" aria-label="动态历史" data-od-id="activity-drawer">
     <div class="scrim" data-close="activityDrawer"></div>
     <div class="drawer-panel">
-      <div class="drawer-head"><div><p class="eyebrow">Activity history</p><h2>动态历史</h2></div><button class="icon-btn" data-close="activityDrawer" type="button">×</button></div>
+      <div class="drawer-head"><button class="small-btn mobile-back-btn" data-mobile-back type="button">← 返回菜单</button><div><p class="eyebrow">Activity history</p><h2>动态历史</h2></div><button class="icon-btn" data-close="activityDrawer" type="button">×</button></div>
       <div class="activity-list" id="activityHistory"></div>
       <div class="drawer-actions"><button class="pill-btn dark" id="activityMoreBtn" type="button">加载更早动态</button></div>
     </div>
@@ -206,7 +244,7 @@
   <section class="overlay" id="settingsModal" aria-label="后端设置" data-od-id="settings-modal">
     <div class="scrim" data-close="settingsModal"></div>
     <div class="modal-panel">
-      <div class="modal-head"><div><p class="eyebrow">Settings</p><h2>后端与模型设置</h2></div><button class="icon-btn" data-close="settingsModal" type="button">×</button></div>
+      <div class="modal-head"><button class="small-btn mobile-back-btn" data-mobile-back type="button">← 返回菜单</button><div><p class="eyebrow">Settings</p><h2>后端与模型设置</h2></div><button class="icon-btn" data-close="settingsModal" type="button">×</button></div>
       <form id="settingsForm" class="settings-grid">
         <div class="settings-tabs" role="tablist" aria-label="后端设置分类">
           <button class="settings-tab is-active" type="button" data-settings-tab="models">模型</button>
