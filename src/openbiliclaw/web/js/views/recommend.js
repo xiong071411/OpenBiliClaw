@@ -390,60 +390,47 @@ function renderCard(rawItem) {
       ${item.expression ? `<div class="card-expression">${esc(item.expression)}</div>` : ""}
     </div>`;
 
-  // Card actions — aligned with extension popup UX:
-  // "去看看" (primary) / "多来点" / "少来点" / "说说原因"
+  // Card actions — icon style with feedback state persistence
   const actionsRow = document.createElement("div");
-  actionsRow.className = "card-feedback-actions";
+  actionsRow.className = "card-actions";
   actionsRow.addEventListener("click", (e) => e.stopPropagation());
 
   const alreadyFeedback = feedbackDone.get(item.id);
 
-  const openBtn = document.createElement("button");
-  openBtn.className = "btn btn-brand";
-  openBtn.textContent = "\u53BB\u770B\u770B";
-  openBtn.addEventListener("click", () => {
+  const openBtn = createCardAction("\u{1F517} \u6253\u5F00", () => {
     reportClick({ bvid: item.bvid, title: item.title, recommendation_id: item.id, topic_label: item.topic_label, up_name: item.up_name });
     if (url) window.open(url, "_blank");
   });
 
-  const likeBtn = document.createElement("button");
-  likeBtn.className = "btn btn-outline";
-  likeBtn.textContent = alreadyFeedback === "like" ? "\u2705 \u5DF2\u8BB0\u4E0B" : "\u591A\u6765\u70B9";
-  if (alreadyFeedback === "like") likeBtn.disabled = true;
-  likeBtn.addEventListener("click", async () => {
+  const likeBtn = createCardAction(alreadyFeedback === "like" ? "\u2705" : "\u{1F44D}", async () => {
     likeBtn.disabled = true;
-    likeBtn.textContent = "\u63D0\u4EA4\u4E2D\u2026";
+    likeBtn.textContent = "\u2026";
     try {
       await submitFeedback(buildFeedbackPayload(item.id, "like"));
       feedbackDone.set(item.id, "like");
-      likeBtn.textContent = "\u2705 \u5DF2\u8BB0\u4E0B";
+      likeBtn.textContent = "\u2705";
     } catch {
       likeBtn.disabled = false;
-      likeBtn.textContent = "\u591A\u6765\u70B9";
+      likeBtn.textContent = "\u{1F44D}";
     }
   });
+  if (alreadyFeedback === "like") likeBtn.disabled = true;
 
-  const dislikeBtn = document.createElement("button");
-  dislikeBtn.className = "btn btn-outline";
-  dislikeBtn.textContent = alreadyFeedback === "dislike" ? "\u274C \u5DF2\u8BB0\u4E0B" : "\u5C11\u6765\u70B9";
-  if (alreadyFeedback === "dislike") dislikeBtn.disabled = true;
-  dislikeBtn.addEventListener("click", async () => {
+  const dislikeBtn = createCardAction(alreadyFeedback === "dislike" ? "\u274C" : "\u{1F44E}", async () => {
     dislikeBtn.disabled = true;
-    dislikeBtn.textContent = "\u63D0\u4EA4\u4E2D\u2026";
+    dislikeBtn.textContent = "\u2026";
     try {
       await submitFeedback(buildFeedbackPayload(item.id, "dislike"));
       feedbackDone.set(item.id, "dislike");
-      dislikeBtn.textContent = "\u274C \u5DF2\u8BB0\u4E0B";
+      dislikeBtn.textContent = "\u274C";
     } catch {
       dislikeBtn.disabled = false;
-      dislikeBtn.textContent = "\u5C11\u6765\u70B9";
+      dislikeBtn.textContent = "\u{1F44E}";
     }
   });
+  if (alreadyFeedback === "dislike") dislikeBtn.disabled = true;
 
-  const commentBtn = document.createElement("button");
-  commentBtn.className = "btn btn-outline";
-  commentBtn.textContent = "\u8BF4\u8BF4\u539F\u56E0";
-  commentBtn.addEventListener("click", () => {
+  const commentBtn = createCardAction("\u{1F4AC}", () => {
     feedbackSheet = { itemId: item.id, note: "", submitState: "idle" };
     renderFeedbackSheet();
   });
@@ -464,6 +451,14 @@ function renderCard(rawItem) {
   }
 
   return card;
+}
+
+function createCardAction(label, handler) {
+  const btn = document.createElement("button");
+  btn.className = "card-action-btn";
+  btn.textContent = label;
+  btn.addEventListener("click", handler);
+  return btn;
 }
 
 // ── Feedback Bottom Sheet ────────────────────────────────────
