@@ -50,9 +50,12 @@ const feedbackDone = new Map(); // recId -> "like" | "dislike" | "comment"
 const COVER_PRELOAD_BATCH_SIZE = 12;
 const COVER_PRELOAD_WAIT_TIMEOUT_MS = 1200;
 const AUTO_APPEND_ROOT_MARGIN = "700px 0px 900px 0px";
+const SCROLL_PREHEAT_LOOKAHEAD = 6;
+const SCROLL_PREHEAT_ROOT_MARGIN = "0px 0px 800px 0px";
 const warmedCoverUrls = new Set();
 const warmingImages = new Map();
 let autoAppendObserver = null;
+let scrollPreheatObserver = null;
 let autoAppendExhausted = false;
 
 // ── Escape helper ────────────────────────────────────────────
@@ -122,6 +125,7 @@ function render() {
   // Feedback bottom sheet
   renderFeedbackSheet();
   void warmRecommendationCovers(recs);
+  observeScrollPreheat();
   observeAutoAppendSentinel();
 }
 
@@ -625,6 +629,44 @@ function warmRecommendationCovers(
   return waitForCoverPreload(pending, COVER_PRELOAD_WAIT_TIMEOUT_MS);
 }
 
+function disconnectScrollPreheatObserver() {
+  if (!scrollPreheatObserver) return;
+  scrollPreheatObserver.disconnect();
+  scrollPreheatObserver = null;
+}
+
+function observeScrollPreheat() {
+  disconnectScrollPreheatObserver();
+  if (!$root || typeof IntersectionObserver === "undefined") return;
+
+  const cards = $root.querySelectorAll(".card");
+  if (!cards.length) return;
+
+  scrollPreheatObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      scrollPreheatObserver.unobserve(entry.target);
+
+      // Find this card's index and preheat the next batch ahead
+      const allCards = Array.from($root.querySelectorAll(".card"));
+      const idx = allCards.indexOf(entry.target);
+      if (idx < 0) continue;
+
+      const recs = state.recommendations || [];
+      const start = Math.min(idx + 1, recs.length);
+      if (start < recs.length) {
+        warmRecommendationCovers(recs, { start, limit: SCROLL_PREHEAT_LOOKAHEAD });
+      }
+    }
+  }, {
+    root: null,
+    rootMargin: SCROLL_PREHEAT_ROOT_MARGIN,
+    threshold: 0,
+  });
+
+  cards.forEach((card) => scrollPreheatObserver.observe(card));
+}
+
 function disconnectAutoAppendObserver() {
   if (!autoAppendObserver) return;
   autoAppendObserver.disconnect();
@@ -855,7 +897,9 @@ async function handleAppend() {
     // Append new cards before the load-more row without rebuilding existing ones.
     if (loadMoreRow) {
       for (const [offset, item] of newItems.entries()) {
-        $root.insertBefore(renderCard(item, startIndex + offset), loadMoreRow);
+        const card = renderCard(item, startIndex + offset);
+        $root.insertBefore(card, loadMoreRow);
+        if (scrollPreheatObserver) scrollPreheatObserver.observe(card);
       }
     }
   } catch {
