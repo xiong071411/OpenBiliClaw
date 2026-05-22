@@ -355,6 +355,15 @@ export function normalizeRuntimeStatus(status) {
       : [],
     manual_refresh_state: normalizeText(status?.manual_refresh_state) || "idle",
     manual_refresh_message: normalizeText(status?.manual_refresh_message),
+    musicmark_sync_enabled: Boolean(status?.musicmark_sync_enabled),
+    last_musicmark_sync_at: normalizeText(status?.last_musicmark_sync_at),
+    last_musicmark_sync_attempt_at: normalizeText(status?.last_musicmark_sync_attempt_at),
+    last_musicmark_sync_error: normalizeText(status?.last_musicmark_sync_error),
+    last_musicmark_sync_skip_reason: normalizeText(status?.last_musicmark_sync_skip_reason),
+    last_musicmark_sync_event_count: Number(status?.last_musicmark_sync_event_count ?? 0),
+    last_musicmark_sync_total_count: Number(status?.last_musicmark_sync_total_count ?? 0),
+    last_musicmark_sync_summary: normalizeText(status?.last_musicmark_sync_summary),
+    musicmark_sync_interval_hours: Number(status?.musicmark_sync_interval_hours ?? 0),
   };
 }
 
@@ -373,7 +382,53 @@ export function mergeRuntimeStatusEvent(status, event) {
   if (Array.isArray(event?.recent_pool_topics)) {
     next.recent_pool_topics = event.recent_pool_topics.map(normalizeText).filter(Boolean);
   }
+  if (typeof event?.message === "string" && normalizeText(event.message)) {
+    next.manual_refresh_message = normalizeText(event.message);
+  }
+  const type = normalizeText(event?.type || event?.event);
+  if (type === "refresh.failed") next.manual_refresh_state = "failed";
+  else if (type === "refresh.pool_updated") next.manual_refresh_state = "success";
+  else if (type === "refresh.started" || type === "refresh.strategy") {
+    next.manual_refresh_state = "running";
+  }
   return next;
+}
+
+export function getMusicMarkDisplayState(status) {
+  const runtime = normalizeRuntimeStatus(status);
+  if (!runtime.musicmark_sync_enabled) {
+    return { visible: false };
+  }
+  const hasError = Boolean(runtime.last_musicmark_sync_error);
+  const syncLabel = hasError
+    ? `失败：${runtime.last_musicmark_sync_error}`
+    : runtime.last_musicmark_sync_at
+      ? formatRelativeTimestamp(runtime.last_musicmark_sync_at)
+      : runtime.last_musicmark_sync_skip_reason
+        ? formatMusicMarkSkipReason(runtime.last_musicmark_sync_skip_reason)
+        : "等待同步";
+  return {
+    visible: true,
+    tone: hasError ? "warning" : "success",
+    syncLabel,
+    eventCount: Math.max(0, runtime.last_musicmark_sync_event_count),
+    totalCount: Math.max(0, runtime.last_musicmark_sync_total_count),
+    intervalHours: Math.max(0, runtime.musicmark_sync_interval_hours),
+    summary: runtime.last_musicmark_sync_summary,
+  };
+}
+
+function formatMusicMarkSkipReason(reason) {
+  const text = normalizeText(reason);
+  if (text === "unchanged") return "无变化";
+  if (text === "no_events") return "无新信号";
+  if (text === "fetch_failed") return "拉取失败";
+  if (text === "convert_failed") return "转换失败";
+  if (text === "ingest_failed") return "写入失败";
+  if (text === "pipeline_pending") return "画像分析中";
+  if (text === "pipeline_timeout") return "画像分析超时";
+  if (text === "pipeline_failed") return "画像分析失败";
+  return text || "等待同步";
 }
 
 // ── Pool Status (semantic — primary for mobile) ──────────────

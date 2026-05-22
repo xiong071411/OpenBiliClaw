@@ -4,7 +4,7 @@
 
 OpenBiliClaw 采用分层架构设计，从上到下依次为：
 
-1. **用户交互层** — Chrome / Firefox 浏览器插件（B 站 + 小红书 + 抖音 + YouTube 页面行为采集 · 视频停留满意度信号 · 推荐展示 · durable 对话交互 · 后台 LLM 暂停开关 · 配置离线缓存 / 降级修复 UI · xhs/dy/yt 任务调度 / 初始化画像导入 · B 站 / 抖音 Cookie 自动同步）+ 手机 Web 操作台（推荐流 · 画像 · durable 聊天 · 消息/惊喜推荐 · 运行状态）
+1. **用户交互层** — Chrome / Firefox 浏览器插件（B 站 + 小红书 + 抖音 + YouTube 页面行为采集 · 视频停留满意度信号 · 推荐展示 · durable 对话交互 · 后台 LLM 暂停开关 · 配置离线缓存 / 降级修复 UI · xhs/dy/yt 任务调度 / 初始化画像导入 · B 站 / 抖音 Cookie 自动同步）+ 内置手机 Web 操作台（推荐流 · 画像 · durable 聊天 · 消息/惊喜推荐 · MusicMark 同步状态 · 运行状态）
 2. **外部集成层** — OpenClaw adapter / skill wrappers / 本地 API / Codex CLI 凭据导入等对外接入边界
 3. **Agent 核心层** — 自研编排器 + Soul Engine + Discovery Engine + Recommendation Engine + Skill System
 4. **多源适配层（v0.3.0+）** — `SourceAdapter` 协议下的 B 站 / 小红书 / 抖音 / YouTube / 通用 Web 源
@@ -25,12 +25,12 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - 将现有 runtime / engine 能力暴露为 OpenClaw 可调用 skill
 - 提供 JSON CLI bridge，供仓库内真实 OpenClaw skill pack 调用
 
-### Mobile Web Frontend (`web/`)
-- Vite + TypeScript + 原生 DOM 的手机优先 Web 操作台
-- hash route 承载 `#/recommend`、`#/profile`、`#/chat`、`#/messages`、`#/settings`
-- 通过同源 `/api` 调用推荐、画像、durable 聊天、惊喜推荐、兴趣探针和运行状态接口
-- 以 `client=web` 连接 `/api/runtime-stream`，接收补货、画像更新、惊喜推荐和兴趣探针事件
-- 明确不读取浏览器跨站 Cookie、不展示完整 API Key，不替代扩展的跨站内容采集和系统通知能力
+### Mobile Web Frontend (`src/openbiliclaw/web/`)
+- Vanilla JS + ES Modules 的内置手机优先 Web 操作台，随 Python 包分发，无独立构建步骤
+- FastAPI 在 `/m/` mount 静态 SPA，hash route 承载 `#/recommend`、`#/profile`、`#/chat`
+- 通过同源 `/api` 调用推荐、画像、durable 聊天、惊喜推荐、兴趣探针、MusicMark 同步状态和运行状态接口
+- 连接 `/api/runtime-stream`，接收补货、画像更新、惊喜推荐和兴趣探针事件
+- 明确不读取浏览器跨站 Cookie，不替代扩展的跨站内容采集、Cookie 同步和系统通知能力
 
 ### User Soul Engine (`soul/`)
 - 行为数据分析和画像构建
@@ -59,6 +59,7 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - `yt_tasks` — YouTube 扩展任务队列（`bootstrap_profile` 初始化画像任务；观看历史 / 订阅 / 点赞由扩展以用户浏览器登录态读取 DOM 并分批回传；任务 poll 时标记 `in_progress`，CLI 可复用近期 bootstrap）
 - `youtube.takeout` — Google Takeout 离线导入解析器，将 YouTube 观看历史 / 订阅 / 点赞转换为统一事件
 - `YoutubeDiscoveryProducer` — 后端直连的 YouTube steady-state discovery loop；在 YouTube 平台族低于 quota 时调用 `yt_search` / `yt_trending` / `yt_channel`，并用 SQLite execution ledger 控制每日执行预算
+- `musicmark_sync` — MusicMark 聚合听歌摘要同步服务；只写入压缩后的 `source_platform="musicmark"` 画像事件，不进入 discovery 候选池
 - `web_adapter` — 通用 Web（Playwright CDP + LLM 内容抽取）
 - `SourceRecipe` — 源任务持久化与分发
 
@@ -76,7 +77,7 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - 降级模式启动：生产 `create_app()` 遇到 LLM registry 配置错误时保留 `/api/health`、`/api/config`、`/api/runtime-status` 和 `/api/runtime-stream`，让 popup 设置页仍能保存修复配置；其他 API 返回 503，避免半初始化 runtime 继续跑推荐/发现链路
 - 配置热重载：`RuntimeContext` 重建 registry / service / engine 时会从 `[llm.soul]` / `[llm.discovery]` / `[llm.recommendation]` / `[llm.evaluation]` 注入同一份 module override；热重载后的 speculator tick 作为 detached task 注册到 `BackgroundTaskRegistry`，不阻塞 `/api/config` 响应
 - `AutoUpdateService` — 后端自动更新只查询 GitHub `/tags` 并过滤 `backend-v*`（兼容 legacy `v*` / 裸 semver），明确忽略 `extension-v*`；当前 GitHub Releases 由扩展 artifact 占用，不能用 `/releases/latest` 判断后端源码是否最新
-- `ContinuousRefreshController` — 后台定时刷新候选池；按平台族配额评估 deficit，B 站缺货合并到一次 discover() 并行 fan-out，小红书缺口交给 xhs producer / 扩展任务链；抖音缺口交给 runtime `DouyinDiscoveryProducer`，通过 `DouyinDiscoveryService(cache=True)` 复用 search / hot / feed 后台插件签名链路补池；YouTube 缺口交给 `YoutubeDiscoveryProducer` 后端直连补池，主 refresh replenishment plan 不再 inline 调度 `yt_*`
+- `ContinuousRefreshController` — 后台定时刷新候选池；按平台族配额评估 deficit，B 站缺货合并到一次 discover() 并行 fan-out，小红书缺口交给 xhs producer / 扩展任务链；抖音缺口交给 runtime `DouyinDiscoveryProducer`，通过 `DouyinDiscoveryService(cache=True)` 复用 search / hot / feed 后台插件签名链路补池；YouTube 缺口交给 `YoutubeDiscoveryProducer` 后端直连补池，主 refresh replenishment plan 不再 inline 调度 `yt_*`；MusicMark 同步随 soul pipeline tick 低频执行，只影响画像信号
 - `background_llm_work_allowed()` — 共享 gate predicate；`scheduler.enabled=false` 会暂停 daemon-owned 后台 LLM / embedding 工作，`scheduler.pause_on_extension_disconnect=true` 时还要求浏览器插件 presence 在线或仍处于断开宽限窗口。该 gate 覆盖 refresh、pool precompute、soul pipeline、xhs/dy/youtube producer、proactive push、低频 account sync、startup one-shot 和 OpenClaw direct bootstrap
 - `_enforce_pool_cap` 每 tick 跑 `trim_topic_group_overflow` + under-quota suppressed 候选复活 + 必要时按 share quotas 修剪过额源
 - `AccountSyncService` — 历史记录、收藏夹、关注列表同步；使用历史游标 + 已见 bvid/mid 集合只把新增账号信号送进画像分析；首次成功写入账号行为并完成 preference 分析后，若 soul 画像为空，会在同一进程生命周期内最多一次触发 `build_initial_profile([])` 自动 bootstrap

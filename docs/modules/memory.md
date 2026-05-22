@@ -107,6 +107,7 @@
 | 认知变化状态 | ✅ | `cognition_updates.json` 记录关键认知变化、通知状态和来源 |
 | 账户同步状态 | ✅ | `account_sync_state.json` 记录历史/收藏/关注同步游标、已见 ID 集合、签名和最近错误 |
 | 多源 bootstrap 去重状态 | ✅ | `source_bootstrap_state.json` 记录 XHS / 抖音 / YouTube 已进入事件路径的 bootstrap identity key，避免跨任务重放旧画像信号 |
+| MusicMark 同步状态 | ✅ | `musicmark_sync_state.json` 记录听歌摘要 digest、最近同步 / 尝试时间、写入事件数、总播放数、摘要、跳过原因和错误 |
 | 插件聊天回合 | ✅ | SQLite `chat_turns` 持久化 side panel 主聊天、惊喜推荐内聊和兴趣猜测内聊的 pending/completed/failed 状态 |
 
 ## 公开 API
@@ -377,6 +378,7 @@ data/memory/
 | `feedback_state.json` | 记录反馈处理到了哪一条，避免重复分析 | SoulEngine |
 | `account_sync_state.json` | 历史/收藏/关注的增量同步游标、同秒历史 bvid 集合、收藏 bvid 集合、关注 mid 集合和签名 | AccountSyncService |
 | `source_bootstrap_state.json` | XHS / 抖音 / YouTube bootstrap 已传播 identity key，避免跨任务重复写入同一批画像信号 | FastAPI source task endpoints |
+| `musicmark_sync_state.json` | MusicMark 聚合摘要 digest、最近同步时间、最近错误、跳过原因、写入事件数和用户可见摘要 | MusicMarkSyncService |
 | `discovery_runtime.json` | 候选池刷新时间、通知游标、最近话题、近期 probe domain / axis 历史、显式 probe feedback 历史 | RefreshController / OpenClaw / FastAPI |
 | `insight_candidates.json` | 聊天中提取的候选洞察，等待置信度达标 | SoulEngine |
 | `cognition_updates.json` | 系统最近形成的关键认知变化 | FastAPI → 浏览器插件通知 |
@@ -434,3 +436,4 @@ data_dir = "data"  # 记忆 JSON 文件存储在 data/memory/ 下
 13. **认知变化单独留痕**：`cognition_updates.json` 保存系统最近形成的关键理解变化，既供插件通知使用，也让画像页能回显”最近记住了什么”
 14. **账户同步状态单独持久化**：`account_sync_state.json` 记录 history / favorites / following 的增量游标、已见 ID 集合和稳定签名，避免每轮全量重灌事件层，也避免收藏夹顺序变化或同秒历史游标导致重复画像分析
 15. **多源 bootstrap 去重状态独立持久化**：`source_bootstrap_state.json` 只保存 XHS / 抖音 / YouTube 已见 bootstrap identity key，不塞进画像 JSON；task-result 仍保留完整原始结果用于调试，但进入 memory / profile pipeline 前会过滤旧 key
+16. **MusicMark 只保存聚合状态**：`musicmark_sync_state.json` 只保存摘要 digest 和同步状态，不保存原始听歌明细；真正进入画像的是压缩后的少量事件

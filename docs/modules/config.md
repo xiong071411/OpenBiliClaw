@@ -307,6 +307,24 @@ YouTube discovery 配置。初始化画像由浏览器扩展读取观看历史 /
 | `request_interval_seconds` | int | `2` | 预留的 YouTube 请求间隔配置；当前策略主要由单轮预算和 runtime 补池节奏控制 |
 | `min_interval_minutes` | int | `60` | `YoutubeDiscoveryProducer` 两次执行之间的最小间隔；`0` 表示每个 refresh tick 都允许检查执行 |
 
+### `[sources.musicmark]`
+
+MusicMark 听歌画像信号源配置。它只拉取自托管 MusicMark 的聚合统计摘要，经 `MusicMarkSyncService` 压缩成少量 `source_platform="musicmark"` 行为事件，进入 memory / soul 画像链路；它不是 discovery adapter，不写入候选池，也不占用 `[scheduler.pool_source_shares]`。
+
+| 键 | 类型 | 默认值 | 说明 |
+|----|------|--------|------|
+| `enabled` | bool | `false` | 是否启用 MusicMark 摘要同步 |
+| `base_url` | string | `""` | MusicMark 服务地址，例如 `https://mark.qingningplayer.top` |
+| `username` | string | `""` | MusicMark Basic Auth 用户名 |
+| `api_password` | string | `""` | MusicMark Basic Auth 密码；`GET /api/config` 默认会 mask，`reveal_keys=true` 仅允许本地 / 测试 / 私有入口查看 |
+| `sync_interval_hours` | int | `12` | 同步间隔；runtime 每分钟检查一次，但实际 HTTP 请求由该值节流 |
+| `min_artist_play_count` | int | `5` | 低于该播放次数的艺术家不会生成强偏好事件 |
+| `max_artists` | int | `8` | 每次同步最多写入多少个艺术家偏好事件 |
+| `max_songs` | int | `0` | 预留的单曲事件上限；`0` 表示不写单曲事件 |
+| `ingest_into_pipeline` | bool | `true` | 写入 memory 后是否继续交给 `ProfileUpdatePipeline`，由既有阈值决定是否触发 LLM 画像更新 |
+
+成本边界：MusicMark API 本身不消耗 LLM token；可能花费 token 的只有后续画像层更新。因此同步服务会对摘要做 digest 去重，摘要未变化时只更新状态，不写入新事件。
+
 ### `[scheduler]`
 
 | 键 | 类型 | 默认值 | 说明 |
@@ -391,7 +409,7 @@ YouTube discovery 配置。初始化画像由浏览器扩展读取观看历史 /
 
 - 基础：`language`、`data_dir`、`storage.db_path`
 - LLM：默认 provider、显式备选 provider、各 provider 的 key/model/base_url、DeepSeek `reasoning_effort`、OpenRouter headers、四个 per-module override
-- B 站与多源：`bilibili.browser.*`、`sources.bilibili.enabled`、`sources.browser.*`、`sources.xiaohongshu.*`、`sources.douyin.*`、`sources.youtube.*`
+- B 站与多源：`bilibili.browser.*`、`sources.bilibili.enabled`、`sources.browser.*`、`sources.xiaohongshu.*`、`sources.douyin.*`、`sources.youtube.*`、`sources.musicmark.*`
 - 调度：`scheduler.enabled`、`pause_on_extension_disconnect`、`extension_disconnect_grace_seconds`、`pool_target_count`、`account_sync_interval_hours`、refresh / signal / trending / explore / discovery limit / proactive push / speculator idle 等 runtime 频率参数、四个平台 `pool_source_shares`、猜测兴趣参数、自动更新参数；设置页可调用 `/api/config/source-share-suggestion` 按已有事件和当前表单开关填入建议比例
 - 日志：控制台 / 文件级别、完整日志路径（保存时拆回 `directory` / `filename`）、轮转与非托管日志清理参数
 

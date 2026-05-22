@@ -263,6 +263,26 @@ request_interval_seconds = 2
 # YouTube producer 两次执行之间的最小间隔；0 表示每个 refresh tick 都允许检查执行。
 min_interval_minutes = 60
 
+# ── MusicMark 听歌画像信号源 ──
+# 只同步 MusicMark 的聚合统计摘要，用于补充 memory / soul 画像；
+# 不进入推荐候选池，也不占用 pool_source_shares。
+[sources.musicmark]
+enabled = false
+# 例如 "https://mark.qingningplayer.top"
+base_url = ""
+# MusicMark Basic Auth 用户名 / 密码。不要把生产密码提交到仓库。
+username = ""
+api_password = ""
+# sync_if_due() 会按这个间隔拉取 /api/stats/summary?range=all。
+sync_interval_hours = 12
+# 压缩强信号，避免一次同步写入太多事件。
+min_artist_play_count = 5
+max_artists = 8
+# 0 = 不写入单曲事件，仅写概览、艺术家和近期趋势。
+max_songs = 0
+# true = 写入事件后交给画像 pipeline 按既有阈值决定是否花费 LLM。
+ingest_into_pipeline = true
+
 [scheduler]
 # Enable scheduled content discovery
 enabled = true

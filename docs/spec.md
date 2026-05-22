@@ -241,6 +241,7 @@ Agent：那我理解了。这是一个很有意思的特质——你可能也会
 │  │     ContinuousRefreshController + B/XHS/DY/YT=8/1/1/1 │   │
 │  │     LLM gate: scheduler + extension presence          │   │
 │  │     XHS/Douyin/YouTube producers: 按平台缺口独立补池       │   │
+│  │     MusicMark: 聚合听歌摘要 -> Memory/Soul 画像信号        │   │
 │  │     AccountSync: B 站账号增量 -> Memory/Soul bootstrap     │   │
 │  │     Source bootstrap seen-key guard -> Memory/Profile      │   │
 │  └──────────────────────────────────────────────────────┘   │

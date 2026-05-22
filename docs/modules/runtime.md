@@ -10,6 +10,7 @@
 |------|------|------|
 | 后台刷新控制 | ✅ | `ContinuousRefreshController` 按 scheduler 配置补充候选池，并通过 source policy 计算各平台有效配比。 |
 | YouTube 后台 discovery producer | ✅ | `YoutubeDiscoveryProducer` 独立运行 `yt_search` / `yt_trending` / `yt_channel`，只在 YouTube 平台族低于 quota 时由 `_loop_youtube_producer()` tick，按每日 ledger 和 `min_interval_minutes` 控制执行。 |
+| MusicMark 画像信号同步 | ✅ | `MusicMarkSyncService` 挂在 `ContinuousRefreshController.musicmark_sync` 上，随 soul pipeline tick 检查 `sync_interval_hours`，只同步聚合听歌摘要并写入 memory / soul。 |
 | 运行时频率配置 | ✅ | `refresh_check_interval_seconds`、行为触发阈值、trending / explore 间隔、单轮发现上限、主动推送间隔和 speculator idle tick 都从 `[scheduler]` 读取，配置热重载后重建 runtime 生效。 |
 | 浏览器 presence gate | ✅ | `background_llm_work_allowed()` 结合 `scheduler.enabled` 与 `pause_on_extension_disconnect` 控制 daemon-owned 后台 LLM / embedding 工作。 |
 | Runtime event stream | ✅ | `/api/runtime-stream` 向扩展推送状态、Cookie sync 请求、配置重载和 presence 事件。 |
@@ -24,6 +25,28 @@
 | 运行日志降噪 | ✅ | 全局 logging 初始化会把 `httpx` / `httpcore` logger 提升到 WARNING，避免文件日志在 DEBUG 模式下被连接细节刷屏；业务模块仍按 `logging.file_level` 输出。 |
 
 ## 公开 API
+
+### MusicMarkSyncService
+
+```python
+from openbiliclaw.sources.musicmark_sync import MusicMarkSyncService
+
+service = MusicMarkSyncService(
+    base_url="https://mark.example.test",
+    username="admin",
+    api_password="secret",
+    pipeline=soul_engine.pipeline,
+    memory=memory_manager,
+)
+synced = await service.sync_if_due()
+status = service.get_runtime_status()
+```
+
+`sync_if_due()` 会按 `sync_interval_hours` 判断是否需要拉取 MusicMark 的 `/api/stats/summary`，摘要 digest 未变化时只更新状态，不重复写入画像事件。同步成功后会先把压缩后的 `source_platform="musicmark"` 行为事件写入 memory；`ingest_into_pipeline=true` 时再交给 `ProfileUpdatePipeline.ingest_batch()`，由已有阈值控制是否触发 LLM 画像更新。
+
+`get_runtime_status()` 返回移动 Web 和 `/api/runtime-status` 使用的 `musicmark_sync_*` 字段，包括最近成功 / 尝试时间、错误、跳过原因、写入事件数、总播放数、摘要和同步间隔。
+
+### AutoUpdateService
 
 ```python
 from openbiliclaw.runtime.updater import AutoUpdateService
@@ -145,4 +168,4 @@ XHS / 抖音 / YouTube 的插件任务桥保留两层去重：
 
 刷新调度不使用 `scheduler.discovery_cron`。该字段仅保留为旧配置兼容；实际触发由 `refresh_check_interval_seconds` 轮询、候选池缺口、`signal_event_threshold`、`trending_refresh_hours`、`explore_refresh_hours` 和 `discovery_limit` 共同决定。
 
-`ContinuousRefreshController.run_forever()` 当前并行启动 refresh、pool precompute、soul pipeline、XHS producer、Douyin producer、YouTube producer 和 proactive push 七条 loop。共享的 `background_llm_work_allowed()` gate 覆盖所有 daemon-owned LLM / embedding 工作；YouTube 与 XHS / Douyin 一样会在 gate 关闭时跳过 tick。不同点是 YouTube 不通过扩展任务队列做 steady-state discovery，而是在后端直接调用 YouTube strategies；`yt_tasks` 只保留给 bootstrap profile 导入。
+`ContinuousRefreshController.run_forever()` 当前并行启动 refresh、pool precompute、soul pipeline、XHS producer、Douyin producer、YouTube producer 和 proactive push 七条 loop。共享的 `background_llm_work_allowed()` gate 覆盖所有 daemon-owned LLM / embedding 工作；YouTube 与 XHS / Douyin 一样会在 gate 关闭时跳过 tick。不同点是 YouTube 不通过扩展任务队列做 steady-state discovery，而是在后端直接调用 YouTube strategies；`yt_tasks` 只保留给 bootstrap profile 导入。MusicMark 不单独开 loop，而是在 soul pipeline loop 内先调用 `sync_if_due()`，由自己的摘要 digest 和 `sync_interval_hours` 防止重复拉取 / 重复写入。

@@ -3,9 +3,11 @@
  * expandable cognition cards, speculative interest actions.
  */
 
-import { fetchProfileSummary, respondToProbe } from "../api.js";
+import { fetchProfileSummary, fetchRuntimeStatus, respondToProbe } from "../api.js";
 import {
+  getMusicMarkDisplayState,
   normalizeProfileSummary,
+  normalizeRuntimeStatus,
   normalizeMbtiDimensions,
   normalizeCognitionUpdateCard,
   buildNextCognitionHistoryState,
@@ -61,6 +63,11 @@ function render() {
 
   // Portrait
   html += section("\u4EBA\u683C\u7D20\u63CF", `<div class="profile-portrait">${esc(p.personality_portrait)}</div>`);
+
+  const musicmark = getMusicMarkDisplayState(state.runtimeStatus);
+  if (musicmark.visible) {
+    html += section("MUSICMARK", renderMusicMarkStatus(musicmark));
+  }
 
   // Core
   const coreHtml = [];
@@ -264,6 +271,31 @@ function renderSpecInterests(interests) {
   }).join("");
 }
 
+function renderMusicMarkStatus(status) {
+  const rows = [
+    ["最近同步", status.syncLabel],
+    ["写入信号", `${status.eventCount} 条`],
+    ["听歌记录", `${status.totalCount} 条`],
+  ];
+  if (status.intervalHours > 0) {
+    rows.push(["同步间隔", `${status.intervalHours} 小时`]);
+  }
+  return `
+    <div class="musicmark-status">
+      <div class="chip-list" style="margin-bottom:8px">
+        <span class="chip ${status.tone === "warning" ? "warning" : "success"}">MusicMark 已接入</span>
+      </div>
+      <div class="context-patterns">
+        ${rows.map(([label, value]) => `
+          <div>
+            <div class="context-pattern-label">${esc(label)}</div>
+            <div>${esc(value)}</div>
+          </div>`).join("")}
+      </div>
+      ${status.summary ? `<div style="font-size:12px;color:var(--text-muted);line-height:1.6;margin-top:8px">${esc(status.summary)}</div>` : ""}
+    </div>`;
+}
+
 function bindSpecInterestActions() {
   for (const btn of $root.querySelectorAll(".spec-btn")) {
     btn.addEventListener("click", async (e) => {
@@ -325,9 +357,15 @@ async function loadData() {
   loading = true;
   render();
   try {
-    const data = await fetchProfileSummary({ limit: 5 });
+    const [data, status] = await Promise.all([
+      fetchProfileSummary({ limit: 5 }),
+      fetchRuntimeStatus().catch(() => null),
+    ]);
     const profile = normalizeProfileSummary(data);
-    patchState({ profile });
+    patchState({
+      profile,
+      runtimeStatus: status ? normalizeRuntimeStatus(status) : state.runtimeStatus,
+    });
     cognitionHistory = {
       items: profile.recent_cognition_updates,
       hasMore: profile.has_more_cognition_updates,

@@ -237,6 +237,24 @@ class _FakeYoutubeProducer:
         return {"discovered": 3, "reason": "ok"}
 
 
+class _FakeMusicMarkSync:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def sync_if_due(self) -> bool:
+        self.calls += 1
+        return True
+
+    def get_runtime_status(self) -> dict[str, object]:
+        return {
+            "musicmark_sync_enabled": True,
+            "last_musicmark_sync_at": "2026-05-22T10:00:00",
+            "last_musicmark_sync_event_count": 3,
+            "last_musicmark_sync_total_count": 120,
+            "last_musicmark_sync_summary": "120 次播放，9 位艺术家",
+        }
+
+
 class _FakeRecommendationEngine:
     def __init__(self) -> None:
         self.calls: list[tuple[list[dict[str, object]], dict[str, object], int]] = []
@@ -843,6 +861,61 @@ async def test_manual_refresh_skip_does_not_reuse_stale_replenishment_message() 
         event for event in event_hub.events if event["type"] == "refresh.pool_updated"
     )
     assert pool_updated["message"] == "这轮没补进新的候选。"
+
+
+async def test_manual_refresh_reports_reactivated_pool_items() -> None:
+    memory = _FakeMemoryManager()
+    event_hub = _FakeEventHub()
+    discovery = _FakeDiscoveryEngine()
+    controller = ContinuousRefreshController(
+        memory_manager=memory,
+        database=_FakeDatabase(
+            [],
+            pool_count=60,
+            source_counts={"bilibili": 60},
+            reactivate_pool_count=60,
+        ),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=discovery,
+        recommendation_engine=_FakeRecommendationEngine(),
+        event_hub=event_hub,
+        pool_target_count=120,
+        pool_source_shares={"bilibili": 1},
+        discovery_limit=30,
+    )
+
+    await controller._complete_manual_refresh()
+
+    assert discovery.calls == []
+    status = controller.get_runtime_status()
+    assert status["pool_available_count"] == 120
+    assert status["manual_refresh_message"] == "刚给你补了一批新的。"
+    assert memory.state["last_replenished_count"] == 60
+    pool_updated = next(
+        event for event in event_hub.events if event["type"] == "refresh.pool_updated"
+    )
+    assert pool_updated["last_replenished_count"] == 60
+    assert pool_updated["message"] == "刚给你补了一批新的。"
+
+
+async def test_musicmark_sync_status_and_tick_are_exposed() -> None:
+    musicmark = _FakeMusicMarkSync()
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=_FakeDatabase([]),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        musicmark_sync=musicmark,
+    )
+
+    status = controller.get_runtime_status()
+    await controller._tick_soul_pipeline()
+
+    assert status["musicmark_sync_enabled"] is True
+    assert status["last_musicmark_sync_event_count"] == 3
+    assert status["last_musicmark_sync_total_count"] == 120
+    assert musicmark.calls == 1
 
 
 async def test_refresh_controller_requests_discovery_with_backfill_limit() -> None:

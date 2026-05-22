@@ -446,6 +446,7 @@ class RuntimeContext:
         new_xhs_producer: Any = None
         new_douyin_producer: Any = None
         new_youtube_producer: Any = None
+        new_musicmark_sync: Any = None
         if hasattr(self.database, "conn"):
             from openbiliclaw.runtime.xhs_producer import XhsTaskProducer
             from openbiliclaw.sources.xhs_tasks import XhsTaskQueue
@@ -480,6 +481,26 @@ class RuntimeContext:
                 concurrency=concurrency,
             )
 
+        musicmark_cfg = getattr(new_config.sources, "musicmark", None)
+        if musicmark_cfg is not None and bool(getattr(musicmark_cfg, "enabled", False)):
+            musicmark_base_url = str(getattr(musicmark_cfg, "base_url", "")).strip()
+            if musicmark_base_url:
+                from openbiliclaw.sources.musicmark_sync import MusicMarkSyncService
+
+                new_musicmark_sync = MusicMarkSyncService(
+                    base_url=musicmark_base_url,
+                    username=str(getattr(musicmark_cfg, "username", "")),
+                    api_password=str(getattr(musicmark_cfg, "api_password", "")),
+                    pipeline=new_soul_engine.pipeline,
+                    memory=self.memory_manager,
+                    sync_interval_hours=int(getattr(musicmark_cfg, "sync_interval_hours", 12)),
+                    min_artist_play_count=int(getattr(musicmark_cfg, "min_artist_play_count", 5)),
+                    max_artists=int(getattr(musicmark_cfg, "max_artists", 8)),
+                    max_songs=int(getattr(musicmark_cfg, "max_songs", 0)),
+                    ingest_into_pipeline=bool(getattr(musicmark_cfg, "ingest_into_pipeline", True)),
+                    data_dir=new_config.data_path,
+                )
+
         new_runtime_controller = ContinuousRefreshController(
             memory_manager=self.memory_manager,
             database=self.database,
@@ -502,6 +523,7 @@ class RuntimeContext:
             xhs_producer=new_xhs_producer,
             douyin_producer=new_douyin_producer,
             youtube_producer=new_youtube_producer,
+            musicmark_sync=new_musicmark_sync,
             scheduler_config=new_config.scheduler,
             presence=self.presence,
             task_registry=self.task_registry,

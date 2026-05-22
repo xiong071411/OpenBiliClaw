@@ -1283,6 +1283,15 @@ class TestBackendAPI:
             "manual_refresh_message": "",
             "last_account_sync_at": "2026-03-14T18:00:00+00:00",
             "last_account_sync_error": "",
+            "musicmark_sync_enabled": False,
+            "last_musicmark_sync_at": "",
+            "last_musicmark_sync_attempt_at": "",
+            "last_musicmark_sync_error": "",
+            "last_musicmark_sync_skip_reason": "",
+            "last_musicmark_sync_event_count": 0,
+            "last_musicmark_sync_total_count": 0,
+            "last_musicmark_sync_summary": "",
+            "musicmark_sync_interval_hours": 0,
         }
 
     def test_runtime_stream_websocket_receives_published_events(self) -> None:
@@ -3677,6 +3686,15 @@ class TestEmbeddingAndCompatProviderE2E:
         cfg.sources.youtube.daily_trending_budget = 44
         cfg.sources.youtube.daily_channel_budget = 8
         cfg.sources.youtube.request_interval_seconds = 3
+        cfg.sources.musicmark.enabled = True
+        cfg.sources.musicmark.base_url = "https://mark.example.test"
+        cfg.sources.musicmark.username = "admin"
+        cfg.sources.musicmark.api_password = "musicmark-secret"
+        cfg.sources.musicmark.sync_interval_hours = 24
+        cfg.sources.musicmark.min_artist_play_count = 7
+        cfg.sources.musicmark.max_artists = 5
+        cfg.sources.musicmark.max_songs = 0
+        cfg.sources.musicmark.ingest_into_pipeline = False
         cfg.scheduler.pool_source_shares = {
             "bilibili": 6,
             "xiaohongshu": 2,
@@ -3727,6 +3745,17 @@ class TestEmbeddingAndCompatProviderE2E:
         assert data["sources"]["youtube"]["daily_trending_budget"] == 44
         assert data["sources"]["youtube"]["daily_channel_budget"] == 8
         assert data["sources"]["youtube"]["request_interval_seconds"] == 3
+        assert data["sources"]["musicmark"] == {
+            "enabled": True,
+            "base_url": "https://mark.example.test",
+            "username": "admin",
+            "api_password": "musicmark-secret",
+            "sync_interval_hours": 24,
+            "min_artist_play_count": 7,
+            "max_artists": 5,
+            "max_songs": 0,
+            "ingest_into_pipeline": False,
+        }
         assert data["scheduler"]["pool_source_shares"] == {
             "bilibili": 6,
             "xiaohongshu": 2,
@@ -3888,6 +3917,17 @@ class TestEmbeddingAndCompatProviderE2E:
                         "request_interval_seconds": 4,
                         "min_interval_minutes": 30,
                     },
+                    "musicmark": {
+                        "enabled": True,
+                        "base_url": "https://mark.example.test",
+                        "username": "admin",
+                        "api_password": "musicmark-secret",
+                        "sync_interval_hours": 24,
+                        "min_artist_play_count": 7,
+                        "max_artists": 5,
+                        "max_songs": 0,
+                        "ingest_into_pipeline": False,
+                    },
                 },
                 "scheduler": {
                     "account_sync_interval_hours": 9,
@@ -3954,6 +3994,15 @@ class TestEmbeddingAndCompatProviderE2E:
         assert cfg.sources.youtube.request_interval_seconds == 4
         assert cfg.sources.youtube.min_interval_minutes == 30
         assert response.json()["config"]["sources"]["youtube"]["min_interval_minutes"] == 30
+        assert cfg.sources.musicmark.enabled is True
+        assert cfg.sources.musicmark.base_url == "https://mark.example.test"
+        assert cfg.sources.musicmark.username == "admin"
+        assert cfg.sources.musicmark.api_password == "musicmark-secret"
+        assert cfg.sources.musicmark.sync_interval_hours == 24
+        assert cfg.sources.musicmark.min_artist_play_count == 7
+        assert cfg.sources.musicmark.max_artists == 5
+        assert cfg.sources.musicmark.max_songs == 0
+        assert cfg.sources.musicmark.ingest_into_pipeline is False
         assert cfg.scheduler.pool_source_shares == {
             "bilibili": 6,
             "xiaohongshu": 2,

@@ -177,6 +177,7 @@ class ContinuousRefreshController:
     xhs_producer: Any | None = None
     douyin_producer: Any | None = None
     youtube_producer: Any | None = None
+    musicmark_sync: Any | None = None
     scheduler_config: Any = field(default_factory=SchedulerConfig)
     presence: PresenceTracker = field(default_factory=PresenceTracker)
     signal_event_threshold: int = 6
@@ -298,7 +299,7 @@ class ContinuousRefreshController:
             pending_delight_count = self.database.count_delight_candidates(
                 min_delight_score=DEFAULT_DELIGHT_THRESHOLD,
             )
-        return {
+        payload = {
             "initialized": self._is_initialized(),
             "recommendation_count": self.database.count_recommendations(),
             "pending_signal_events": self._pending_signal_events_count(state),
@@ -315,6 +316,11 @@ class ContinuousRefreshController:
             "pending_delight_count": pending_delight_count,
             "last_delight_notification_at": str(state.get("last_delight_notification_at", "")),
         }
+        get_musicmark_status = getattr(self.musicmark_sync, "get_runtime_status", None)
+        if callable(get_musicmark_status):
+            with suppress(Exception):
+                payload.update(get_musicmark_status())
+        return payload
 
     async def refresh_if_needed(self) -> dict[str, object]:
         """Refresh discovery candidates when thresholds are met.
@@ -976,6 +982,13 @@ class ContinuousRefreshController:
         Splitting this into a helper makes it cheap to call from tests
         and from a manual single-iteration loop runner.
         """
+        # MusicMark is a low-frequency preference signal source. It piggybacks
+        # on the soul-pipeline loop while sync_if_due() enforces its own
+        # multi-hour HTTP throttle.
+        if self.musicmark_sync is not None:
+            with suppress(Exception):
+                await self.musicmark_sync.sync_if_due()
+
         pipeline = getattr(self.soul_engine, "pipeline", None)
         if pipeline is None:
             return
@@ -1041,6 +1054,7 @@ class ContinuousRefreshController:
         return await self.refresh_if_needed()
 
     async def _complete_manual_refresh(self) -> None:
+        before_pool_count = self.database.count_pool_candidates()
         try:
             refresh_result = await self.force_refresh()
         except Exception as exc:
@@ -1056,6 +1070,7 @@ class ContinuousRefreshController:
                 }
             )
             return
+        after_pool_count = self.database.count_pool_candidates()
         self._manual_refresh_state = "success"
         if bool(refresh_result.get("refreshed")):
             runtime_state = self.memory_manager.load_discovery_runtime_state()
@@ -1063,7 +1078,12 @@ class ContinuousRefreshController:
             last_replenished = self._int_state_value(runtime_state, "last_replenished_count")
         else:
             last_discovered = 0
-            last_replenished = 0
+            last_replenished = max(0, after_pool_count - before_pool_count)
+            if last_replenished > 0:
+                runtime_state = self.memory_manager.load_discovery_runtime_state()
+                runtime_state["last_discovered_count"] = 0
+                runtime_state["last_replenished_count"] = last_replenished
+                self.memory_manager.save_discovery_runtime_state(runtime_state)
         self._manual_refresh_message = (
             "刚给你补了一批新的。"
             if last_replenished > 0
@@ -1079,7 +1099,9 @@ class ContinuousRefreshController:
                 "type": "refresh.pool_updated",
                 "phase": "done",
                 "message": self._manual_refresh_message,
-                "pool_available_count": self.database.count_pool_candidates(),
+                "pool_available_count": after_pool_count,
+                "last_discovered_count": last_discovered,
+                "last_replenished_count": last_replenished,
             }
         )
 

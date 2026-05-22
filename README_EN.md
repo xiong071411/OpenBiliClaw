@@ -23,6 +23,7 @@
 - **🧯 429 / cooldown no longer fans out** — discovery eval batches and recommendation copy batches stop retrying item-by-item when a provider is rate-limited, avoiding one 429 turning into a full batch of tracebacks.
 - **🧵 Source task claiming is steadier** — Xiaohongshu, Douyin, and YouTube `/next-task` claim paths now use short-lived SQLite connections to avoid nested transaction errors under concurrent extension polling.
 - **📉 Backend logs are quieter** — `httpx` / `httpcore` file logs default to WARNING to reduce model-service request noise.
+- **🎧 Local MusicMark integration** — this integration branch adds `[sources.musicmark]`; it syncs only aggregated listening summaries into the profile and shows sync status in Mobile Web.
 
 Full changelog: [docs/changelog.md](docs/changelog.md).
 
@@ -396,6 +397,7 @@ The whole loop stays local — OpenClaw just calls the CLI bridge; your profile 
 ├─────────┴──────────┴───────────┴────────────────────┤
 │ LLM (API Key/Codex OAuth) · Bilibili API · Extension Proxy │
 │ Runtime: Account sync + XHS/DY/YouTube producers           │
+│          + MusicMark profile-signal sync                   │
 │ SQLite: events(inferred_satisfaction) · content_cache   │
 │         recommendations · chat_turns                    │
 └─────────────────────────────────────────────────────┘

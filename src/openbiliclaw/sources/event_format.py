@@ -162,8 +162,10 @@ def _classify_click_dwell(
         duration = _read_dwell_field(event, metadata, "duration")
 
     meets_seconds = watch_seconds >= _MEANINGFUL_DWELL_MIN_SECONDS
-    meets_ratio = duration is not None and duration > 0 and (
-        watch_seconds / duration >= _MEANINGFUL_DWELL_MIN_RATIO
+    meets_ratio = (
+        duration is not None
+        and duration > 0
+        and (watch_seconds / duration >= _MEANINGFUL_DWELL_MIN_RATIO)
     )
 
     if meets_seconds and (duration is None or meets_ratio):
@@ -192,12 +194,14 @@ def _read_dwell_field(
     except (TypeError, ValueError):
         return None
 
+
 # Source platform constants — kept stable for analyzer mix calculations.
 SOURCE_BILIBILI = "bilibili"
 SOURCE_XIAOHONGSHU = "xiaohongshu"
 SOURCE_DOUYIN = "douyin"
 SOURCE_WEB = "web"
 SOURCE_YOUTUBE = "youtube"
+SOURCE_MUSICMARK = "musicmark"
 
 # Human-readable platform labels used to render the context string.
 # Keys must match the source_platform values stored in event metadata.
@@ -207,6 +211,7 @@ _PLATFORM_LABELS: dict[str, str] = {
     SOURCE_DOUYIN: "抖音",
     SOURCE_WEB: "网页",
     SOURCE_YOUTUBE: "YouTube",
+    SOURCE_MUSICMARK: "MusicMark",
 }
 
 # Action verbs per event_type. Designed so the rendered sentence reads

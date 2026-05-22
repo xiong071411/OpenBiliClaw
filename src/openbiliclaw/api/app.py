@@ -54,6 +54,7 @@ from openbiliclaw.api.models import (
     LLMProviderConfigOut,
     LoggingConfigOut,
     ModuleLLMConfigOut,
+    MusicMarkSourceConfigOut,
     NotificationAckIn,
     NotificationAckResponse,
     PendingCognitionUpdateOut,
@@ -3985,6 +3986,17 @@ def create_app(
                     request_interval_seconds=cfg.sources.youtube.request_interval_seconds,
                     min_interval_minutes=cfg.sources.youtube.min_interval_minutes,
                 ),
+                musicmark=MusicMarkSourceConfigOut(
+                    enabled=cfg.sources.musicmark.enabled,
+                    base_url=cfg.sources.musicmark.base_url,
+                    username=cfg.sources.musicmark.username,
+                    api_password=_mask(cfg.sources.musicmark.api_password),
+                    sync_interval_hours=cfg.sources.musicmark.sync_interval_hours,
+                    min_artist_play_count=cfg.sources.musicmark.min_artist_play_count,
+                    max_artists=cfg.sources.musicmark.max_artists,
+                    max_songs=cfg.sources.musicmark.max_songs,
+                    ingest_into_pipeline=cfg.sources.musicmark.ingest_into_pipeline,
+                ),
             ),
             scheduler=SchedulerConfigOut(
                 enabled=cfg.scheduler.enabled,
@@ -4263,6 +4275,31 @@ def create_app(
                     ):
                         if key in yt_data:
                             setattr(cfg.sources.youtube, key, int(yt_data[key]))
+
+                musicmark_data = sources_data.get("musicmark")
+                if isinstance(musicmark_data, dict):
+                    if "enabled" in musicmark_data:
+                        cfg.sources.musicmark.enabled = _as_bool(musicmark_data["enabled"])
+                    if "base_url" in musicmark_data:
+                        cfg.sources.musicmark.base_url = str(musicmark_data["base_url"])
+                    if "username" in musicmark_data:
+                        cfg.sources.musicmark.username = str(musicmark_data["username"])
+                    if "api_password" in musicmark_data:
+                        new_password = str(musicmark_data["api_password"])
+                        if "*" not in new_password:
+                            cfg.sources.musicmark.api_password = new_password
+                    for key in (
+                        "sync_interval_hours",
+                        "min_artist_play_count",
+                        "max_artists",
+                        "max_songs",
+                    ):
+                        if key in musicmark_data:
+                            setattr(cfg.sources.musicmark, key, int(musicmark_data[key]))
+                    if "ingest_into_pipeline" in musicmark_data:
+                        cfg.sources.musicmark.ingest_into_pipeline = _as_bool(
+                            musicmark_data["ingest_into_pipeline"]
+                        )
 
         # Apply scheduler updates
         if "scheduler" in update:

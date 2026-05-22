@@ -262,6 +262,27 @@ class BilibiliSourceConfig:
 
 
 @dataclass
+class MusicMarkSourceConfig:
+    """MusicMark listening-stats sync configuration.
+
+    MusicMark is a preference signal source, not a content discovery source.
+    It feeds aggregated listening signals into the soul pipeline so Bilibili
+    and cross-platform recommendations can learn from music taste without
+    importing raw listening history.
+    """
+
+    enabled: bool = False
+    base_url: str = ""
+    username: str = ""
+    api_password: str = ""
+    sync_interval_hours: int = 12
+    min_artist_play_count: int = 5
+    max_artists: int = 8
+    max_songs: int = 0
+    ingest_into_pipeline: bool = True
+
+
+@dataclass
 class SourcesConfig:
     """Multi-source content adapters configuration.
 
@@ -282,6 +303,7 @@ class SourcesConfig:
     xiaohongshu: XiaohongshuSourceConfig = field(default_factory=XiaohongshuSourceConfig)
     douyin: DouyinSourceConfig = field(default_factory=DouyinSourceConfig)
     youtube: YoutubeSourceConfig = field(default_factory=YoutubeSourceConfig)
+    musicmark: MusicMarkSourceConfig = field(default_factory=MusicMarkSourceConfig)
 
 
 @dataclass
@@ -546,6 +568,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
     xhs_raw = sources_raw.get("xiaohongshu", {})
     douyin_raw = sources_raw.get("douyin", {})
     youtube_raw = sources_raw.get("youtube", {})
+    musicmark_raw = sources_raw.get("musicmark", {})
     sources = SourcesConfig(
         browser_cdp_url=sources_browser_raw.get("cdp_url", ""),
         browser_headed=sources_browser_raw.get("headed", False),
@@ -574,6 +597,20 @@ def _build_config(raw: dict[str, Any]) -> Config:
             daily_channel_budget=int(youtube_raw.get("daily_channel_budget", 10)),
             request_interval_seconds=int(youtube_raw.get("request_interval_seconds", 2)),
             min_interval_minutes=max(0, int(youtube_raw.get("min_interval_minutes", 60))),
+        ),
+        musicmark=MusicMarkSourceConfig(
+            enabled=bool(musicmark_raw.get("enabled", False)),
+            base_url=str(musicmark_raw.get("base_url", "")),
+            username=str(musicmark_raw.get("username", musicmark_raw.get("user_id", ""))),
+            api_password=str(musicmark_raw.get("api_password", "")),
+            sync_interval_hours=max(1, int(musicmark_raw.get("sync_interval_hours", 12))),
+            min_artist_play_count=max(
+                1,
+                int(musicmark_raw.get("min_artist_play_count", 5)),
+            ),
+            max_artists=max(0, int(musicmark_raw.get("max_artists", 8))),
+            max_songs=max(0, int(musicmark_raw.get("max_songs", 0))),
+            ingest_into_pipeline=bool(musicmark_raw.get("ingest_into_pipeline", True)),
         ),
     )
 
@@ -1017,6 +1054,17 @@ def _render_config_toml(config: Config) -> str:
             f"daily_channel_budget = {config.sources.youtube.daily_channel_budget}",
             f"request_interval_seconds = {config.sources.youtube.request_interval_seconds}",
             f"min_interval_minutes = {config.sources.youtube.min_interval_minutes}",
+            "",
+            "[sources.musicmark]",
+            f"enabled = {_toml_bool(config.sources.musicmark.enabled)}",
+            f"base_url = {_toml_string(config.sources.musicmark.base_url)}",
+            f"username = {_toml_string(config.sources.musicmark.username)}",
+            f"api_password = {_toml_string(config.sources.musicmark.api_password)}",
+            f"sync_interval_hours = {config.sources.musicmark.sync_interval_hours}",
+            f"min_artist_play_count = {config.sources.musicmark.min_artist_play_count}",
+            f"max_artists = {config.sources.musicmark.max_artists}",
+            f"max_songs = {config.sources.musicmark.max_songs}",
+            f"ingest_into_pipeline = {_toml_bool(config.sources.musicmark.ingest_into_pipeline)}",
             "",
             "[scheduler]",
             f"enabled = {_toml_bool(config.scheduler.enabled)}",

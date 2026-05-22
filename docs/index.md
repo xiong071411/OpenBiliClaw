@@ -31,7 +31,7 @@
 | 推荐引擎 | [modules/recommendation.md](modules/recommendation.md) | `src/openbiliclaw/recommendation/` | ✅ v0.3.x 双轴 fatigue + per-group 候选窗口 + reshuffle 0.6s |
 | 灵魂管线架构 | [modules/soul-pipeline-architecture.md](modules/soul-pipeline-architecture.md) | `src/openbiliclaw/soul/` | ✅ 完成 |
 | 浏览器插件 | [modules/extension.md](modules/extension.md) | `extension/` | ✅ 支持 B 站 + 小红书 + 抖音 + YouTube 任务桥 / 行为采集 / Cookie 同步 / 降级配置修复 |
-| 手机 Web 前端 | [modules/web.md](modules/web.md) | `web/` + `scripts/deploy_web_frontend.sh` | ✅ 手机浏览器推荐 / 画像 / 聊天 / 消息 / 设置操作台 |
+| 手机 Web 前端 | [mobile-web-spec.md](mobile-web-spec.md) | `src/openbiliclaw/web/` | ✅ 内置 `/m/` 手机浏览器推荐 / 画像 / 聊天 / 消息操作台 |
 | CLI 命令参考 | [modules/cli.md](modules/cli.md) | `src/openbiliclaw/cli.py` | ✅ 持续更新 (含 `setup-embedding` / `discover-douyin` / `fetch-youtube` / `import-youtube`) |
 | 配置参考 | [modules/config.md](modules/config.md) | `config.example.toml` | ✅ 持续更新 (含 `/api/config` 回滚与 `reset_fields`) |
 | 集成适配层 | [modules/integrations.md](modules/integrations.md) | `src/openbiliclaw/integrations/` | ✅ OpenClaw adapter 已接入 |

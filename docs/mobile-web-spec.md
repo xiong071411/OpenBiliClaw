@@ -46,6 +46,7 @@
    - Speculate 层：推测性兴趣（确认/拒绝交互）
    - 认知更新历史（分页加载，保留上下文与来源标签）
    - 活跃洞察 & 意识笔记
+   - MusicMark 同步状态（启用时显示最近同步、写入信号数、总播放数和摘要）
 
 3. **对话页**
    - 消息历史
@@ -159,7 +160,7 @@ if web_dir.is_dir():
 |------|------|
 | 推荐 | `GET /api/recommendations`, `POST /api/recommendations/reshuffle`, `POST /api/recommendations/append`, `POST /api/recommendation-click`, `GET /api/runtime-status` |
 | Delight | `GET /api/delight/pending-batch`, `POST /api/delight/respond` |
-| 画像 | `GET /api/profile-summary` |
+| 画像 | `GET /api/profile-summary`, `GET /api/runtime-status`（用于 MusicMark 同步状态） |
 | 对话 | `POST /api/chat/turns`, `GET /api/chat/turns`, `GET /api/chat/turns/{id}`；主聊天使用 `session=popup&scope=chat` 与插件共享历史 |
 | 消息 | `GET /api/notifications/pending`, `POST /api/notifications/sent` |
 | 认知通知 | `GET /api/cognition-updates/pending`, `POST /api/cognition-updates/seen` |
@@ -170,6 +171,7 @@ if web_dir.is_dir():
 
 移动端会在 `view-models.js` 中做最小字段适配：
 - 推荐池状态读取 `/api/runtime-status` 的 `pool_available_count`、`last_replenished_count`、`recent_pool_topics`，再映射成推荐页三枚 chip 使用的 `pool_size`、`recent_replenish`、`current_topic`。
+- 画像页在 MusicMark 启用时读取 `/api/runtime-status` 的 `musicmark_sync_*` 字段，显示同步健康度；它只展示聚合摘要，不展示 MusicMark 密码或原始听歌明细。
 - 推荐页头部用 `getMobileRecommendationHeaderState()` 生成插件语义一致的标题、首屏「换一批」、三枚池状态 chip 和活动辅助行；移动端把池状态压成横向轻量 pill，并把 `xhs-extension-*` / `dy-plugin-*` / `yt-*` 等内部来源名显示为用户可读短标签；「加载更多」保留为列表底部显式续页入口。
 - 惊喜推荐沿用插件 compact banner 思路：左侧小缩略图、标签 / 标题 / 理由 / 来源围绕头图形成 featured card，推荐原因带轻量标记，翻页控件与「稍后看」关闭入口放在右上角，动作区仍保持「看看 / 喜欢 / 不感兴趣 / 聊一聊」。
 - MBTI 维度兼容后端对象形态（如 `EI: { pole: "I", strength: 0.8 }`）和旧数组形态，统一映射为 `{ left, right, score }` 后再渲染。

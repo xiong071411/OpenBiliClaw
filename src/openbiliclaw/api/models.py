@@ -101,6 +101,15 @@ class RuntimeStatusResponse(BaseModel):
     manual_refresh_message: str = ""
     last_account_sync_at: str = ""
     last_account_sync_error: str = ""
+    musicmark_sync_enabled: bool = False
+    last_musicmark_sync_at: str = ""
+    last_musicmark_sync_attempt_at: str = ""
+    last_musicmark_sync_error: str = ""
+    last_musicmark_sync_skip_reason: str = ""
+    last_musicmark_sync_event_count: int = 0
+    last_musicmark_sync_total_count: int = 0
+    last_musicmark_sync_summary: str = ""
+    musicmark_sync_interval_hours: int = 0
 
 
 class ActivityFeedItemOut(BaseModel):
@@ -601,12 +610,25 @@ class YoutubeSourceConfigOut(BaseModel):
     min_interval_minutes: int = 60
 
 
+class MusicMarkSourceConfigOut(BaseModel):
+    enabled: bool = False
+    base_url: str = ""
+    username: str = ""
+    api_password: str = ""
+    sync_interval_hours: int = 12
+    min_artist_play_count: int = 5
+    max_artists: int = 8
+    max_songs: int = 0
+    ingest_into_pipeline: bool = True
+
+
 class SourcesConfigOut(BaseModel):
     browser: SourcesBrowserConfigOut = Field(default_factory=SourcesBrowserConfigOut)
     bilibili: BilibiliSourceConfigOut = Field(default_factory=BilibiliSourceConfigOut)
     xiaohongshu: XiaohongshuSourceConfigOut = Field(default_factory=XiaohongshuSourceConfigOut)
     douyin: DouyinSourceConfigOut = Field(default_factory=DouyinSourceConfigOut)
     youtube: YoutubeSourceConfigOut = Field(default_factory=YoutubeSourceConfigOut)
+    musicmark: MusicMarkSourceConfigOut = Field(default_factory=MusicMarkSourceConfigOut)
 
 
 class SchedulerConfigOut(BaseModel):

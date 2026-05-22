@@ -4,6 +4,14 @@
 
 ---
 
+## v0.3.90-local: 上游 Web 合并与 MusicMark 画像源集成（2026-05-22）
+
+- 合入上游 v0.3.89 / extension v0.3.43 的内置 `/m/` 移动 Web、局域网二维码、封面代理、显式 fallback、YouTube producer 和任务 claim 稳定性更新；旧本地 Vite `web/` 工程、独立部署脚本和旧 Web 交接文档从主树移除，后续统一维护 `src/openbiliclaw/web/`。
+- 新增 `[sources.musicmark]` 配置、`MusicMarkSyncService`、`source_platform="musicmark"` 事件常量、runtime status 字段和 API config round-trip。MusicMark 只同步聚合听歌摘要，写入 memory / soul 画像，不进入 discovery 候选池，也不占用候选池来源配比。
+- 移动 Web 画像页在 MusicMark 启用时展示最近同步、写入信号数、总播放数和摘要；手动补货完成事件继续携带本轮补进数量，避免复活候选时显示“没补进新的候选”。
+
+---
+
 ## v0.3.89 / extension v0.3.43: 显式 fallback 与限流降噪发布（2026-05-22）
 
 - 后端源码版本提升到 v0.3.89，准备发布 `backend-v0.3.89`；浏览器插件版本提升到 extension v0.3.43，准备发布 `extension-v0.3.43`。

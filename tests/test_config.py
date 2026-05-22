@@ -815,6 +815,20 @@ def test_sources_youtube_defaults() -> None:
     assert config.sources.youtube.min_interval_minutes == 60
 
 
+def test_sources_musicmark_defaults() -> None:
+    config = _build_config({})
+
+    assert config.sources.musicmark.enabled is False
+    assert config.sources.musicmark.base_url == ""
+    assert config.sources.musicmark.username == ""
+    assert config.sources.musicmark.api_password == ""
+    assert config.sources.musicmark.sync_interval_hours == 12
+    assert config.sources.musicmark.min_artist_play_count == 5
+    assert config.sources.musicmark.max_artists == 8
+    assert config.sources.musicmark.max_songs == 0
+    assert config.sources.musicmark.ingest_into_pipeline is True
+
+
 def test_build_config_supports_sources_xiaohongshu(tmp_path: Path) -> None:
     toml_path = tmp_path / "c.toml"
     toml_path.write_text(
@@ -888,6 +902,37 @@ min_interval_minutes = 45
     assert config.sources.youtube.min_interval_minutes == 45
 
 
+def test_build_config_supports_sources_musicmark(tmp_path: Path) -> None:
+    toml_path = tmp_path / "c.toml"
+    toml_path.write_text(
+        """
+[sources.musicmark]
+enabled = true
+base_url = "https://mark.example.test"
+username = "admin"
+api_password = "secret"
+sync_interval_hours = 24
+min_artist_play_count = 7
+max_artists = 5
+max_songs = 0
+ingest_into_pipeline = false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_config(toml_path)
+
+    assert config.sources.musicmark.enabled is True
+    assert config.sources.musicmark.base_url == "https://mark.example.test"
+    assert config.sources.musicmark.username == "admin"
+    assert config.sources.musicmark.api_password == "secret"
+    assert config.sources.musicmark.sync_interval_hours == 24
+    assert config.sources.musicmark.min_artist_play_count == 7
+    assert config.sources.musicmark.max_artists == 5
+    assert config.sources.musicmark.max_songs == 0
+    assert config.sources.musicmark.ingest_into_pipeline is False
+
+
 def test_save_config_round_trips_sources_youtube(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config = Config()
@@ -907,6 +952,33 @@ def test_save_config_round_trips_sources_youtube(tmp_path: Path) -> None:
     assert loaded.sources.youtube.daily_channel_budget == 8
     assert loaded.sources.youtube.request_interval_seconds == 4
     assert loaded.sources.youtube.min_interval_minutes == 30
+
+
+def test_save_config_round_trips_sources_musicmark(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config = Config()
+    config.sources.musicmark.enabled = True
+    config.sources.musicmark.base_url = "https://mark.example.test"
+    config.sources.musicmark.username = "admin"
+    config.sources.musicmark.api_password = "secret"
+    config.sources.musicmark.sync_interval_hours = 24
+    config.sources.musicmark.min_artist_play_count = 7
+    config.sources.musicmark.max_artists = 5
+    config.sources.musicmark.max_songs = 0
+    config.sources.musicmark.ingest_into_pipeline = False
+
+    save_config(config, config_path)
+    loaded = load_config(config_path)
+
+    assert loaded.sources.musicmark.enabled is True
+    assert loaded.sources.musicmark.base_url == "https://mark.example.test"
+    assert loaded.sources.musicmark.username == "admin"
+    assert loaded.sources.musicmark.api_password == "secret"
+    assert loaded.sources.musicmark.sync_interval_hours == 24
+    assert loaded.sources.musicmark.min_artist_play_count == 7
+    assert loaded.sources.musicmark.max_artists == 5
+    assert loaded.sources.musicmark.max_songs == 0
+    assert loaded.sources.musicmark.ingest_into_pipeline is False
 
 
 def test_save_config_round_trips_sources_browser_cdp_url(tmp_path: Path) -> None:
