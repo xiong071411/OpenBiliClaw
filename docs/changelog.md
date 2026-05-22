@@ -9,6 +9,7 @@
 - 合入上游 v0.3.89 / extension v0.3.43 的内置 `/m/` 移动 Web、局域网二维码、封面代理、显式 fallback、YouTube producer 和任务 claim 稳定性更新；旧本地 Vite `web/` 工程、独立部署脚本和旧 Web 交接文档从主树移除，后续统一维护 `src/openbiliclaw/web/`。
 - 新增 `[sources.musicmark]` 配置、`MusicMarkSyncService`、`source_platform="musicmark"` 事件常量、runtime status 字段和 API config round-trip。MusicMark 只同步聚合听歌摘要，写入 memory / soul 画像，不进入 discovery 候选池，也不占用候选池来源配比。
 - 移动 Web 画像页在 MusicMark 启用时展示最近同步、写入信号数、总播放数和摘要；手动补货完成事件继续携带本轮补进数量，避免复活候选时显示“没补进新的候选”。
+- 修复移动 Web 推荐页自动耗空候选池：页面初始化和 `refresh.pool_updated` 事件改为只读刷新 `GET /api/recommendations`，只有用户显式点击“换一批”或下拉刷新才调用 `POST /api/recommendations/reshuffle`，并加 in-flight / 短冷却防抖。
 
 ---
 

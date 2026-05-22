@@ -171,6 +171,7 @@ if web_dir.is_dir():
 
 移动端会在 `view-models.js` 中做最小字段适配：
 - 推荐池状态读取 `/api/runtime-status` 的 `pool_available_count`、`last_replenished_count`、`recent_pool_topics`，再映射成推荐页三枚 chip 使用的 `pool_size`、`recent_replenish`、`current_topic`。
+- 推荐页初始化、tab 回切和 `refresh.pool_updated` 事件只做只读刷新：读取 `GET /api/recommendations` / runtime / delight / activity 数据，不调用会消耗候选池的 reshuffle。只有用户显式点击「换一批」或下拉刷新时才调用 `POST /api/recommendations/reshuffle`。
 - 画像页在 MusicMark 启用时读取 `/api/runtime-status` 的 `musicmark_sync_*` 字段，显示同步健康度；它只展示聚合摘要，不展示 MusicMark 密码或原始听歌明细。
 - 推荐页头部用 `getMobileRecommendationHeaderState()` 生成插件语义一致的标题、首屏「换一批」、三枚池状态 chip 和活动辅助行；移动端把池状态压成横向轻量 pill，并把 `xhs-extension-*` / `dy-plugin-*` / `yt-*` 等内部来源名显示为用户可读短标签；「加载更多」保留为列表底部显式续页入口。
 - 惊喜推荐沿用插件 compact banner 思路：左侧小缩略图、标签 / 标题 / 理由 / 来源围绕头图形成 featured card，推荐原因带轻量标记，翻页控件与「稍后看」关闭入口放在右上角，动作区仍保持「看看 / 喜欢 / 不感兴趣 / 聊一聊」。

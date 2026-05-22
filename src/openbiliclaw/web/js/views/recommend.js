@@ -39,8 +39,11 @@ import {
 let $root = null;
 let loaded = false;
 let loading = false;
+let reshuffleInFlight = null;
+let lastReshuffleAt = 0;
 let feedbackSheet = null; // { itemId, note, submitState }
 const feedbackDone = new Map(); // recId -> "like" | "dislike" | "comment"
+const RESHUFFLE_COOLDOWN_MS = 1500;
 
 // ── Escape helper ────────────────────────────────────────────
 function esc(s) {
@@ -568,15 +571,42 @@ function renderFeedbackSheet() {
 
 // ── Actions ──────────────────────────────────────────────────
 async function handleReshuffle() {
-  if (loading) return;
+  if (loading || reshuffleInFlight) return;
+  const now = Date.now();
+  if (now - lastReshuffleAt < RESHUFFLE_COOLDOWN_MS) return;
+  lastReshuffleAt = now;
   loading = true;
   render();
   try {
-    const result = await reshuffleRecommendations();
+    reshuffleInFlight = reshuffleRecommendations();
+    const result = await reshuffleInFlight;
     patchState({ recommendations: (result.items || []).map(normalizeRecommendation) });
   } catch { /* ignore */ }
+  reshuffleInFlight = null;
   loading = false;
   render();
+}
+
+async function refreshReadOnlyData({ includeStatus = true } = {}) {
+  const [recs, status, delights, activity] = await Promise.all([
+    fetchRecommendations().catch(() => state.recommendations),
+    includeStatus ? fetchRuntimeStatus().catch(() => null) : Promise.resolve(null),
+    fetchDelightBatch().catch(() => state.activeDelights),
+    fetchActivityFeed({ limit: 5 }).catch(() => state.activityFeed),
+  ]);
+  const normalizedRecs = (recs || []).map(normalizeRecommendation);
+  for (const rec of normalizedRecs) {
+    if (rec.feedback_type && !feedbackDone.has(rec.id)) {
+      feedbackDone.set(rec.id, rec.feedback_type);
+    }
+  }
+  patchState({
+    recommendations: normalizedRecs,
+    runtimeStatus: status ? normalizeRuntimeStatus(status) : state.runtimeStatus,
+    activeDelights: (delights || []).map(normalizeDelightCandidate),
+    delightCurrentIndex: 0,
+    activityFeed: activity,
+  });
 }
 
 async function handleAppend() {
@@ -647,26 +677,7 @@ async function loadData() {
   loading = true;
   render();
   try {
-    const [recs, status, delights, activity] = await Promise.all([
-      reshuffleRecommendations().then((r) => r.items || []).catch(() => fetchRecommendations()),
-      fetchRuntimeStatus().catch(() => null),
-      fetchDelightBatch().catch(() => []),
-      fetchActivityFeed({ limit: 5 }).catch(() => null),
-    ]);
-    const normalizedRecs = recs.map(normalizeRecommendation);
-    // Restore feedback state from backend so it survives page refresh.
-    for (const rec of normalizedRecs) {
-      if (rec.feedback_type && !feedbackDone.has(rec.id)) {
-        feedbackDone.set(rec.id, rec.feedback_type);
-      }
-    }
-    patchState({
-      recommendations: normalizedRecs,
-      runtimeStatus: status ? normalizeRuntimeStatus(status) : state.runtimeStatus,
-      activeDelights: delights.map(normalizeDelightCandidate),
-      delightCurrentIndex: 0,
-      activityFeed: activity,
-    });
+    await refreshReadOnlyData();
   } catch { /* ignore */ }
   loading = false;
   render();
@@ -691,7 +702,9 @@ export function onStreamEvent(payload) {
     patchState({
       runtimeStatus: mergeRuntimeStatusEvent(state.runtimeStatus, payload.data || payload),
     });
-    loadData();
+    refreshReadOnlyData({ includeStatus: false })
+      .then(() => render())
+      .catch(() => rerenderHeaderOnly());
   } else if (type === "refresh.started" || type === "refresh.strategy") {
     patchState({ runtimeEvent: payload.data || payload });
     rerenderHeaderOnly();
