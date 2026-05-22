@@ -207,6 +207,11 @@ body {
   opacity: 1;
 }
 
+/* Pre-decoded covers: skip fade-in entirely */
+.card-cover.is-loaded.is-instant {
+  transition: none;
+}
+
 .card-cover-frame.is-error,
 .message-cover-frame.is-error {
   display: flex;
