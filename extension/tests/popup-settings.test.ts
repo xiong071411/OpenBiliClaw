@@ -9,6 +9,8 @@ test("settings page exposes advanced config fields from backend schema", () => {
   const expectedIds = [
     "cfgBackendPort",
     "cfgDataDir",
+    "cfgLlmFallbackProvider",
+    "cfgEmbeddingFallbackProvider",
     "cfgOpenaiAuthMode",
     "cfgDeepseekReasoning",
     "cfgOpenrouterReferer",
@@ -41,6 +43,15 @@ test("settings page exposes advanced config fields from backend schema", () => {
     "cfgYoutubeDailyTrendingBudget",
     "cfgYoutubeDailyChannelBudget",
     "cfgYoutubeRequestInterval",
+    "cfgYoutubeMinInterval",
+    "cfgExtensionDisconnectGrace",
+    "cfgRefreshCheckInterval",
+    "cfgSignalEventThreshold",
+    "cfgTrendingRefreshHours",
+    "cfgExploreRefreshHours",
+    "cfgDiscoveryLimit",
+    "cfgProactivePushInterval",
+    "cfgSpeculatorIdleInterval",
     "cfgAccountSyncInterval",
     "cfgAutoUpdateInterval",
     "cfgPoolShareBilibili",
@@ -69,6 +80,16 @@ test("settings page exposes advanced config fields from backend schema", () => {
     assert.match(popupHtml, new RegExp(`id="${id}"`), `${id} should exist`);
     assert.match(popupJs, new RegExp(`"${id}"`), `${id} should be wired in popup.js`);
   }
+  assert.doesNotMatch(popupHtml, /id="cfgDiscoveryCron"/);
+  assert.doesNotMatch(popupJs, /discovery_cron:\s*getVal\("cfgDiscoveryCron"\)/);
+  assert.match(
+    popupJs,
+    /setVal\("cfgRefreshCheckInterval", cfg\.scheduler\?\.refresh_check_interval_seconds\)/,
+  );
+  assert.match(
+    popupJs,
+    /refresh_check_interval_seconds: getInt\("cfgRefreshCheckInterval", 60\)/,
+  );
 });
 
 test("settings source tab separates every platform into its own block", () => {
@@ -89,7 +110,9 @@ test("settings source tab separates every platform into its own block", () => {
   assert.match(sourcesPanel, />启用 Bilibili discovery</);
   assert.match(sourcesPanel, />调试：B 站登录时显示浏览器窗口</);
   assert.match(popupJs, /bilibiliEnabled\.checked = cfg\.sources\?\.bilibili\?\.enabled !== false/);
+  assert.match(popupJs, /xhsEnabled\.checked = cfg\.sources\?\.xiaohongshu\?\.enabled === true/);
   assert.match(popupJs, /bilibili:\s*\{\s*enabled: checked\("cfgBilibiliEnabled", true\)/);
+  assert.match(popupJs, /xiaohongshu:\s*\{\s*enabled: checked\("cfgXhsEnabled"\)/);
 });
 
 test("settings logging tab edits a single full log path", () => {
@@ -155,16 +178,22 @@ test("settings page round-trips YouTube source budgets", () => {
     popupJs,
     /setVal\("cfgYoutubeRequestInterval", cfg\.sources\?\.youtube\?\.request_interval_seconds\)/,
   );
+  assert.match(
+    popupJs,
+    /setVal\("cfgYoutubeMinInterval", cfg\.sources\?\.youtube\?\.min_interval_minutes\)/,
+  );
   assert.match(popupJs, /daily_search_budget: getInt\("cfgYoutubeDailySearchBudget", 6\)/);
   assert.match(popupJs, /daily_trending_budget: getInt\("cfgYoutubeDailyTrendingBudget", 50\)/);
   assert.match(popupJs, /daily_channel_budget: getInt\("cfgYoutubeDailyChannelBudget", 10\)/);
   assert.match(popupJs, /request_interval_seconds: getInt\("cfgYoutubeRequestInterval", 2\)/);
+  assert.match(popupJs, /min_interval_minutes: getInt\("cfgYoutubeMinInterval", 60\)/);
 
   for (const id of [
     "cfgYoutubeDailySearchBudget",
     "cfgYoutubeDailyTrendingBudget",
     "cfgYoutubeDailyChannelBudget",
     "cfgYoutubeRequestInterval",
+    "cfgYoutubeMinInterval",
   ]) {
     assert.match(popupHtml, new RegExp(`id="${id}"`));
   }
@@ -184,6 +213,31 @@ test("settings page round-trips OpenAI auth mode", () => {
   assert.match(popupJs, /auth_mode: getVal\("cfgOpenaiAuthMode"\) \|\| "api_key"/);
 });
 
+test("settings page round-trips explicit LLM and embedding fallback providers", () => {
+  const popupHtml = readFileSync(resolve("popup", "popup.html"), "utf8");
+  const popupJs = readFileSync(resolve("popup", "popup.js"), "utf8");
+
+  assert.match(popupHtml, /id="cfgLlmFallbackProvider"/);
+  assert.match(popupHtml, /id="cfgEmbeddingFallbackProvider"/);
+  assert.doesNotMatch(popupHtml, /id="cfgLlmFallbackEnabled"/);
+  assert.doesNotMatch(popupHtml, /id="cfgEmbeddingFallbackEnabled"/);
+  assert.match(popupJs, /setVal\("cfgLlmFallbackProvider", cfg\.llm\?\.fallback_provider\)/);
+  assert.match(
+    popupJs,
+    /setVal\("cfgEmbeddingFallbackProvider", cfg\.llm\?\.embedding\?\.fallback_provider\)/,
+  );
+  assert.match(popupJs, /const llmFallbackProvider = getVal\("cfgLlmFallbackProvider"\)/);
+  assert.match(popupJs, /fallback_provider: llmFallbackProvider/);
+  assert.match(
+    popupJs,
+    /const embeddingFallbackProvider = getVal\("cfgEmbeddingFallbackProvider"\)/,
+  );
+  assert.match(
+    popupJs,
+    /fallback_provider: embeddingFallbackProvider/,
+  );
+});
+
 test("settings page placeholders match config example defaults", () => {
   const popupHtml = readFileSync(resolve("popup", "popup.html"), "utf8");
   const expectedDefaults = [
@@ -192,7 +246,6 @@ test("settings page placeholders match config example defaults", () => {
     ["cfgOllamaModel", "qwen2.5:7b"],
     ["cfgOllamaBaseUrl", "http://localhost:11434/v1"],
     ["cfgOpenrouterModel", "openai/gpt-5-nano"],
-    ["cfgDiscoveryCron", "0 */8 * * *"],
   ];
 
   for (const [id, placeholder] of expectedDefaults) {
@@ -220,7 +273,7 @@ test("source-share suggestion button uses settings-scope helpers and form switch
   assert.match(suggestionBlock, /fetchSourceShareSuggestion\(\{/);
   assert.match(suggestionBlock, /enabled_sources:\s*\{/);
   assert.match(suggestionBlock, /bilibili:\s*checked\("cfgBilibiliEnabled", true\)/);
-  assert.match(suggestionBlock, /xiaohongshu:\s*checked\("cfgXhsEnabled", true\)/);
+  assert.match(suggestionBlock, /xiaohongshu:\s*checked\("cfgXhsEnabled"\)/);
   assert.match(suggestionBlock, /youtube:\s*checked\("cfgYoutubeEnabled"\)/);
   assert.match(suggestionBlock, /configured_shares:\s*\{/);
 });

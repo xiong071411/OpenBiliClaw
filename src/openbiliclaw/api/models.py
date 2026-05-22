@@ -35,6 +35,7 @@ class HealthResponse(BaseModel):
     status: str
     service: str
     profile_ready: bool | None = None
+    lan_ip: str | None = None
 
 
 class RecommendationOut(BaseModel):
@@ -48,6 +49,7 @@ class RecommendationOut(BaseModel):
     expression: str = ""
     topic_label: str = ""
     presented: bool = False
+    feedback_type: str = ""
     # Multi-source fields (additive, backward-compatible)
     content_id: str = ""
     content_url: str = ""
@@ -529,6 +531,8 @@ class EmbeddingConfigOut(BaseModel):
     api_key: str = ""
     base_url: str = ""
     similarity_threshold: float = 0.82
+    fallback_enabled: bool = False
+    fallback_provider: str = ""
 
 
 class ModuleLLMConfigOut(BaseModel):
@@ -538,6 +542,8 @@ class ModuleLLMConfigOut(BaseModel):
 
 class LLMConfigOut(BaseModel):
     default_provider: str = "openai"
+    fallback_enabled: bool = False
+    fallback_provider: str = ""
     openai: LLMProviderConfigOut = Field(default_factory=LLMProviderConfigOut)
     claude: LLMProviderConfigOut = Field(default_factory=LLMProviderConfigOut)
     gemini: LLMProviderConfigOut = Field(default_factory=LLMProviderConfigOut)
@@ -570,7 +576,7 @@ class BilibiliSourceConfigOut(BaseModel):
 
 
 class XiaohongshuSourceConfigOut(BaseModel):
-    enabled: bool = True
+    enabled: bool = False
     daily_search_budget: int = 30
     daily_creator_budget: int = 10
     task_interval_seconds: int = 45
@@ -592,6 +598,7 @@ class YoutubeSourceConfigOut(BaseModel):
     daily_trending_budget: int = 50
     daily_channel_budget: int = 10
     request_interval_seconds: int = 2
+    min_interval_minutes: int = 60
 
 
 class SourcesConfigOut(BaseModel):
@@ -610,6 +617,13 @@ class SchedulerConfigOut(BaseModel):
     pool_target_count: int = 600
     pool_source_shares: dict[str, int] = Field(default_factory=dict)
     account_sync_interval_hours: int = 6
+    refresh_check_interval_seconds: int = 60
+    signal_event_threshold: int = 6
+    trending_refresh_hours: int = 3
+    explore_refresh_hours: int = 12
+    discovery_limit: int = 30
+    proactive_push_interval_seconds: int = 120
+    speculator_idle_interval_minutes: int = 30
     speculation_interval_minutes: int = 10
     speculation_ttl_days: int = 3
     speculation_cooldown_days: int = 7

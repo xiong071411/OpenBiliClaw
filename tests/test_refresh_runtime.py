@@ -11,6 +11,8 @@ from openbiliclaw.recommendation.delight import DEFAULT_DELIGHT_THRESHOLD
 from openbiliclaw.runtime.presence import PresenceTracker
 from openbiliclaw.runtime.refresh import ContinuousRefreshController
 
+_MULTI_SOURCE_SHARES = {"bilibili": 8, "xiaohongshu": 1, "douyin": 1}
+
 
 class _FakeClock:
     def __init__(self) -> None:
@@ -226,6 +228,15 @@ class _FakeDouyinProducer:
         return {"discovered": 3, "reason": "ok"}
 
 
+class _FakeYoutubeProducer:
+    def __init__(self) -> None:
+        self.calls: list[int | None] = []
+
+    async def produce_if_due(self, *, limit: int | None = None) -> dict[str, object]:
+        self.calls.append(limit)
+        return {"discovered": 3, "reason": "ok"}
+
+
 class _FakeRecommendationEngine:
     def __init__(self) -> None:
         self.calls: list[tuple[list[dict[str, object]], dict[str, object], int]] = []
@@ -270,6 +281,7 @@ _LOOP_BODY_ATTRS = [
     ("_loop_soul_pipeline", ("_tick_soul_pipeline",)),
     ("_loop_xhs_producer", ("_tick_xhs_producer",)),
     ("_loop_douyin_producer", ("_tick_douyin_producer",)),
+    ("_loop_youtube_producer", ("_tick_youtube_producer",)),
     (
         "_loop_proactive_push",
         (
@@ -781,6 +793,7 @@ async def test_force_refresh_skips_bilibili_when_platform_quota_full() -> None:
         discovery_engine=discovery,
         recommendation_engine=_FakeRecommendationEngine(),
         pool_target_count=600,
+        pool_source_shares=_MULTI_SOURCE_SHARES,
         discovery_limit=30,
     )
 
@@ -817,6 +830,7 @@ async def test_manual_refresh_skip_does_not_reuse_stale_replenishment_message() 
         recommendation_engine=_FakeRecommendationEngine(),
         event_hub=event_hub,
         pool_target_count=600,
+        pool_source_shares=_MULTI_SOURCE_SHARES,
         discovery_limit=30,
     )
 
@@ -1082,6 +1096,7 @@ async def test_refresh_controller_prioritizes_underfilled_sources() -> None:
         discovery_engine=discovery,
         recommendation_engine=_FakeRecommendationEngine(),
         pool_target_count=30,
+        pool_source_shares=_MULTI_SOURCE_SHARES,
         discovery_limit=4,
         trending_refresh_hours=999,
         explore_refresh_hours=999,
@@ -1123,6 +1138,7 @@ async def test_refresh_controller_skips_bilibili_when_only_small_sources_underfi
         discovery_engine=discovery,
         recommendation_engine=_FakeRecommendationEngine(),
         pool_target_count=30,
+        pool_source_shares=_MULTI_SOURCE_SHARES,
         discovery_limit=4,
         trending_refresh_hours=999,
         explore_refresh_hours=999,
@@ -1288,11 +1304,7 @@ def test_source_target_counts_use_platform_default_shares() -> None:
         pool_target_count=600,
     )
 
-    assert controller._source_target_counts() == {
-        "bilibili": 480,
-        "xiaohongshu": 60,
-        "douyin": 60,
-    }
+    assert controller._source_target_counts() == {"bilibili": 600}
 
 
 def test_source_target_counts_use_configured_platform_shares() -> None:
@@ -1332,7 +1344,7 @@ def test_source_replenishment_plan_maps_bilibili_deficit_to_bilibili_strategies(
     )
 
     assert controller._build_source_replenishment_plan() == [
-        (["search", "related_chain", "trending", "explore"], 180)
+        (["search", "related_chain", "trending", "explore"], 300)
     ]
 
 
@@ -1372,6 +1384,7 @@ async def test_refresh_controller_uses_bilibili_deficit_for_discovery_limit() ->
         discovery_engine=discovery,
         recommendation_engine=_FakeRecommendationEngine(),
         pool_target_count=600,
+        pool_source_shares=_MULTI_SOURCE_SHARES,
         discovery_limit=30,
     )
 
@@ -1403,12 +1416,13 @@ def test_source_replenishment_plan_leaves_xhs_deficit_to_xhs_producer() -> None:
         discovery_engine=_FakeDiscoveryEngine(),
         recommendation_engine=_FakeRecommendationEngine(),
         pool_target_count=600,
+        pool_source_shares=_MULTI_SOURCE_SHARES,
     )
 
     assert controller._build_source_replenishment_plan() == []
 
 
-def test_source_replenishment_plan_maps_youtube_deficit_to_youtube_strategies() -> None:
+def test_source_replenishment_plan_leaves_youtube_deficit_to_youtube_producer() -> None:
     controller = ContinuousRefreshController(
         memory_manager=_FakeMemoryManager(),
         database=_FakeDatabase(
@@ -1426,9 +1440,34 @@ def test_source_replenishment_plan_maps_youtube_deficit_to_youtube_strategies() 
         pool_source_shares={"bilibili": 8, "youtube": 2},
     )
 
-    assert controller._build_source_replenishment_plan() == [
-        (["yt_search", "yt_trending", "yt_channel"], 20)
-    ]
+    assert controller._build_source_replenishment_plan() == []
+
+
+def test_warn_on_stranded_source_shares_checks_youtube_producer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("WARNING")
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=_FakeDatabase(
+            [],
+            pool_count=80,
+            source_counts={
+                "bilibili": 80,
+                "youtube": 0,
+            },
+        ),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=100,
+        pool_source_shares={"bilibili": 8, "youtube": 2},
+        youtube_producer=None,
+    )
+
+    controller._warn_on_stranded_source_shares()
+
+    assert "youtube" in caplog.text
 
 
 async def test_xhs_producer_receives_source_deficit_limit() -> None:
@@ -1444,6 +1483,7 @@ async def test_xhs_producer_receives_source_deficit_limit() -> None:
         discovery_engine=_FakeDiscoveryEngine(),
         recommendation_engine=_FakeRecommendationEngine(),
         pool_target_count=600,
+        pool_source_shares=_MULTI_SOURCE_SHARES,
         discovery_limit=30,
         xhs_producer=producer,
     )
@@ -1466,6 +1506,7 @@ async def test_douyin_producer_runs_when_douyin_under_quota() -> None:
         discovery_engine=_FakeDiscoveryEngine(),
         recommendation_engine=_FakeRecommendationEngine(),
         pool_target_count=600,
+        pool_source_shares=_MULTI_SOURCE_SHARES,
         discovery_limit=30,
         douyin_producer=producer,
     )
@@ -1496,6 +1537,51 @@ async def test_douyin_producer_skips_when_douyin_at_quota() -> None:
     assert producer.calls == []
 
 
+async def test_youtube_producer_runs_when_youtube_under_quota() -> None:
+    producer = _FakeYoutubeProducer()
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=_FakeDatabase(
+            [],
+            pool_count=540,
+            source_counts={"bilibili": 480, "youtube": 0},
+        ),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=600,
+        pool_source_shares={"bilibili": 8, "youtube": 2},
+        discovery_limit=30,
+        youtube_producer=producer,
+    )
+
+    await controller._tick_youtube_producer()
+
+    assert producer.calls == [30]
+
+
+async def test_youtube_producer_skips_when_youtube_at_quota() -> None:
+    producer = _FakeYoutubeProducer()
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=_FakeDatabase(
+            [],
+            pool_count=600,
+            source_counts={"bilibili": 480, "youtube": 120},
+        ),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=600,
+        pool_source_shares={"bilibili": 8, "youtube": 2},
+        youtube_producer=producer,
+    )
+
+    await controller._tick_youtube_producer()
+
+    assert producer.calls == []
+
+
 def test_pool_cap_trim_receives_xhs_family_quota() -> None:
     database = _FakeDatabase([], pool_count=650)
     controller = ContinuousRefreshController(
@@ -1505,6 +1591,7 @@ def test_pool_cap_trim_receives_xhs_family_quota() -> None:
         discovery_engine=_FakeDiscoveryEngine(),
         recommendation_engine=_FakeRecommendationEngine(),
         pool_target_count=600,
+        pool_source_shares=_MULTI_SOURCE_SHARES,
     )
 
     assert controller._enforce_pool_cap() is True
@@ -1523,6 +1610,7 @@ def test_pool_cap_enforces_platform_caps_even_when_ready_pool_below_target() -> 
         discovery_engine=_FakeDiscoveryEngine(),
         recommendation_engine=_FakeRecommendationEngine(),
         pool_target_count=600,
+        pool_source_shares=_MULTI_SOURCE_SHARES,
     )
 
     assert controller._enforce_pool_cap() is False
@@ -1542,6 +1630,7 @@ def test_pool_cap_reactivates_under_quota_sources_before_trim() -> None:
         discovery_engine=_FakeDiscoveryEngine(),
         recommendation_engine=_FakeRecommendationEngine(),
         pool_target_count=600,
+        pool_source_shares=_MULTI_SOURCE_SHARES,
     )
 
     assert controller._enforce_pool_cap() is True

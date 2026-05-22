@@ -23,6 +23,13 @@ _SUPPORTED_OPENAI_AUTH_MODES = {"", "api_key", "codex_oauth"}
 _MIN_POOL_TARGET_COUNT = 1
 _MAX_POOL_TARGET_COUNT = 600
 _DEFAULT_EXTENSION_DISCONNECT_GRACE_SECONDS = 90
+_DEFAULT_REFRESH_CHECK_INTERVAL_SECONDS = 60
+_DEFAULT_SIGNAL_EVENT_THRESHOLD = 6
+_DEFAULT_TRENDING_REFRESH_HOURS = 3
+_DEFAULT_EXPLORE_REFRESH_HOURS = 12
+_DEFAULT_DISCOVERY_LIMIT = 30
+_DEFAULT_PROACTIVE_PUSH_INTERVAL_SECONDS = 120
+_DEFAULT_SPECULATOR_IDLE_INTERVAL_MINUTES = 30
 _DEFAULT_POOL_SOURCE_SHARES = {
     "bilibili": 8,
     "xiaohongshu": 1,
@@ -93,16 +100,17 @@ class EmbeddingConfig:
 
     v0.3.32+ owns its own ``api_key`` / ``base_url`` so the embedding
     provider is fully independent from ``[llm].default_provider`` and the
-    chat-side ``[llm.<name>]`` blocks. Old configs that left these blank
-    fall back to ``[llm.<provider>]`` credentials with a one-time WARNING
-    (see ``registry.build_embedding_service``).
+    chat-side ``[llm.<name>]`` blocks. Fallback to other embedding
+    providers or chat-side credentials is opt-in via ``fallback_enabled``.
     """
 
-    provider: str = ""  # Empty = use LLM default_provider
+    provider: str = ""  # Empty = embedding disabled until explicitly configured
     model: str = "gemini-embedding-001"
     api_key: str = ""
     base_url: str = ""
     similarity_threshold: float = 0.82
+    fallback_enabled: bool = False
+    fallback_provider: str = ""
 
 
 @dataclass
@@ -118,6 +126,8 @@ class LLMConfig:
     """LLM configuration with global defaults and per-module overrides."""
 
     default_provider: str = "openai"
+    fallback_enabled: bool = False
+    fallback_provider: str = ""
     openai: LLMProviderConfig = field(default_factory=LLMProviderConfig)
     claude: LLMProviderConfig = field(default_factory=LLMProviderConfig)
     gemini: LLMProviderConfig = field(default_factory=LLMProviderConfig)
@@ -165,6 +175,13 @@ class SchedulerConfig:
         default_factory=lambda: dict(_DEFAULT_POOL_SOURCE_SHARES)
     )
     account_sync_interval_hours: int = 6
+    refresh_check_interval_seconds: int = _DEFAULT_REFRESH_CHECK_INTERVAL_SECONDS
+    signal_event_threshold: int = _DEFAULT_SIGNAL_EVENT_THRESHOLD
+    trending_refresh_hours: int = _DEFAULT_TRENDING_REFRESH_HOURS
+    explore_refresh_hours: int = _DEFAULT_EXPLORE_REFRESH_HOURS
+    discovery_limit: int = _DEFAULT_DISCOVERY_LIMIT
+    proactive_push_interval_seconds: int = _DEFAULT_PROACTIVE_PUSH_INTERVAL_SECONDS
+    speculator_idle_interval_minutes: int = _DEFAULT_SPECULATOR_IDLE_INTERVAL_MINUTES
     speculation_interval_minutes: int = 10
     speculation_ttl_days: int = 3
     speculation_cooldown_days: int = 7
@@ -191,12 +208,9 @@ class XiaohongshuSourceConfig:
     background-tab tasks). No sidecar or backend crawling needed.
     """
 
-    # Set to False to skip XHS init bootstrap, suppress backend XHS task
-    # generation and drop xiaohongshu from pool_source_shares.  Init's
-    # interactive prompt and ``OPENBILICLAW_NO_XHS=1`` env var write this
-    # back so the runtime stops burning daily_search_budget on an
-    # un-installed / un-logged-in xhs extension.
-    enabled: bool = True
+    # XHS is opt-in because it requires the browser extension and a logged-in
+    # browser session. Init --yes-xhs or the settings page can enable it later.
+    enabled: bool = False
     # Max Soul-driven search tasks the backend may enqueue per day.
     daily_search_budget: int = 30
     # Max creator-subscription fetch tasks per day.
@@ -227,10 +241,9 @@ class DouyinSourceConfig:
 class YoutubeSourceConfig:
     """YouTube source-specific configuration.
 
-    YouTube discovery runs through the regular strategy pipeline rather
-    than a per-source plugin producer. The budget knobs therefore tune
-    each runtime discovery pass: search queries, trending fetch size and
-    subscribed-channel breadth.
+    YouTube steady-state discovery runs through a backend-direct runtime
+    producer. The budget knobs cap per-day execution units: search
+    queries, trending fetch breadth, and subscribed-channel breadth.
     """
 
     enabled: bool = False
@@ -238,6 +251,7 @@ class YoutubeSourceConfig:
     daily_trending_budget: int = 50
     daily_channel_budget: int = 10
     request_interval_seconds: int = 2
+    min_interval_minutes: int = 60
 
 
 @dataclass
@@ -340,11 +354,26 @@ class SoulConfig:
 
 
 @dataclass
+class ApiConfig:
+    """Backend API server settings.
+
+    ``host`` controls which network interface the server binds to.
+    ``0.0.0.0`` (default) binds all interfaces so mobile devices on the
+    same LAN can reach the ``/m/`` mobile web.  ``127.0.0.1`` restricts
+    access to this machine only.
+    """
+
+    host: str = "0.0.0.0"
+    port: int = 8420
+
+
+@dataclass
 class Config:
     """Root configuration for OpenBiliClaw."""
 
     language: str = "zh"
     data_dir: str = "data"
+    api: ApiConfig = field(default_factory=ApiConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     bilibili: BilibiliConfig = field(default_factory=BilibiliConfig)
     sources: SourcesConfig = field(default_factory=SourcesConfig)
@@ -450,6 +479,7 @@ def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
 def _build_config(raw: dict[str, Any]) -> Config:
     """Build a Config dataclass from raw dict."""
     general = raw.get("general", {})
+    api_raw = raw.get("api", {}) if isinstance(raw.get("api"), dict) else {}
     llm_raw = raw.get("llm", {})
     bili_raw = raw.get("bilibili", {})
     sources_raw = raw.get("sources", {})
@@ -460,6 +490,8 @@ def _build_config(raw: dict[str, Any]) -> Config:
     embedding_raw = llm_raw.get("embedding", {})
     llm = LLMConfig(
         default_provider=llm_raw.get("default_provider", "openai"),
+        fallback_enabled=bool(llm_raw.get("fallback_enabled", False)),
+        fallback_provider=llm_raw.get("fallback_provider", ""),
         openai=LLMProviderConfig(**llm_raw.get("openai", {})),
         claude=LLMProviderConfig(**llm_raw.get("claude", {})),
         gemini=LLMProviderConfig(**llm_raw.get("gemini", {})),
@@ -471,7 +503,16 @@ def _build_config(raw: dict[str, Any]) -> Config:
             **{
                 k: v
                 for k, v in embedding_raw.items()
-                if k in ("provider", "model", "api_key", "base_url", "similarity_threshold")
+                if k
+                in (
+                    "provider",
+                    "model",
+                    "api_key",
+                    "base_url",
+                    "similarity_threshold",
+                    "fallback_enabled",
+                    "fallback_provider",
+                )
             }
         ),
         soul=ModuleLLMConfig(
@@ -512,7 +553,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
             enabled=bool(bilibili_source_raw.get("enabled", True)),
         ),
         xiaohongshu=XiaohongshuSourceConfig(
-            enabled=bool(xhs_raw.get("enabled", True)),
+            enabled=bool(xhs_raw.get("enabled", False)),
             daily_search_budget=int(xhs_raw.get("daily_search_budget", 30)),
             daily_creator_budget=int(xhs_raw.get("daily_creator_budget", 10)),
             task_interval_seconds=int(xhs_raw.get("task_interval_seconds", 45)),
@@ -532,6 +573,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
             daily_trending_budget=int(youtube_raw.get("daily_trending_budget", 50)),
             daily_channel_budget=int(youtube_raw.get("daily_channel_budget", 10)),
             request_interval_seconds=int(youtube_raw.get("request_interval_seconds", 2)),
+            min_interval_minutes=max(0, int(youtube_raw.get("min_interval_minutes", 60))),
         ),
     )
 
@@ -550,6 +592,10 @@ def _build_config(raw: dict[str, Any]) -> Config:
     return Config(
         language=general.get("language", "zh"),
         data_dir=general.get("data_dir", "data"),
+        api=ApiConfig(
+            host=str(api_raw.get("host", "0.0.0.0") or "0.0.0.0").strip() or "0.0.0.0",
+            port=_normalize_api_port(api_raw.get("port", 8420)),
+        ),
         llm=llm,
         bilibili=bilibili,
         sources=sources,
@@ -562,12 +608,64 @@ def _build_config(raw: dict[str, Any]) -> Config:
                 "pool_source_shares": _normalize_pool_source_shares(
                     sched_raw.get("pool_source_shares")
                 ),
+                "refresh_check_interval_seconds": _normalize_scheduler_int(
+                    sched_raw.get("refresh_check_interval_seconds"),
+                    default=_DEFAULT_REFRESH_CHECK_INTERVAL_SECONDS,
+                    min_value=15,
+                ),
+                "signal_event_threshold": _normalize_scheduler_int(
+                    sched_raw.get("signal_event_threshold"),
+                    default=_DEFAULT_SIGNAL_EVENT_THRESHOLD,
+                    min_value=1,
+                ),
+                "trending_refresh_hours": _normalize_scheduler_int(
+                    sched_raw.get("trending_refresh_hours"),
+                    default=_DEFAULT_TRENDING_REFRESH_HOURS,
+                    min_value=1,
+                ),
+                "explore_refresh_hours": _normalize_scheduler_int(
+                    sched_raw.get("explore_refresh_hours"),
+                    default=_DEFAULT_EXPLORE_REFRESH_HOURS,
+                    min_value=1,
+                ),
+                "discovery_limit": _normalize_scheduler_int(
+                    sched_raw.get("discovery_limit"),
+                    default=_DEFAULT_DISCOVERY_LIMIT,
+                    min_value=1,
+                    max_value=60,
+                ),
+                "proactive_push_interval_seconds": _normalize_scheduler_int(
+                    sched_raw.get("proactive_push_interval_seconds"),
+                    default=_DEFAULT_PROACTIVE_PUSH_INTERVAL_SECONDS,
+                    min_value=30,
+                ),
+                "speculator_idle_interval_minutes": _normalize_scheduler_int(
+                    sched_raw.get("speculator_idle_interval_minutes"),
+                    default=_DEFAULT_SPECULATOR_IDLE_INTERVAL_MINUTES,
+                    min_value=5,
+                ),
             }
         ),
         storage=StorageConfig(**store_raw),
         logging=LoggingConfig(**logging_raw),
         soul=soul,
     )
+
+
+def _normalize_api_port(value: object) -> int:
+    """Normalize API port values into the valid TCP port range."""
+    if isinstance(value, bool):
+        return 8420
+    if isinstance(value, int | float):
+        port = int(value)
+    elif isinstance(value, str):
+        try:
+            port = int(value.strip())
+        except ValueError:
+            return 8420
+    else:
+        return 8420
+    return port if 1 <= port <= 65535 else 8420
 
 
 def _normalize_pool_source_shares(value: object) -> dict[str, int]:
@@ -605,6 +703,31 @@ def _normalize_extension_disconnect_grace(value: object) -> int:
     if grace <= 0:
         return _DEFAULT_EXTENSION_DISCONNECT_GRACE_SECONDS
     return grace
+
+
+def _normalize_scheduler_int(
+    value: object,
+    *,
+    default: int,
+    min_value: int,
+    max_value: int | None = None,
+) -> int:
+    """Normalize scheduler tuning values into bounded positive ints."""
+    if isinstance(value, int | float):
+        normalized = int(value)
+    elif isinstance(value, str):
+        try:
+            normalized = int(value.strip())
+        except ValueError:
+            return default
+    else:
+        return default
+
+    if normalized < min_value:
+        return default
+    if max_value is not None and normalized > max_value:
+        return default
+    return normalized
 
 
 def _collect_config_issues(config: Config) -> list[ConfigIssue]:
@@ -808,8 +931,14 @@ def _render_config_toml(config: Config) -> str:
         f"language = {_toml_string(config.language)}",
         f"data_dir = {_toml_string(config.data_dir)}",
         "",
+        "[api]",
+        f"host = {_toml_string(config.api.host)}",
+        f"port = {config.api.port}",
+        "",
         "[llm]",
         f"default_provider = {_toml_string(config.llm.default_provider)}",
+        f"fallback_enabled = {_toml_bool(config.llm.fallback_enabled)}",
+        f"fallback_provider = {_toml_string(config.llm.fallback_provider)}",
         "",
     ]
     lines.extend(_render_provider_section("openai", config.llm.openai))
@@ -827,6 +956,8 @@ def _render_config_toml(config: Config) -> str:
             f"api_key = {_toml_string(config.llm.embedding.api_key)}",
             f"base_url = {_toml_string(config.llm.embedding.base_url)}",
             f"similarity_threshold = {config.llm.embedding.similarity_threshold}",
+            f"fallback_enabled = {_toml_bool(config.llm.embedding.fallback_enabled)}",
+            f"fallback_provider = {_toml_string(config.llm.embedding.fallback_provider)}",
             "",
             "# Per-module LLM overrides (empty = use global default)",
             "[llm.soul]",
@@ -885,6 +1016,7 @@ def _render_config_toml(config: Config) -> str:
             f"daily_trending_budget = {config.sources.youtube.daily_trending_budget}",
             f"daily_channel_budget = {config.sources.youtube.daily_channel_budget}",
             f"request_interval_seconds = {config.sources.youtube.request_interval_seconds}",
+            f"min_interval_minutes = {config.sources.youtube.min_interval_minutes}",
             "",
             "[scheduler]",
             f"enabled = {_toml_bool(config.scheduler.enabled)}",
@@ -895,6 +1027,14 @@ def _render_config_toml(config: Config) -> str:
             f"discovery_cron = {_toml_string(config.scheduler.discovery_cron)}",
             f"pool_target_count = {config.scheduler.pool_target_count}",
             f"account_sync_interval_hours = {config.scheduler.account_sync_interval_hours}",
+            f"refresh_check_interval_seconds = {config.scheduler.refresh_check_interval_seconds}",
+            f"signal_event_threshold = {config.scheduler.signal_event_threshold}",
+            f"trending_refresh_hours = {config.scheduler.trending_refresh_hours}",
+            f"explore_refresh_hours = {config.scheduler.explore_refresh_hours}",
+            f"discovery_limit = {config.scheduler.discovery_limit}",
+            f"proactive_push_interval_seconds = {config.scheduler.proactive_push_interval_seconds}",
+            "speculator_idle_interval_minutes = "
+            f"{config.scheduler.speculator_idle_interval_minutes}",
             f"speculation_interval_minutes = {config.scheduler.speculation_interval_minutes}",
             f"speculation_ttl_days = {config.scheduler.speculation_ttl_days}",
             f"speculation_cooldown_days = {config.scheduler.speculation_cooldown_days}",

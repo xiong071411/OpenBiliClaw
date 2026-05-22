@@ -30,11 +30,11 @@ openbiliclaw [--log-level DEBUG|INFO|WARNING|ERROR] <命令>
 | `db-repair` | 检查、备份并修复本地 SQLite 数据库 | ✅ |
 | `serve-api` | 启动容器友好的 API 服务 | ✅ |
 | `init` | 首次初始化 | ✅ |
-| `fetch-douyin` | 单独触发抖音 bootstrap 拉取（不重建画像） | ✅ |
+| `fetch-douyin` | 单独触发抖音 bootstrap 拉取（不重建画像；默认复用近期任务） | ✅ |
 | `fetch-xhs` | 单独触发小红书 bootstrap 拉取（不重建画像；默认复用近期任务） | ✅ |
-| `fetch-youtube` | 单独触发 YouTube bootstrap 拉取（不重建画像） | ✅ |
+| `fetch-youtube` | 单独触发 YouTube bootstrap 拉取（不重建画像；默认复用近期任务） | ✅ |
 | `import-youtube <path>` | 从 Google Takeout 导入 YouTube 历史 / 订阅 / 点赞 | ✅ |
-| `setup-embedding` | 配置本地 Ollama 作为 embedding 兜底服务（可选） | ✅ |
+| `setup-embedding` | 配置本地 Ollama 作为独立 embedding provider（可选） | ✅ |
 | `recommend` | 查看推荐 | ✅ |
 | `feedback <id> <like\|dislike\|comment>` | 对推荐提交反馈 | ✅ |
 | `profile` | 查看用户画像 | ✅ |
@@ -170,7 +170,7 @@ $ openbiliclaw browser content https://example.com
 
 ### `openbiliclaw start`
 
-启动本地 API 服务。默认监听 `127.0.0.1:8420`，也支持显式传入 host/port。
+启动本地 API 服务。默认读取 `config.toml [api]`，新安装默认监听 `0.0.0.0:8420`，方便同局域网手机访问 `/m/`；也支持显式传入 host/port 覆盖配置。
 
 ```bash
 $ openbiliclaw start
@@ -178,7 +178,7 @@ $ openbiliclaw start
 $ openbiliclaw start --host 0.0.0.0 --port 9000
 ```
 
-适合本地直接运行或调试场景。
+适合本地直接运行或调试场景。若只希望本机访问，把 `[api].host` 改为 `127.0.0.1`，或启动时传 `--host 127.0.0.1`。
 
 启动前会先做两件事：
 
@@ -306,6 +306,8 @@ $ openbiliclaw profile
 
 安装渠道里的首选路径是 `scripts/agent_bootstrap.py` 自动运行 init：Bash / PowerShell / Docker / AI agent 安装会先确认 LLM、embedding、B 站 Cookie 和各来源 opt-in，再触发本命令。直接执行 `openbiliclaw init` 仍保留为高级手动 fallback 和重复初始化入口。
 
+默认初始化信号上限：B 站观看历史最多 300 条、收藏最多 300 条、关注 UP 最多 300 人；小红书 / 抖音 / YouTube 仍按各自 `bootstrap_profile` 的 `max_items_per_scope` 控制。交互式 `init` 会让用户确认 B 站收藏 / 关注上限，回车使用 300；脚本化场景可传 `--bilibili-favorite-limit N` / `--bilibili-follow-limit N`，传 `0` 表示跳过对应信号。
+
 ```bash
 $ openbiliclaw init
 初始化 OpenBiliClaw
@@ -337,17 +339,19 @@ $ openbiliclaw init
 
 小红书导入依赖浏览器插件在用户已登录的小红书网页里执行 `bootstrap_profile` 任务。后端只入队任务并短暂等待结果，不直接登录或爬取小红书。插件会先定位当前用户 profile，再读取 profile state 里的收藏 / 赞过分组；这里的“浏览记录”指小红书网页自己明确暴露的浏览记录/足迹 state，不是读取 Chrome 浏览器历史，也不会把普通推荐流当成浏览记录。如果后端任务显式设置 `max_scroll_rounds`，插件会按任务 payload 中的 `scroll_wait_ms` 和 `max_stagnant_scroll_rounds` 做有限滚动和停滞判断。如果插件未连接、未登录或页面没有暴露对应 scope，`init` 会继续使用已有 B 站数据完成初始化。
 
-抖音导入同样依赖浏览器插件在用户已登录的 `https://www.douyin.com` 页面里执行 `bootstrap_profile` 任务。后端入队 `dy_tasks`，插件依次访问 `dy_post / dy_collect / dy_like / dy_follow` 四个 scope，content script 结合 DOM、MAIN-world fetch tap 和 API harvester 采集发布 / 收藏 / 点赞 / 关注条目，以 `partial` 批次回写 `/api/sources/dy/task-result`。后端会转换为统一事件：发布 → `view`，收藏 → `favorite`，点赞 → `like`，关注 → `follow`，并带 `metadata.source_platform="douyin"`。`init --yes-douyin` 会把这些事件加入 `analyze_events()` 和 `build_initial_profile()`；插件未连接、未登录或抖音风控返回空数据时，初始化继续使用已有信号完成。
+抖音导入同样依赖浏览器插件在用户已登录的 `https://www.douyin.com` 页面里执行 `bootstrap_profile` 任务。后端入队 `dy_tasks`，插件依次访问 `dy_post / dy_collect / dy_like / dy_follow` 四个 scope，content script 结合 DOM、MAIN-world fetch tap 和 API harvester 采集发布 / 收藏 / 点赞 / 关注条目，以 `partial` 批次回写 `/api/sources/dy/task-result`。后端会转换为统一事件：发布 → `view`，收藏 → `favorite`，点赞 → `like`，关注 → `follow`，并带 `metadata.source_platform="douyin"`。`init --yes-douyin` 会把这些事件加入 `analyze_events()` 和 `build_initial_profile()`；插件未连接、未登录或抖音风控返回空数据时，初始化继续使用已有信号完成。后台会复用 6 小时内近期抖音 bootstrap 任务，并用 `source_bootstrap_state.json` 跳过跨任务旧视频 / 关注 identity key。
 
-YouTube 导入依赖浏览器插件在用户已登录的 `https://www.youtube.com` 页面里执行 `bootstrap_profile` 任务。后端入队 `yt_tasks`，插件依次访问 `/feed/history`、`/feed/channels`、`/playlist?list=LL` 三个 scope，读取观看历史、订阅频道和点赞视频，以 `partial` 批次回写 `/api/sources/yt/task-result`。后端会转换为统一事件：观看历史 → `view`，订阅 → `follow`，点赞 → `like`，并带 `metadata.source_platform="youtube"`。`init --yes-youtube` 会把这些事件加入 `analyze_events()` 和 `build_initial_profile()`；非交互式终端默认跳过，`OPENBILICLAW_NO_YOUTUBE=1` 会压过 `--yes-youtube`，避免脚本环境误触发浏览器前台 tab。
+YouTube 导入依赖浏览器插件在用户已登录的 `https://www.youtube.com` 页面里执行 `bootstrap_profile` 任务。后端入队 `yt_tasks`，插件依次访问 `/feed/history`、`/feed/channels`、`/playlist?list=LL` 三个 scope，读取观看历史、订阅频道和点赞视频，以 `partial` 批次回写 `/api/sources/yt/task-result`。后端会转换为统一事件：观看历史 → `view`，订阅 → `follow`，点赞 → `like`，并带 `metadata.source_platform="youtube"`。`init --yes-youtube` 会把这些事件加入 `analyze_events()` 和 `build_initial_profile()`；非交互式终端默认跳过，`OPENBILICLAW_NO_YOUTUBE=1` 会压过 `--yes-youtube`，避免脚本环境误触发浏览器前台 tab。后台会复用 6 小时内近期 YouTube bootstrap 任务，并用 `source_bootstrap_state.json` 跳过跨任务旧条目。
 
 源开关：
 
 - `--yes-xhs` / `--no-xhs`：跳过小红书交互式提问，直接启用或跳过。
 - `--yes-douyin` / `--no-douyin`：跳过抖音交互式提问，直接启用或跳过。非交互式终端默认跳过抖音，脚本化 init 应显式传其中一个。
 - `--yes-youtube` / `--no-youtube`：跳过 YouTube 交互式提问，直接启用或跳过。非交互式终端默认跳过 YouTube，脚本化 init 应显式传其中一个。
+- `--bilibili-favorite-limit N` / `--bilibili-follow-limit N`：覆盖 B 站收藏 / 关注初始化信号上限，默认各 `300`；`0` 表示跳过对应信号。
 - `OPENBILICLAW_NO_XHS=1` / `OPENBILICLAW_NO_DOUYIN=1` / `OPENBILICLAW_NO_YOUTUBE=1`：永久跳过对应源。
 - `OPENBILICLAW_XHS_BOOTSTRAP_DEDUPE_HOURS`：小红书 `bootstrap_profile` 近期任务复用窗口，默认 `6` 小时；设为 `0` 可关闭复用。
+- `OPENBILICLAW_DY_BOOTSTRAP_DEDUPE_HOURS` / `OPENBILICLAW_YT_BOOTSTRAP_DEDUPE_HOURS`：抖音 / YouTube `bootstrap_profile` 近期任务复用窗口，默认 `6` 小时；设为 `0` 可关闭复用。
 
 如果当前终端是交互式，且缺少 provider API Key 或 B 站 Cookie，`init` 会直接进入用户友好的引导（v0.3.5+）：
 
@@ -382,10 +386,10 @@ Embedding(向量化)服务
  #   方案                                  说明
  1   本地 Ollama bge-m3 ★默认推荐           免费 / 离线 / 不消耗主 LLM 配额(自动装 Ollama + 拉 568MB 模型)
  2   云端 Gemini embedding                 质量略高 / 跨语言更稳;免费档每天 1500 次,日常够用,需 Gemini Key
- 3   跟随你刚才选的 LLM                    OpenAI/Gemini 用自家 endpoint;Claude/DeepSeek/OpenRouter 自动回退到选项 1
+ 3   暂不启用 embedding                    保留独立配置为空;不会跟随主 LLM,也不会自动 fallback
  4   (高级)自定义 OpenAI 兼容服务           vLLM / OneAPI / 自建网关 —— 自填 base_url
  5   (高级)指定其他 provider               手动选 provider + 模型 + 可选 base_url
- 0   跳过(等同于 3 跟随主 LLM)
+ 0   跳过(不修改当前 embedding 配置)
 
 Tip:不确定就选 1。日常推荐质量已经够用且不消耗主 LLM 配额。想再准一点选 2(Gemini),需要去 https://aistudio.google.com/apikey 拿 Key。
 请选择 embedding 方案 [1]:
@@ -441,10 +445,10 @@ $ openbiliclaw setup-embedding
  #   方案                                  说明
  1   本地 Ollama bge-m3 ★默认推荐           免费 / 离线 / 不消耗主 LLM 配额(自动装 Ollama + 拉 568MB 模型)
  2   云端 Gemini embedding                 质量略高 / 跨语言更稳;免费档每天 1500 次,日常够用,需 Gemini Key
- 3   跟随你刚才选的 LLM                    OpenAI/Gemini 用自家 endpoint;Claude/DeepSeek/OpenRouter 自动回退到选项 1
+ 3   暂不启用 embedding                    保留独立配置为空;不会跟随主 LLM,也不会自动 fallback
  4   (高级)自定义 OpenAI 兼容服务           vLLM / OneAPI / 自建网关 —— 自填 base_url
  5   (高级)指定其他 provider               手动选 provider + 模型 + 可选 base_url
- 0   跳过(等同于 3 跟随主 LLM)
+ 0   跳过(不修改当前 embedding 配置)
 请选择 embedding 方案 [1]:
 ```
 
@@ -452,19 +456,19 @@ $ openbiliclaw setup-embedding
 
 | 选项 | 行为 | 写入字段 |
 |---|---|---|
-| 1 | 本地 Ollama，自动探测 + 拉取 `bge-m3` | `[llm.embedding] provider="ollama" model="bge-m3"` 并 seed `[llm.ollama] base_url` |
-| 2 | 云端 Gemini embedding，可复用已有 Gemini Key | `[llm.embedding] provider="gemini" model="gemini-embedding-001"`，必要时写 `[llm.gemini] api_key` |
-| 3 | 跟随主 provider；主 provider 无 embedding 时自动回退本地 Ollama | `[llm.embedding] provider=""`，DeepSeek / Claude / OpenRouter 会等价落到 Ollama bge-m3 |
-| 4 | 自填 base_url + api_key + model | `[llm.embedding] provider="openai" model="..."` + `[llm.openai] base_url/api_key`（用 openai 协议族指向你的网关） |
-| 5 | 选另一个已知 provider 走 embedding | `[llm.embedding] provider="<target>" model="..."` + 对应 `[llm.<target>]` base_url/api_key |
-| 0 | 跳过，等同于选 3 跟随主 provider | 不主动写入新 embedding 配置 |
+| 1 | 本地 Ollama，自动探测 + 拉取 `bge-m3` | `[llm.embedding] provider="ollama" model="bge-m3" base_url="http://localhost:11434/v1"` |
+| 2 | 云端 Gemini embedding，可复用已有 Gemini Key | `[llm.embedding] provider="gemini" model="gemini-embedding-001" api_key="..."` |
+| 3 | 暂不启用 embedding | `[llm.embedding] provider="" model=""`；运行时不会跟随主 LLM |
+| 4 | 自填 base_url + api_key + model | `[llm.embedding] provider="openai" model="..." base_url="..." api_key="..."` |
+| 5 | 选另一个已知 provider 走 embedding | `[llm.embedding] provider="<target>" model="..." base_url="..." api_key="..."` |
+| 0 | 跳过 | 不主动写入新 embedding 配置 |
 
 选项 1 时向导会按顺序：
 
 1. 探测 `localhost:11434/api/version`，确认 Ollama 服务在跑
 2. 通过 `/api/tags` 检查 `bge-m3` 是否已 pull
 3. 没拉就流式 `POST /api/pull`，进度直接打到终端
-4. 把 `[llm.embedding] provider="ollama" model="bge-m3"` 写入 `config.toml`，并自动 seed `[llm.ollama] base_url="http://localhost:11434/v1"`（v0.3.3+ 修复：以前不写这一项 registry 不会注册 Ollama）
+4. 把 `[llm.embedding] provider="ollama" model="bge-m3" base_url="http://localhost:11434/v1"` 写入 `config.toml`
 
 适合：
 
@@ -536,7 +540,7 @@ $ openbiliclaw fetch-douyin
   共 50 条事件已由 daemon 写入 memory。
 ```
 
-默认最多等待扩展回传 `180s`；需要更长排查窗口时可显式加 `--wait-seconds 240`。
+默认最多等待扩展回传 `180s`；需要更长排查窗口时可显式加 `--wait-seconds 240`。命令默认复用 6 小时内已有的 pending / in-progress / completed / failed 抖音 `bootstrap_profile` 任务，避免反复打开前台抖音 tab 全量拉发布 / 收藏 / 点赞 / 关注；需要重新拉取时可设 `OPENBILICLAW_DY_BOOTSTRAP_DEDUPE_HOURS=0`。
 
 前提：
 
@@ -567,7 +571,7 @@ YouTube 数据拉取
   共生成 72 条事件。
 ```
 
-这条命令只做单源 smoke / 补拉，不会隐式重建画像。profile 已初始化后，daemon 接收新增 partial 事件时会写入 memory 并进入增量画像更新链路。
+这条命令只做单源 smoke / 补拉，不会隐式重建画像。profile 已初始化后，daemon 接收新增 partial 事件时会写入 memory 并进入增量画像更新链路。命令默认复用 6 小时内已有的 YouTube `bootstrap_profile` 任务，避免反复打开前台 YouTube 页面滚动历史 / 订阅 / 点赞；需要重新拉取时可设 `OPENBILICLAW_YT_BOOTSTRAP_DEDUPE_HOURS=0`。
 
 ### `openbiliclaw import-youtube <path>`
 

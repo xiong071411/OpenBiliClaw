@@ -40,7 +40,7 @@ Either command:
 1. Clones the OpenBiliClaw repo (default `~/OpenBiliClaw` on Unix, `%USERPROFILE%\OpenBiliClaw` on Windows; override with the `INSTALL_DIR` env var)
 2. Auto-detects any existing OpenBiliClaw install under the standard candidate paths (`~/workspace/OpenBiliClaw`, `~/OpenBiliClaw`, `~/projects/OpenBiliClaw`, `~/code/OpenBiliClaw` — same set on both platforms, rooted at `$HOME` / `%USERPROFILE%`) and **reuses** its LLM API keys and Bilibili cookie so the user never has to retype them
 3. Installs Python dependencies (`uv sync` preferred, `pip install -e .` fallback)
-4. Starts the backend and runs a health check against `/api/health`
+4. Starts the backend and runs a health check against `/api/health`. Local one-line installs default to `--host 0.0.0.0 --port 8420` so the Mobile Web `/m/` is reachable from phones on the same LAN; the status block's `Health URL` still uses a concrete local URL such as `http://127.0.0.1:8420/api/health` for curl verification
 5. Confirms embedding, Bilibili cookie source, and XHS / Douyin / YouTube opt-in choices with the user when the installer is running interactively
 6. Automatically runs init after credentials and confirmations are complete, then prints a self-contained **status block** at the very end of stdout:
 
@@ -51,7 +51,7 @@ Either command:
 Status:      complete | running_with_missing_secrets | needs_secrets | needs_decisions | error
 Checkout:    <absolute path to the repo>
 Reused from: <path>                 (only present when reuse happened)
-Health URL:  http://host:port/api/health
+Health URL:  http://127.0.0.1:8420/api/health
 Missing:     (none)  |  llm.<provider>.api_key, bilibili.cookie, ...
 
 Next action (required — credentials are missing):
@@ -66,6 +66,7 @@ Next action (required — credentials are missing):
 
 Next action (init has been run automatically):
   - Verify the backend is healthy: curl -sS <Health URL>
+  - Open Mobile Web: click the phone icon in the extension header and scan the QR code; if the backend address is loopback, the extension reads `/api/health.lan_ip` and shows the LAN URL automatically
   - See recommendations:    cd <dir> && uv run openbiliclaw recommend
   - View the soul profile:  cd <dir> && uv run openbiliclaw profile
   - Re-run init manually if needed: cd <dir> && uv run openbiliclaw init
@@ -354,9 +355,9 @@ Once they've picked, only ask the **fields that option actually needs**.
 >   创建一个。月度费用通常在几毛钱以内。」
 
 Run with `--provider deepseek --llm-api-key <KEY>` plus the embedding
-flags from Step 3. DeepSeek has no embeddings endpoint; if the user
-chooses "follow primary" (`--embedding-provider ""`), bootstrap will
-wire local Ollama bge-m3 and pull it in the same run.
+flags from Step 3. DeepSeek has no embeddings endpoint, so recommend
+local Ollama bge-m3 unless the user explicitly wants Gemini / OpenAI
+embedding. `--embedding-provider ""` now means "do not enable embedding".
 
 #### Options 3-6 (OpenAI 官方 / Gemini / Claude / OpenRouter):
 
@@ -368,10 +369,9 @@ Substitute the right vendor name and Key URL:
 - OpenRouter: https://openrouter.ai/keys
 
 Run with `--provider <name> --llm-api-key <KEY>` plus the Step 3
-embedding flags. Don't ask for Base URL. If the user chooses "follow
-primary" for Claude / OpenRouter, bootstrap will wire Ollama bge-m3
-because those backends don't expose embeddings; OpenAI and Gemini use
-their own native embedding endpoints when followed.
+embedding flags. Don't ask for Base URL. Embedding is independent from
+the primary LLM; if the user wants embedding, pass an explicit
+`--embedding-provider` and its model/key fields.
 
 #### Option 3 (Ollama, fully offline / no key):
 
@@ -427,11 +427,9 @@ Tell the user:
 >      —— 需要一个 Gemini API Key(免费档每天 1500 次,日常用足够)
 >      —— 适合追求推荐质量、能去 Google AI Studio 拿 Key 的人
 >
->   3. **跟随你的主 LLM**(最省事,但有取舍)
->      —— OpenAI 主模型 → 用 OpenAI 的 text-embedding-3-small(会消耗 OpenAI 配额)
->      —— Gemini 主模型 → 等同于选项 2
->      —— Claude / DeepSeek / OpenRouter 主模型 → 它们没 embedding 接口,
->         会自动回退到选项 1
+>   3. **暂不启用 embedding**
+>      —— 可以先跳过，推荐仍能跑；语义去重 / 相似度能力会降级
+>      —— 之后可在设置页或 `openbiliclaw setup-embedding` 单独开启
 >
 >   日常使用选项 1 完全够用;如果你已经选了 Gemini 当主 LLM,选项 3 等同于
 >   选项 2,免费额度通常一天用不完。」
@@ -442,14 +440,13 @@ Tell the user:
 |---|---|---|
 | 1 (本地 Ollama, 默认) | `--embedding-provider ollama --embedding-model bge-m3` | bootstrap 会自动装 Ollama + 拉 bge-m3 |
 | 2 (Gemini) | `--embedding-provider gemini --embedding-model gemini-embedding-001 --embedding-api-key <KEY>` | 用户已有 Gemini Key 就用现有的;没有就引导去 https://aistudio.google.com/apikey 拿 |
-| 3 (跟随主 LLM) | `--embedding-provider ""` | 这是“我问过用户,用户选择跟随”的显式记录。bootstrap 在主 LLM 是 Claude/DeepSeek/OpenRouter 时会自动改写为选项 1 等价配置(发 `embedding_auto_ollama` 事件);其它主 LLM 则用各自的 native endpoint |
+| 3 (暂不启用 embedding) | `--embedding-provider ""` | 这是“我问过用户,用户选择不启用 embedding”的显式记录；bootstrap 不会自动改写为其它 provider |
 
 **Special case — Gemini Key reuse**: if the user picks option 2 *and*
-already configured Gemini as their primary LLM (i.e. you ran
-`--provider gemini --llm-api-key sk-...` earlier), don't ask for the
-key again. Just pass `--embedding-provider gemini --embedding-model gemini-embedding-001`
-without `--embedding-api-key`; the registry shares the `[llm.gemini]`
-section.
+already configured Gemini as their primary LLM, you may reuse the same
+key value, but still pass it as `--embedding-api-key <KEY>`. Embedding
+credentials are stored in `[llm.embedding]`, not borrowed from
+`[llm.gemini]`.
 
 **Safety net (no-op for the agent)**: even when the user picks option 3
 or skips entirely, the registry's runtime fallback chain
@@ -525,7 +522,27 @@ uv run openbiliclaw init                                  # local + uv
 and source flags from the user's answers — bootstrap auto-runs
 init once everything's present.
 
-### Step 5 — Source data opt-in
+### Step 5 — Bilibili init signal limits
+
+Before any non-interactive auto-init, confirm:
+
+> 「B 站初始化默认导入最近 300 条观看历史、最多 300 条收藏、最多 300 个关注 UP。
+> 历史保持 300；收藏和关注要改上限吗？直接回车就是 300，填 0 就跳过对应信号。」
+
+Map answers to:
+
+| 项 | 用户回答 | 命令行参数 |
+|---|---|---|
+| 收藏上限 | 回车 / 不确定 | 省略或 `--bilibili-favorite-limit 300` |
+| 收藏上限 | 数字 N | `--bilibili-favorite-limit N` |
+| 关注上限 | 回车 / 不确定 | 省略或 `--bilibili-follow-limit 300` |
+| 关注上限 | 数字 N | `--bilibili-follow-limit N` |
+
+Human-run `install.sh` / `install.ps1` pass `--interactive-confirm`, so
+`agent_bootstrap.py` will ask these two numbers directly and pass them into
+`openbiliclaw init`.
+
+### Step 6 — Source data opt-in
 
 Before any non-interactive auto-init, ask:
 
@@ -611,7 +628,7 @@ python3 scripts/agent_bootstrap.py \
   --no-youtube
 ```
 
-**"我不想想这个,跟随主 LLM" 路径** (选项 3 / 用户跳过)：
+**"暂不启用 embedding" 路径** (选项 3)：
 
 ```bash
 python3 scripts/agent_bootstrap.py \
@@ -623,12 +640,10 @@ python3 scripts/agent_bootstrap.py \
   --no-youtube
 ```
 
-When no `--embedding-*` flag is passed AND the primary is Claude /
-DeepSeek / OpenRouter, the bootstrap auto-wires `[llm.embedding]
-provider=ollama model=bge-m3` and emits `embedding_auto_ollama`. For
-OpenAI / Gemini / Ollama primaries, the embedding follows that
-provider's native endpoint. Either way the user has a working
-embedding service.
+When no `--embedding-*` flag is passed, bootstrap leaves embedding as a
+pending decision. When `--embedding-provider ""` is passed, bootstrap
+records the explicit choice to leave embedding disabled. It does not
+follow or auto-rewrite based on the primary LLM.
 
 **自建网关路径** (Advanced — only when user explicitly mentions a gateway)：
 
@@ -678,7 +693,12 @@ also emits `BOOTSTRAP_STATUS` events with `status=progress` and
 `4/4`, discovery refill progress). AI agents must relay those progress
 events to the user instead of staying silent until `init_complete`.
 
-### Init 期间会问用户:小红书 / 抖音 / YouTube 数据是否加入
+### Init 期间会问用户:B 站上限与小红书 / 抖音 / YouTube 数据是否加入
+
+`openbiliclaw init` 在拉 B 站数据前会确认 B 站收藏 / 关注初始化上限：
+默认收藏最多 300 条、关注 UP 最多 300 人；用户直接回车即接受默认，输入
+自定义数字会透传到 `--bilibili-favorite-limit` / `--bilibili-follow-limit`，
+输入 `0` 可跳过对应信号。
 
 `openbiliclaw init` 在拉 B 站数据**之前**会弹一个交互式问题:是否把
 小红书的收藏 / 点赞混进画像。三种状态:
@@ -770,8 +790,8 @@ errors, or a no-API-key setup. Steps:
    `curl -fsSL https://ollama.com/install.sh | sh && ollama serve &`.
 2. User runs `cd <INSTALL_DIR> && uv run openbiliclaw setup-embedding`.
 3. The wizard probes `localhost:11434`, pulls `bge-m3` if missing, and
-   writes both `[llm.embedding]` and `[llm.ollama] base_url` to
-   `config.toml`. Restart the backend after this.
+   writes `[llm.embedding] provider/model/base_url` to `config.toml`.
+   Restart the backend after this.
 
 Do NOT run these steps for the user automatically — Ollama install is a
 system-level package the user must consent to.

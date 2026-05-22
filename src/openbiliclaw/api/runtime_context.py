@@ -52,6 +52,7 @@ def build_youtube_discovery_strategies(
     llm_service: Any,
     memory: Any,
     concurrency: Any,
+    strategy_unit_budget: dict[str, int] | None = None,
 ) -> list[Any]:
     """Build YouTube discovery strategies from `[sources.youtube]` config."""
 
@@ -62,27 +63,142 @@ def build_youtube_discovery_strategies(
     )
 
     yt_cfg = getattr(getattr(config, "sources", None), "youtube", None)
+    budgets = strategy_unit_budget or {}
+    search_budget = int(budgets.get("yt_search", getattr(yt_cfg, "daily_search_budget", 6)))
+    trending_budget = int(budgets.get("yt_trending", getattr(yt_cfg, "daily_trending_budget", 50)))
+    channel_budget = int(budgets.get("yt_channel", getattr(yt_cfg, "daily_channel_budget", 10)))
     return [
         YoutubeSearchStrategy(
             client=client,
             llm_service=llm_service,
             concurrency=concurrency,
-            queries_per_run=int(getattr(yt_cfg, "daily_search_budget", 6)),
+            queries_per_run=max(0, search_budget),
         ),
         YoutubeTrendingStrategy(
             client=client,
             llm_service=llm_service,
             concurrency=concurrency,
-            fetch_limit=int(getattr(yt_cfg, "daily_trending_budget", 50)),
+            fetch_limit=max(0, trending_budget),
         ),
         YoutubeChannelStrategy(
             client=client,
             llm_service=llm_service,
             memory=memory,
             concurrency=concurrency,
-            max_channels=int(getattr(yt_cfg, "daily_channel_budget", 10)),
+            max_channels=max(0, channel_budget),
         ),
     ]
+
+
+def _youtube_strategy_units_used(strategy: Any, *, fallback: int) -> int:
+    """Return the execution units consumed by one YouTube strategy run."""
+    name = str(getattr(strategy, "name", ""))
+    intermediates = getattr(strategy, "last_intermediates", {}) or {}
+    if name == "yt_search":
+        queries = intermediates.get("queries")
+        if isinstance(queries, list):
+            return len(queries)
+    if name == "yt_trending":
+        fetched = intermediates.get("fetched")
+        if isinstance(fetched, int):
+            return fetched
+    if name == "yt_channel":
+        channel_ids = intermediates.get("channel_ids")
+        if isinstance(channel_ids, list):
+            return len(channel_ids)
+    return max(0, int(fallback))
+
+
+def _build_yt_scraper_client() -> Any:
+    from openbiliclaw.youtube.client import YtScraperClient
+
+    return YtScraperClient()
+
+
+def build_youtube_discovery_producer(
+    *,
+    config: Any,
+    database: Any,
+    soul_engine: Any,
+    discovery_engine: Any,
+    llm_service: Any,
+    memory: Any,
+    concurrency: Any,
+) -> Any | None:
+    """Build the runtime YouTube producer if YouTube discovery is enabled."""
+    yt_cfg = getattr(getattr(config, "sources", None), "youtube", None)
+    if yt_cfg is None or not bool(getattr(yt_cfg, "enabled", False)):
+        return None
+    scheduler = getattr(config, "scheduler", None)
+    if not bool(getattr(scheduler, "enabled", True)):
+        return None
+    if not hasattr(database, "conn"):
+        logger.info("youtube producer disabled: database does not expose sqlite connection")
+        return None
+
+    from openbiliclaw.runtime.youtube_producer import (
+        YoutubeDiscoveryProducer,
+        YoutubeStrategyRunResult,
+    )
+
+    try:
+        yt_client = _build_yt_scraper_client()
+    except ImportError as exc:
+        logger.info("youtube producer disabled: YouTube dependencies unavailable: %s", exc)
+        return None
+
+    async def _discover(
+        profile: Any,
+        *,
+        strategy: str,
+        unit_budget: int,
+        result_limit: int,
+    ) -> YoutubeStrategyRunResult:
+        strategies = build_youtube_discovery_strategies(
+            config=config,
+            client=yt_client,
+            llm_service=llm_service,
+            memory=memory,
+            concurrency=concurrency,
+            strategy_unit_budget={strategy: unit_budget},
+        )
+        selected = [item for item in strategies if item.name == strategy]
+        if not selected:
+            return YoutubeStrategyRunResult(items=[], units_used=0, source_counts={})
+
+        selected_strategy = selected[0]
+        discovery_engine.register_strategy(selected_strategy)
+        raw_items = await discovery_engine.discover(
+            profile,
+            strategies=[strategy],
+            limit=max(1, int(result_limit)),
+        )
+        items = [
+            item
+            for item in raw_items
+            if str(getattr(item, "source_platform", "")) == "youtube"
+            or str(getattr(item, "source_strategy", "")).startswith("yt_")
+        ]
+        units_used = _youtube_strategy_units_used(
+            selected_strategy,
+            fallback=max(0, int(unit_budget)),
+        )
+        return YoutubeStrategyRunResult(
+            items=items,
+            units_used=units_used,
+            source_counts={strategy: len(items)},
+        )
+
+    return YoutubeDiscoveryProducer(
+        database=database,
+        soul_engine=soul_engine,
+        discover=_discover,
+        enabled=True,
+        min_interval_minutes=int(getattr(yt_cfg, "min_interval_minutes", 60)),
+        daily_search_budget=int(getattr(yt_cfg, "daily_search_budget", 6)),
+        daily_trending_budget=int(getattr(yt_cfg, "daily_trending_budget", 50)),
+        daily_channel_budget=int(getattr(yt_cfg, "daily_channel_budget", 10)),
+    )
 
 
 @dataclass
@@ -223,6 +339,26 @@ class RuntimeContext:
             usage_recorder=new_usage_recorder,
             satisfaction_filter_enabled=satisfaction_filter_enabled,
             module_overrides=new_module_overrides,
+            speculation_interval_minutes=int(
+                getattr(new_config.scheduler, "speculation_interval_minutes", 10)
+            ),
+            speculation_ttl_days=int(getattr(new_config.scheduler, "speculation_ttl_days", 3)),
+            speculation_cooldown_days=int(
+                getattr(new_config.scheduler, "speculation_cooldown_days", 7)
+            ),
+            speculation_confirmation_threshold=int(
+                getattr(new_config.scheduler, "speculation_confirmation_threshold", 3)
+            ),
+            speculation_max_active=int(getattr(new_config.scheduler, "speculation_max_active", 5)),
+            speculation_max_primary_interests=int(
+                getattr(new_config.scheduler, "speculation_max_primary_interests", 15)
+            ),
+            speculation_max_secondary_interests=int(
+                getattr(new_config.scheduler, "speculation_max_secondary_interests", 60)
+            ),
+            speculator_idle_interval_minutes=int(
+                getattr(new_config.scheduler, "speculator_idle_interval_minutes", 30)
+            ),
         )
 
         # 4. Embedding service
@@ -306,40 +442,17 @@ class RuntimeContext:
         xiaohongshu_adapter = XiaohongshuAdapter()
         new_discovery_engine.register_adapter(xiaohongshu_adapter)
 
-        # 7c. YouTube discovery strategies — only registered when the user
-        # has YouTube follow events in the DB (i.e. has run init --yes-youtube
-        # or fetch-youtube at least once).  Registration is intentionally
-        # gated so the strategies don't fire for users who never set up YouTube.
-        try:
-            from openbiliclaw.youtube.client import YtScraperClient
-
-            yt_client = YtScraperClient()
-            youtube_strategies = build_youtube_discovery_strategies(
-                config=new_config,
-                client=yt_client,
-                llm_service=new_llm_service,
-                memory=cast("Any", self.memory_manager),
-                concurrency=concurrency,
-            )
-            for strategy in youtube_strategies:
-                new_discovery_engine.register_strategy(strategy)
-            logger.info("YouTube discovery strategies registered")
-        except ImportError as _yt_import_err:
-            logger.info(
-                "YouTube discovery skipped (scrapetube/yt-dlp not installed): %s",
-                _yt_import_err,
-            )
-
         # 8. Continuous refresh controller
         new_xhs_producer: Any = None
         new_douyin_producer: Any = None
+        new_youtube_producer: Any = None
         if hasattr(self.database, "conn"):
             from openbiliclaw.runtime.xhs_producer import XhsTaskProducer
             from openbiliclaw.sources.xhs_tasks import XhsTaskQueue
 
             xhs_cfg = getattr(new_config.sources, "xiaohongshu", None)
             sched_cfg = getattr(new_config, "scheduler", None)
-            xhs_enabled = bool(getattr(xhs_cfg, "enabled", True)) and bool(
+            xhs_enabled = bool(getattr(xhs_cfg, "enabled", False)) and bool(
                 getattr(sched_cfg, "enabled", True)
             )
             new_xhs_producer = XhsTaskProducer(
@@ -357,6 +470,15 @@ class RuntimeContext:
                 soul_engine=new_soul_engine,
                 discovery_engine=new_discovery_engine,
             )
+            new_youtube_producer = build_youtube_discovery_producer(
+                config=new_config,
+                database=self.database,
+                soul_engine=new_soul_engine,
+                discovery_engine=new_discovery_engine,
+                llm_service=new_llm_service,
+                memory=cast("Any", self.memory_manager),
+                concurrency=concurrency,
+            )
 
         new_runtime_controller = ContinuousRefreshController(
             memory_manager=self.memory_manager,
@@ -366,9 +488,20 @@ class RuntimeContext:
             recommendation_engine=new_recommendation_engine,
             pool_target_count=new_config.scheduler.pool_target_count,
             pool_source_shares=_pool_source_shares_from_config(new_config),
+            signal_event_threshold=int(getattr(new_config.scheduler, "signal_event_threshold", 6)),
+            trending_refresh_hours=int(getattr(new_config.scheduler, "trending_refresh_hours", 3)),
+            explore_refresh_hours=int(getattr(new_config.scheduler, "explore_refresh_hours", 12)),
+            check_interval_seconds=int(
+                getattr(new_config.scheduler, "refresh_check_interval_seconds", 60)
+            ),
+            proactive_push_interval_seconds=int(
+                getattr(new_config.scheduler, "proactive_push_interval_seconds", 120)
+            ),
+            discovery_limit=int(getattr(new_config.scheduler, "discovery_limit", 30)),
             event_hub=self.event_hub,
             xhs_producer=new_xhs_producer,
             douyin_producer=new_douyin_producer,
+            youtube_producer=new_youtube_producer,
             scheduler_config=new_config.scheduler,
             presence=self.presence,
             task_registry=self.task_registry,

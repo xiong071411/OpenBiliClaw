@@ -43,6 +43,8 @@ def build_llm_registry(
     """Build an LLM registry from application config."""
     overrides = provider_overrides or {}
     registry = LLMRegistry()
+    registry.fallback_enabled = bool(getattr(config.llm, "fallback_enabled", False))
+    registry.fallback_provider = str(getattr(config.llm, "fallback_provider", "")).strip().lower()
 
     provider_specs = [
         ("openai", _maybe_openai_provider(config, overrides)),
@@ -125,19 +127,11 @@ def build_embedding_service(
     LLMRegistry. The ``registry`` parameter is preserved only so existing
     call sites don't need to change; it is no longer consulted.
 
-    Resolution rules per candidate provider:
-      1. If ``[llm.embedding].api_key`` (or ``base_url``) is set AND the
-         candidate equals the requested provider, those credentials are
-         used directly.
-      2. Otherwise we fall back to the chat-side ``[llm.<provider>]``
-         block. When this back-compat path fires for a provider the user
-         explicitly chose for embedding, a one-time WARNING is emitted —
-         the path will be removed in a future release.
-
-    When the requested provider has no embeddings endpoint (Claude,
-    DeepSeek, OpenRouter) or its credentials are missing, we walk a
-    fallback chain ``ollama → gemini → openai`` and use the first one
-    that can be constructed.
+    Empty ``[llm.embedding].provider`` disables embedding; it no longer
+    follows ``[llm].default_provider``. Provider fallback is opt-in via
+    ``[llm.embedding].fallback_provider`` and only tries that one
+    explicit backup provider. ``fallback_enabled`` remains as a legacy
+    compatibility flag for borrowing chat-side credentials.
     """
     try:
         from typing import cast
@@ -145,15 +139,16 @@ def build_embedding_service(
         from openbiliclaw.llm.embedding import EmbeddingCache, EmbeddingService, SupportsEmbed
 
         emb_cfg = config.llm.embedding
-        requested_name = (
-            emb_cfg.provider.strip().lower() or config.llm.default_provider.strip().lower()
-        )
+        requested_name = emb_cfg.provider.strip().lower()
+        fallback_provider = str(getattr(emb_cfg, "fallback_provider", "")).strip().lower()
 
-        # Build candidate ordering: requested first, then local-first
-        # ollama → gemini → openai. Skip providers known to lack an
-        # embeddings endpoint — they would 404 at runtime.
+        # Build candidate ordering: requested first, then optional
+        # explicit fallback provider. Empty provider no longer follows
+        # [llm].default_provider; embedding is an independent config
+        # surface.
         fallback_order: list[str] = []
-        for name in (requested_name, "ollama", "gemini", "openai"):
+        fallback_candidates: tuple[str, ...] = ((fallback_provider,) if fallback_provider else ())
+        for name in ((requested_name,) if requested_name else ()) + fallback_candidates:
             if name in _EMBEDDING_CAPABLE_PROVIDERS and name not in fallback_order:
                 fallback_order.append(name)
 
@@ -169,21 +164,23 @@ def build_embedding_service(
             break
 
         if chosen_provider is None:
+            requested_label = requested_name or "(not configured)"
             logger.warning(
                 "No embedding-capable provider available (requested=%r). "
                 "Embedding service disabled — recommendation diversity and "
                 "deduplication will degrade. Run 'openbiliclaw setup-embedding' "
                 "to install local Ollama bge-m3, or configure a Gemini API key.",
-                requested_name,
+                requested_label,
             )
             return None
 
         if chosen_name != requested_name:
+            requested_label = requested_name or "(not configured)"
             logger.warning(
                 "Embedding provider %r unavailable; falling back to %r. "
                 "Set [llm.embedding] provider=%r explicitly in config.toml "
                 "to silence this, or run 'openbiliclaw setup-embedding'.",
-                requested_name,
+                requested_label,
                 chosen_name,
                 chosen_name,
             )
@@ -220,6 +217,7 @@ def _build_dedicated_embedding_provider(
     """
     emb_api_key = emb_cfg.api_key.strip()
     emb_base_url = emb_cfg.base_url.strip()
+    fallback_enabled = bool(getattr(emb_cfg, "fallback_enabled", False))
 
     # First-class path: candidate matches what the user requested AND
     # they supplied credentials in [llm.embedding].
@@ -228,12 +226,9 @@ def _build_dedicated_embedding_provider(
     if use_embedding_creds:
         api_key = emb_api_key
         base_url = emb_base_url
-    else:
-        # Back-compat: borrow from [llm.<candidate>]. Triggers a one-time
-        # WARNING only when the user explicitly chose this provider for
-        # embedding and remote credentials were actually borrowed
-        # (otherwise it's just normal fallback resolution). Ollama is
-        # local and credentialless, so this warning never applies there.
+    elif fallback_enabled:
+        # Optional back-compat path: borrow from [llm.<candidate>] only
+        # when embedding fallback is explicitly enabled.
         chat_cfg = getattr(config.llm, candidate, None)
         api_key = (getattr(chat_cfg, "api_key", "") if chat_cfg is not None else "").strip()
         base_url = (getattr(chat_cfg, "base_url", "") if chat_cfg is not None else "").strip()
@@ -247,6 +242,9 @@ def _build_dedicated_embedding_provider(
             and borrowed_chat_credentials
         ):
             _emit_embedding_compat_warning(candidate)
+    else:
+        api_key = ""
+        base_url = ""
 
     # Effective model: honour explicit emb_cfg.model only when we're
     # building the requested provider — fallback paths must use the
