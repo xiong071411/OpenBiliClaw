@@ -22,6 +22,10 @@ let $root = null;
 let cognitionHistory = null; // { items, hasMore, nextCursor, loadingMore }
 let expandedCognitionIdx = null;
 let loading = false;
+const PROFILE_REFRESH_DEBOUNCE_MS = 1000;
+let profileRefreshTimer = null;
+let profileRefreshInFlight = false;
+let profileRefreshPending = false;
 
 // ── Escape helper ────────────────────────────────────────────
 function esc(s) {
@@ -378,6 +382,33 @@ async function loadData() {
   render();
 }
 
+function scheduleProfileRefresh({ delayMs = PROFILE_REFRESH_DEBOUNCE_MS } = {}) {
+  if (profileRefreshTimer !== null) {
+    clearTimeout(profileRefreshTimer);
+  }
+  profileRefreshTimer = setTimeout(() => {
+    profileRefreshTimer = null;
+    void runScheduledProfileRefresh();
+  }, Math.max(0, delayMs));
+}
+
+async function runScheduledProfileRefresh() {
+  if (profileRefreshInFlight) {
+    profileRefreshPending = true;
+    return;
+  }
+  profileRefreshInFlight = true;
+  try {
+    await loadData();
+  } finally {
+    profileRefreshInFlight = false;
+    if (profileRefreshPending) {
+      profileRefreshPending = false;
+      scheduleProfileRefresh();
+    }
+  }
+}
+
 async function loadMoreCognition() {
   if (!cognitionHistory?.nextCursor || cognitionHistory.loadingMore) return;
   cognitionHistory.loadingMore = true;
@@ -402,6 +433,6 @@ export function initProfileView(root) {
 export function onStreamEvent(payload) {
   const type = payload?.type || payload?.event;
   if (type === "profile_updated") {
-    loadData();
+    scheduleProfileRefresh();
   }
 }

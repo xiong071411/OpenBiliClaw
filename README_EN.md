@@ -17,11 +17,15 @@
 
 ---
 
-## 📌 v0.3.89 / extension v0.3.43 Highlights (2026-05-22)
+## 📌 v0.3.89 / extension v0.3.44 Highlights (2026-05-22)
 
 - **🔀 Fallback is now an explicit backup provider** — the extension settings page has separate backup-provider dropdowns for LLM and embedding, both empty by default; fallback only runs when one is selected.
 - **🧯 429 / cooldown no longer fans out** — discovery eval batches and recommendation copy batches stop retrying item-by-item when a provider is rate-limited, avoiding one 429 turning into a full batch of tracebacks.
 - **🧵 Source task claiming is steadier** — Xiaohongshu, Douyin, and YouTube `/next-task` claim paths now use short-lived SQLite connections to avoid nested transaction errors under concurrent extension polling.
+- **💬 Delight chat stays in context** — Mobile Web and the extension now expand "Chat" inside the delight card instead of switching to the main chat tab.
+- **🧵 Multi-turn history stays scoped** — each delight keeps its own chat bubbles, so candidate navigation, side-panel reloads, and pending replies do not overwrite earlier turns.
+- **🔁 Durable chat alignment** — delight inline chat uses `/api/chat/turns` with `scope=delight`, and pending / completed / failed states update in place.
+- **📱 No iOS focus zoom** — the inline composer keeps a 16px textarea font size to avoid Safari auto-zoom.
 - **📉 Backend logs are quieter** — `httpx` / `httpcore` file logs default to WARNING to reduce model-service request noise.
 - **🎧 Local MusicMark integration** — this integration branch adds `[sources.musicmark]`; it syncs only aggregated listening summaries into the profile and shows sync status in Mobile Web.
 
@@ -57,6 +61,32 @@ All data lives in a single SQLite file on your disk. LLM calls use your own API 
 > | Data ownership | Platform-owned | Usually cloud | 100% local |
 > | Explains why | "Guess you'll like" | None | Friend-like explanations |
 > | Customizable | No | Low | Swap LLMs / edit profile / write Skills |
+
+## 🖥️ Desktop Web Preview
+
+After starting the backend, open `http://127.0.0.1:8420/web` (or just `http://127.0.0.1:8420/`, which redirects automatically) for a full-screen recommendation dashboard.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/desktop-home.png" width="480" /><br/>
+      <b>Desktop Home</b><br/>
+      <sub>Runtime dashboard · delight carousel · profile sidebar</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/desktop-cards.png" width="480" /><br/>
+      <b>Horizontal Dual-Card Feed</b><br/>
+      <sub>Cover left + reason right · like / skip / chat</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="docs/images/desktop-profile.png" width="480" /><br/>
+      <b>Profile Detail Panel</b><br/>
+      <sub>Core traits · MBTI · interest tree · speculative interests · cognitive style</sub>
+    </td>
+  </tr>
+</table>
 
 ## 📱 Mobile Web Preview
 
@@ -138,17 +168,16 @@ If the backend runs on another machine in your LAN, set the extension's "Backend
 
 At minimum, log in to [Bilibili](https://www.bilibili.com). OpenBiliClaw uses it to build the first profile and recommendations. If you want Xiaohongshu, Douyin, or YouTube, also log in to [Xiaohongshu](https://www.xiaohongshu.com) / [Douyin](https://www.douyin.com) / [YouTube](https://www.youtube.com) in the same browser where the extension is installed.
 
-### 4. Open Mobile Web on your phone
+### 4. Open Desktop or Mobile Web
 
-Mobile Web is now one of the primary ways to use OpenBiliClaw. It is for checking recommendations, reading your profile, chatting with the agent, and handling interest probes or delight candidates from a phone. It only calls your local backend API; it does not sync cookies, crawl pages, or log in to platforms.
-
-The backend listens on `0.0.0.0` (all interfaces) by default, so phones on the same LAN can reach it immediately. Just start normally:
+The backend serves both a desktop and a mobile Web UI. Neither syncs cookies or crawls pages — they only call your local API.
 
 ```bash
 openbiliclaw start
 ```
 
-Then click the phone icon in the extension header and scan the QR code — the extension auto-detects your computer's LAN IP, so the QR code just works. You can also type `http://<your-LAN-IP>:8420/m/` in your phone's browser manually.
+- **Desktop**: open `http://127.0.0.1:8420/web` (or `http://127.0.0.1:8420/`, auto-redirects). Two-column editorial layout with recommendations, profile, chat, messages, and settings all on one page.
+- **Mobile**: click the phone icon in the extension header to scan the QR code, or type `http://<your-LAN-IP>:8420/m/` manually. Best for browsing recommendations, profile, and chat on your phone.
 
 > During `openbiliclaw init`, you'll be asked whether to allow LAN access (default Y). If you chose N or want to change it later, edit `[api].host` in `config.toml` (`0.0.0.0` = LAN-reachable, `127.0.0.1` = local only).
 
@@ -480,7 +509,7 @@ OpenBiliClaw/
 
 ## 📜 Release History
 
-Latest: **v0.3.89 / extension v0.3.43: explicit fallback and rate-limit noise reduction release (2026-05-22)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags and do not publish backend desktop packages.
+Latest: **v0.3.89 / extension v0.3.44: inline multi-turn delight chat (2026-05-22)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags and do not publish backend desktop packages.
 
 ## 🗺️ Roadmap
 

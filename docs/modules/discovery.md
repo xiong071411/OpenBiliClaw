@@ -93,7 +93,7 @@
    - **字段归一**：例如都整理成 `bvid / title / up_name / duration / description / source_strategy / topic_key / style_key`
    - **相关性评估**：`TrendingStrategy`、`RelatedChainStrategy`、`ExploreStrategy` 会调用 `ContentDiscoveryEngine.evaluate_content()`，把内容标题、简介、来源和画像摘要一起交给 LLM，得到 `relevance_score` 和 `relevance_reason`
 
-   当前四个策略都会走 LLM 评估：`SearchStrategy` 在本地启发式打分后对候选统一调用 `evaluate_content()`，`TrendingStrategy`、`RelatedChainStrategy`、`ExploreStrategy` 也各自在 discover 流程中调用 `evaluate_content()`。只有通过 `score_threshold`（默认 0.65）的内容才会被保留。
+   当前四个策略都会走 LLM 评估：`SearchStrategy` 在本地启发式打分后对候选统一调用 `evaluate_content()`，`TrendingStrategy`、`RelatedChainStrategy`、`ExploreStrategy` 也各自在 discover 流程中调用 `evaluate_content()`。进入批量 LLM 评估前，`ContentDiscoveryEngine.evaluate_content_batch()` 会读取 `Database.get_recent_viewed_content_keys()`，用 `source_platform:content_id` 判断最近看过的 B 站 / 小红书 / 抖音 / YouTube 候选；命中项直接记为 0 分并从 prompt 中剔除，避免为已看内容消耗 discovery token。老 BVID 也保留 raw key 兼容旧数据。只有通过 `score_threshold`（默认 0.65）的内容才会被保留。
 
    之后引擎会合并所有策略返回的列表，并通过 `_merge_duplicates()` 按跨源内容身份去重：B 站内容使用 `bvid`，YouTube / 小红书 / 抖音等多源内容使用 `source_platform + content_id`，缺失时再退到 URL / 标题。这样同一个视频被多个策略同时找到时，会保留 `relevance_score` 更高的那个版本，同时不会把多个非 B 站候选因为空 `bvid` 误合并。
 
@@ -138,7 +138,7 @@
    - `style_key`
    - `source_strategy`
 
-   这样推荐层在后续 `reshuffle`、`append`、常规推荐排序时，就不必重新跑一遍 discovery，也能直接利用这些结构化信号做多样性控制和快速选片。
+   最近看过的内容即使被上游策略再次找到，也会用 `source_platform:content_id` 在 `_cache_results()` 写库前跳过，不再进入 `content_cache` 候选池。这样推荐层在后续 `reshuffle`、`append`、常规推荐排序时，就不必重新跑一遍 discovery，也能直接利用这些结构化信号做多样性控制和快速选片。
 
    换句话说，discovery 的产出不是“一次性的返回值”，而是一份会进入候选池、影响后续多轮推荐的中间资产。
 
@@ -537,6 +537,7 @@ discovery 不是“把整个找片过程都交给 LLM”。当前实现里，LLM
 | v0.3.74 eval-batch JSON 容错统一 | ✅ | `_evaluate_batch` 改用 `llm.json_utils.extract_llm_json_list()`，在原 fenced / echo / JSONL 基础上统一兼容 `results/items/data/output/scores/evaluations` wrapper、MiMo malformed `{ [ ... ] }` 数组包裹和 schema echo 后最终结果；解析失败仍按原有降级路径处理，不把示例 JSON 当作真实评分 |
 | v0.3.81 eval-batch 按内容 ID 绑定 | ✅ | batch 内容评估 prompt 会携带 `bvid/content_id`，解析时优先按返回 ID 写回 `score/reason/topic/style/franchise`。provider 乱序或漏项时，不再把后一条候选的 `relevance_reason` 写到前一条；无 ID 且数量不完整时降级逐条评估 |
 | v0.3.x eval-batch 限流保护 | ✅ | batch LLM 调用若失败原因为 provider rate limit / cooldown / quota，不再降级到逐条 `evaluate_content()`；本批候选返回 0 分并等待下一轮补货重试，避免一次 Gemini 429 放大成整批 traceback |
+| B 站 search 风控冷却 | ✅ | `BilibiliAPIClient.search()` 连续 `v_voucher` 重试耗尽或 412 后会设置共享 cooldown；Search / Explore / RelatedChain 的搜索路径在冷却期直接跳过，不再继续生成 query/domain 或逐 query 撞风控 |
 | M126 explore 高风险子簇压缩 | ✅ | refresh 结束后会温和压一轮 `explore` 内部的高风险相邻簇，例如制造 / 工艺 / 材料、博弈 / 桌游 / 机制，避免单簇继续堆满 fresh pool |
 | v0.3.0 trending 按 rid 交错 | ✅ | `TrendingStrategy` 拉 5 个分区排行榜后做 round-robin 交错再送 LLM 评估，避免下游 30 条 hard-cap 把 rid=0/36 的顶部全吃掉 |
 | v0.3.0 explore 按 domain 交错 | ✅ | `ExploreStrategy` 同模式：按 `domain_label` round-robin 后再送评估 |
@@ -596,6 +597,7 @@ engine.register_strategy(
     SearchStrategy(
         llm_service=service,
         bilibili_client=bilibili_client,
+        database=db,
     )
 )
 
@@ -618,6 +620,7 @@ assert 0.0 <= score <= 1.0
 - batch 评估结果解析会优先选择包含 `score` 的结果数组或 object 序列；如果 provider 回显输入 JSON、包 Markdown fence、或返回 NDJSON，仍按一次 batch 处理，不再拆成 N 次单条评估
 - batch prompt 和响应都带 `bvid/content_id`；只要响应里有可识别 ID，引擎会按 ID 而不是数组下标写回评分和理由。没有 ID 且结果数量不完整时会回退到单条评估，避免 LLM 漏项导致后续候选整体错位
 - 如果 batch 调用失败被识别为 LLM provider 限流或 cooldown，本轮不会再触发逐条 fallback；这些候选按 0 分处理，下一轮 refresh 在 provider 恢复后重新发现 / 评估
+- `SearchStrategy` / `TrendingStrategy` / `RelatedChainStrategy` / `ExploreStrategy`、YouTube 三策略和 `DouyinDirectStrategy` 在内部临时构造 evaluator 时都会透传 `database`。因此 CLI、daemon runtime、YouTube producer、Douyin producer 和 OpenClaw bootstrap 路径都能读取同一份近期 negative exemplars，避免只有外层 engine 能看到短期负反馈样本。
 - 排序口径优先 `candidate_tier`，再看 `relevance_score`、`last_scored_at`、`view_count`
 - 最终结果会把 `relevance_score`、`relevance_reason`、`candidate_tier` 一并写入 `content_cache`
 
@@ -646,6 +649,7 @@ async with DouyinDirectClient(cookie=cookie) as direct_client:
     service = DouyinDiscoveryService(
         client=client,
         discovery_engine=engine,  # 传入时会注册 douyin_direct 并写 content_cache
+        database=database,        # 可选；未传时会从 discovery_engine._database 兜底
     )
     result = await service.discover(
         profile,
@@ -683,8 +687,8 @@ from openbiliclaw.discovery.pool_snapshot import (
 
 snapshot = build_pool_distribution_snapshot(
     database,
-    pool_target_count=600,
-    source_targets={"bilibili": 480, "xiaohongshu": 60, "douyin": 60},
+    pool_target_count=300,
+    source_targets={"bilibili": 240, "xiaohongshu": 30, "douyin": 30},
 )
 hints = snapshot.to_prompt_hints()
 ```
@@ -692,7 +696,7 @@ hints = snapshot.to_prompt_hints()
 行为说明：
 
 - `PoolDistributionSnapshot` 是冻结 dataclass，记录 `pool_target_count`、`pool_available_count`、各平台族目标数量 / 当前数量 / 缺口，以及已饱和的 `topic_group`、`style_key`、`franchise_key`。
-- 默认饱和阈值按池目标数换算：topic 为 `max(8, pool_target_count // 20)`，style 为 `max(12, pool_target_count // 8)`，franchise 固定为 10；以 `pool_target_count=600` 为例，topic 30 条、style 75 条、franchise 10 条即进入软避让。
+- 默认饱和阈值按池目标数换算：topic 为 `max(8, pool_target_count // 20)`，style 为 `max(12, pool_target_count // 8)`，franchise 固定为 10；以默认 `pool_target_count=300` 为例，topic 15 条、style 37 条、franchise 10 条即进入软避让。
 - `source_deficits` 只表示平台 / 来源族缺口，例如 `bilibili`、`xiaohongshu`、`douyin`、`youtube` 距离目标配比还差多少；它和内容轴分开处理，不会被解释成“应该搜索某个平台名”。
 - `to_prompt_hints()` 输出面向后续 prompt 的轻量 dict：`avoid_topics`、`avoid_styles`、`avoid_franchises`、`prefer_axes` 和 `source_deficits`。其中 `avoid_*`、`prefer_axes` 都是软信号，只影响 query 生成和引擎层软重排，不是硬过滤条件。
 - 当前 runtime 构建的 snapshot 不会把平台缺口自动合成内容 `prefer_axes`；`undercovered_axes` / `prefer_axes` 保留给手动传入或未来更细的内容轴缺口判断。
@@ -732,6 +736,7 @@ distribution_counts = database.get_pool_distribution_counts()
 - 如果池子已满但 `xiaohongshu` 或 `douyin` 低于配额，`reactivate_under_quota_pool_sources()` 会优先从 `pool_status='suppressed'` 且可打开的高分小平台候选中复活一批；如果某个平台族超过配额，`trim_pool_source_overflow()` 会先把该族压回目标内，即使总池子还没有达到 `pool_target_count`。
 - `trim_pool_to_target_count()` 继续负责总量硬上限：单轮 discovery 超过总池子目标时，会在平台配额保护后把总量裁回 `pool_target_count`。
 - B 站补货 limit 使用 `bilibili` 平台自身缺口，而不是“总池子缺口”；例如总池子缺 57 条但 B 站只缺 5 条时，本轮 B 站 discovery 总目标只请求 5 条，并分摊为 `search=2, related_chain=1, trending=1, explore=1`，避免四个策略各自按 5 条去过采样和 LLM 评估。
+- 如果 B 站 search 已进入 `v_voucher` / `412` cooldown，本轮 Search / Explore / RelatedChain 内部的搜索分支会直接跳过；Trending 和 RelatedChain 的相关推荐 API 仍可继续提供候选，不会因为 search 风控把整轮 B 站 discovery 卡死。
 - 手动 refresh 也走同一套平台缺口计划：如果 B 站已经达到平台配额，而缺口属于小红书或抖音，手动刷新不会再强行跑 B 站 discovery 后又被 source cap 立刻 suppressed。
 - 小红书 producer 会把小红书平台缺口传给关键词生成：只缺 2 条时只生成 2 个搜索关键词，不再固定生成 5 个关键词再让插件慢慢消化。
 - 小红书候选必须带可打开的 `xsec_token` URL 才计入可用池子；裸 URL 仍不会参与候选池计数或复活。
@@ -768,6 +773,7 @@ queries = strategy.last_intermediates.get("queries", [])
 - LLM 返回坏 JSON 或空结果时，回退到本地兴趣标签 query
 - 正常模式默认抓每个 query 的第一页；backfill 变体会放大 query 数和页数
 - B 站搜索会使用独立 API client 执行，避免和其他策略共享同一请求 session；如果运行时存在有效 B 站 Cookie，独立 client 会继承该 Cookie，因为当前匿名 WBI search 容易直接返回 `v_voucher` 挑战而不给 `result`
+- 如果进程级 B 站 search cooldown 仍在生效，策略会在 LLM query 生成前返回空结果，并把 `last_intermediates.skipped` 标为 `search_cooldown`，避免冷却期继续消耗 LLM token
 - 对多个 query 的搜索结果按 `bvid` 去重
 - 将结果映射为 `DiscoveredContent`
 - 高权重兴趣如果同时命中 query、标题或简介，会拿到更高的起始锚定分，避免核心兴趣搜索长期被宽泛 `explore` 候选压住

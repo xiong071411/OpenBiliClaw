@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -46,11 +47,22 @@ class OpenClawAdapterServices:
     account_sync_service: AccountSyncService | Any
 
 
+def _supports_keyword(factory: object, keyword: str) -> bool:
+    try:
+        parameters = inspect.signature(factory).parameters
+    except (TypeError, ValueError):
+        return True
+    return keyword in parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+
+
 def build_openclaw_adapter_services() -> OpenClawAdapterServices:
     """Build the shared service bundle for the OpenClaw adapter."""
     config = load_config()
     llm_registry = build_llm_registry(config)
     module_overrides = module_overrides_from_config(config)
+    llm_concurrency = int(getattr(getattr(config, "llm", None), "concurrency", 3))
 
     database = Database(config.data_path / "openbiliclaw.db")
     database.initialize()
@@ -62,6 +74,7 @@ def build_openclaw_adapter_services() -> OpenClawAdapterServices:
         llm=llm_registry,
         memory=memory_manager,
         module_overrides=module_overrides,
+        llm_concurrency=llm_concurrency,
         speculation_interval_minutes=config.scheduler.speculation_interval_minutes,
         speculation_ttl_days=config.scheduler.speculation_ttl_days,
         speculation_cooldown_days=config.scheduler.speculation_cooldown_days,
@@ -71,11 +84,14 @@ def build_openclaw_adapter_services() -> OpenClawAdapterServices:
         speculation_max_secondary_interests=config.scheduler.speculation_max_secondary_interests,
         speculator_idle_interval_minutes=config.scheduler.speculator_idle_interval_minutes,
     )
-    llm_service = LLMService(
-        registry=llm_registry,
-        memory=memory_manager,
-        module_overrides=module_overrides,
-    )
+    llm_service_kwargs: dict[str, object] = {
+        "registry": llm_registry,
+        "memory": memory_manager,
+        "module_overrides": module_overrides,
+    }
+    if _supports_keyword(LLMService, "concurrency"):
+        llm_service_kwargs["concurrency"] = llm_concurrency
+    llm_service = LLMService(**llm_service_kwargs)
     from openbiliclaw.llm.registry import build_embedding_service
     from openbiliclaw.recommendation.curator import PoolCurator
 
@@ -113,11 +129,13 @@ def build_openclaw_adapter_services() -> OpenClawAdapterServices:
         llm_service=llm_service,
         bilibili_client=bilibili_client,
         concurrency=concurrency,
+        database=database,
     )
     trending_strategy = TrendingStrategy(
         bilibili_client=bilibili_client,
         llm_service=llm_service,
         concurrency=concurrency,
+        database=database,
     )
     related_strategy = RelatedChainStrategy(
         bilibili_client=bilibili_client,
@@ -126,6 +144,7 @@ def build_openclaw_adapter_services() -> OpenClawAdapterServices:
         search_strategy=search_strategy,
         trending_strategy=trending_strategy,
         concurrency=concurrency,
+        database=database,
     )
     explore_strategy = ExploreStrategy(
         llm_service=llm_service,

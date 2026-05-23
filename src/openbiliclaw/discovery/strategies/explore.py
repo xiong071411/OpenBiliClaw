@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 from openbiliclaw.discovery.engine import (
     ContentDiscoveryEngine,
@@ -22,6 +22,7 @@ from openbiliclaw.discovery.strategies._utils import (
     build_profile_summary,
     interest_aliases,
     interest_anchors,
+    search_cooldown_remaining,
 )
 from openbiliclaw.discovery.strategies.search import SearchStrategy
 from openbiliclaw.llm.prompts import build_explore_domains_prompt
@@ -29,6 +30,7 @@ from openbiliclaw.llm.prompts import build_explore_domains_prompt
 if TYPE_CHECKING:
     from openbiliclaw.llm.embedding import SupportsEmbeddingService
     from openbiliclaw.soul.profile import SoulProfile
+    from openbiliclaw.storage.database import Database
 
 
 # Minimal contract — explore only needs the topic-group-coverage query
@@ -103,6 +105,20 @@ class ExploreStrategy(DiscoveryStrategy):
         Returns:
             Discovered content list.
         """
+        cooldown_remaining = search_cooldown_remaining(self.bilibili_client)
+        if cooldown_remaining > 0:
+            self.last_intermediates = {
+                "domains": [],
+                "skipped": "search_cooldown",
+                "cooldown_remaining_seconds": int(cooldown_remaining),
+            }
+            logger.info(
+                "Explore: Bilibili search cooldown active (%.0fs left); "
+                "skipping domain generation",
+                cooldown_remaining,
+            )
+            return []
+
         domains = await self._generate_domains(profile)
         self.last_intermediates = {"domains": list(domains)}
         if not domains:
@@ -110,6 +126,7 @@ class ExploreStrategy(DiscoveryStrategy):
 
         evaluator = ContentDiscoveryEngine(
             llm_service=self.llm_service,
+            database=cast("Database | None", self.database),
             concurrency=self.concurrency,
         )
         search_strategy = SearchStrategy(
@@ -274,6 +291,16 @@ class ExploreStrategy(DiscoveryStrategy):
         """Execute search queries sequentially with delay to avoid rate-limiting."""
         results: list[object] = []
         for i, (query, _, _, _) in enumerate(request_plan):
+            cooldown_remaining = search_cooldown_remaining(client)
+            if cooldown_remaining > 0:
+                logger.info(
+                    "Explore: Bilibili search cooldown active (%.0fs left); "
+                    "skipping remaining %d query(ies)",
+                    cooldown_remaining,
+                    len(request_plan) - i,
+                )
+                results.extend([] for _ in range(len(request_plan) - i))
+                break
             if i > 0:
                 await asyncio.sleep(0.6)
             try:

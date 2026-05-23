@@ -64,6 +64,53 @@ export function getCoverImageAttrs(value) {
   return { src: `/api/image-proxy?url=${encodeURIComponent(src)}` };
 }
 
+export function getRecommendationCoverPreloadUrls(items, { start = 0, limit = 12 } = {}) {
+  const safeStart = Math.max(0, Math.trunc(coerceNumber(start) ?? 0));
+  const safeLimit = Math.max(0, Math.trunc(coerceNumber(limit) ?? 0));
+  if (!Array.isArray(items) || safeLimit <= 0) return [];
+
+  const seen = new Set();
+  const urls = [];
+  for (const item of items.slice(safeStart)) {
+    const attrs = getCoverImageAttrs(item?.cover_url ?? item);
+    if (!attrs || seen.has(attrs.src)) continue;
+    seen.add(attrs.src);
+    urls.push(attrs.src);
+    if (urls.length >= safeLimit) break;
+  }
+  return urls;
+}
+
+export function getRecommendationImageLoadingAttrs(
+  index,
+  { eagerCount = 12, highPriorityCount = 2 } = {},
+) {
+  const safeIndex = Math.max(0, Math.trunc(coerceNumber(index) ?? 0));
+  const safeEagerCount = Math.max(0, Math.trunc(coerceNumber(eagerCount) ?? 0));
+  const safeHighPriorityCount = Math.max(0, Math.trunc(coerceNumber(highPriorityCount) ?? 0));
+  if (safeIndex < safeEagerCount) {
+    return {
+      loading: "eager",
+      fetchPriority: safeIndex < safeHighPriorityCount ? "high" : "auto",
+    };
+  }
+  return { loading: "lazy", fetchPriority: "auto" };
+}
+
+export function shouldAutoAppendRecommendations({
+  loading = false,
+  autoAppendExhausted = false,
+  activeTab = "recommend",
+  userArmed = false,
+} = {}) {
+  return Boolean(
+    userArmed &&
+      !loading &&
+      !autoAppendExhausted &&
+      activeTab === "recommend",
+  );
+}
+
 // ── Source Platform ──────────────────────────────────────────
 
 const SOURCE_LABEL_MAP = {
@@ -224,6 +271,11 @@ export function normalizeDelightCandidate(item) {
     state: normalizeText(item?.state) || "pending",
     response_message: normalizeText(item?.response_message),
     chat_reply: normalizeText(item?.chat_reply),
+    // Local UI fields preserved across re-normalizations
+    turns: Array.isArray(item?.turns) ? item.turns : [],
+    composer_open: Boolean(item?.composer_open),
+    draft: normalizeText(item?.draft),
+    chat_turn_id: normalizeText(item?.chat_turn_id),
   };
 }
 
@@ -265,7 +317,7 @@ export function getDelightUiState(delight, { highlightBvid = "" } = {}) {
   }
   if (normalized.state === "chatted" || normalized.state === "chatting") {
     return {
-      visible: true, highlighted: highlight, handled: normalized.state === "chatted",
+      visible: true, highlighted: highlight, handled: false,
       score_label: scoreLabel, response_tone: "info",
       response_message: normalized.response_message || "这句已经记下，后面会更会试探。",
     };

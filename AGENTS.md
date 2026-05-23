@@ -19,6 +19,17 @@ pytest --cov=openbiliclaw
 ## 开发顺序与配置约定
 v0.1 开发建议以 `docs/v0.1-todolist.md` 为准，按“连接 -> 理解 -> 发现 -> 推荐 -> 学习 -> 插件 -> 稳定交付”的里程碑顺序推进，避免跳过底层依赖直接做上层体验。配置样例使用 `config.example.toml`；本地调试时基于它生成 `config.toml`，并仅在本机保存 API Key、Cookie 等敏感信息。
 
+## 本地定制与上游合并注意事项
+本仓库的 `origin/main` 包含本地功能，不等同于作者 `upstream/main`。后续合并作者更新时使用 `git fetch upstream` 后正常 `merge` 或受控 `rebase`，不要用 `git reset --hard upstream/main` 覆盖本地分支。
+
+需要重点保护的本地改动：
+
+- **MusicMark 画像源**：`src/openbiliclaw/sources/musicmark_sync.py`、`tests/test_musicmark_sync.py`、`[sources.musicmark]` 配置、`RuntimeStatusResponse.musicmark_sync_*` 字段、移动 Web 画像页展示和相关文档都是本地集成。MusicMark 只同步聚合听歌摘要进入 memory / soul 画像链路，不进入 discovery 候选池，也不占用平台来源配比。
+- **移动 Web 刷新安全语义**：推荐页初始化、tab 回切和 `refresh.pool_updated` 事件只能做只读刷新，不应调用会消耗候选池的 `POST /api/recommendations/reshuffle`。只有用户显式点击“换一批”或下拉刷新才允许 reshuffle；作者新增的自动续页也必须保留用户滚动意图门闩，避免后台补货事件空转消费候选池。
+- **文档同步**：合并作者涉及 Web、runtime、config、discovery、recommendation 或来源数据流的改动时，同步检查 `docs/changelog.md`、`docs/mobile-web-spec.md`、`docs/modules/config.md`、`docs/modules/runtime.md`、README 中英文和 `config.example.toml`，确保本地 MusicMark 与 Web 刷新规则没有被删掉。
+
+本机 `/root/token.txt` 存有对用户 fork 具备提交权限的 GitHub token。仅在用户明确要求提交 / 推送时使用它完成认证；不要打印 token、不要复制到文档或提交内容中，也不要把 token 写进 remote URL、脚本、测试快照或日志。
+
 ## 编码风格与命名约定
 Python 统一使用 4 空格缩进、类型注解和清晰的模块边界；公开 API 与核心数据结构应补充简洁 docstring。格式化与 lint 由 Ruff 管理，静态类型检查使用 MyPy 严格模式。模块文件名使用小写下划线风格，如 `openai_provider.py`；测试函数采用 `test_<behavior>` 命名。
 

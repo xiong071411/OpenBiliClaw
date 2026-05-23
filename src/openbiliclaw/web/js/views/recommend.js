@@ -14,10 +14,15 @@ import {
   markDelightSent,
   reportClick,
   submitFeedback,
+  startChatTurn,
+  fetchChatTurn,
+  fetchChatTurns,
 } from "../api.js";
 import { state, patchState } from "../state.js";
 import {
   getCoverImageAttrs,
+  getRecommendationCoverPreloadUrls,
+  getRecommendationImageLoadingAttrs,
   normalizeRecommendation,
   normalizeRuntimeStatus,
   mergeRuntimeStatusEvent,
@@ -34,6 +39,8 @@ import {
   normalizeSourcePlatform,
   getSourceLabel,
   formatRelativeTimestamp,
+  getMobileChatSession,
+  shouldAutoAppendRecommendations,
 } from "../view-models.js";
 
 let $root = null;
@@ -44,6 +51,24 @@ let lastReshuffleAt = 0;
 let feedbackSheet = null; // { itemId, note, submitState }
 const feedbackDone = new Map(); // recId -> "like" | "dislike" | "comment"
 const RESHUFFLE_COOLDOWN_MS = 1500;
+const COVER_PRELOAD_BATCH_SIZE = 12;
+const COVER_PRELOAD_WAIT_TIMEOUT_MS = 3000;
+const AUTO_APPEND_ROOT_MARGIN = "700px 0px 1400px 0px";
+const SCROLL_PREHEAT_LOOKAHEAD = 8;
+const SCROLL_PREHEAT_ROOT_MARGIN = "0px 0px 1200px 0px";
+const warmedCoverUrls = new Set();
+const decodedCoverUrls = new Set();
+const warmingImages = new Map();
+let autoAppendObserver = null;
+let scrollPreheatObserver = null;
+let autoAppendExhausted = false;
+let autoAppendUserArmed = false;
+let autoAppendTouchY = null;
+let autoAppendIntentInitialized = false;
+const RECOMMENDATION_ITEMS_REFRESH_DEBOUNCE_MS = 1000;
+let recommendationItemsRefreshTimer = null;
+let recommendationItemsRefreshInFlight = false;
+let recommendationItemsRefreshPending = false;
 
 // ── Escape helper ────────────────────────────────────────────
 function esc(s) {
@@ -91,8 +116,8 @@ function render() {
     frag.appendChild(empty);
   }
 
-  for (const item of recs) {
-    frag.appendChild(renderCard(item));
+  for (const [index, item] of recs.entries()) {
+    frag.appendChild(renderCard(item, index));
   }
 
   renderInto(frag, renderLoadMoreRow);
@@ -111,6 +136,9 @@ function render() {
 
   // Feedback bottom sheet
   renderFeedbackSheet();
+  void warmRecommendationCovers(recs);
+  observeScrollPreheat();
+  observeAutoAppendSentinel();
 }
 
 /** Run a sub-renderer with $root temporarily pointed at the given container. */
@@ -226,6 +254,102 @@ async function loadMoreActivity() {
   } catch { /* ignore */ }
 }
 
+// ── Delight Inline Chat Helpers ──────────────────────────────
+const DELIGHT_POLL_INTERVAL_MS = 1200;
+const DELIGHT_POLL_DEADLINE_MS = 180_000;
+const activeDelightPolls = new Map(); // turnId -> timeoutId
+
+function createClientTurnId(prefix = "turn") {
+  const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+  return `${prefix}-${String(random).replace(/[^a-zA-Z0-9_-]/g, "")}`;
+}
+
+function pollDelightTurn(turnId, bvid) {
+  if (!turnId || activeDelightPolls.has(turnId)) return;
+  const startedAt = Date.now();
+
+  async function tick() {
+    try {
+      const turn = await fetchChatTurn(turnId);
+      if (turn.status === "completed" || turn.status === "failed") {
+        activeDelightPolls.delete(turnId);
+        applyTurnResult(bvid, turnId, turn);
+        return;
+      }
+    } catch { /* retry until deadline */ }
+    if (Date.now() - startedAt > DELIGHT_POLL_DEADLINE_MS) {
+      activeDelightPolls.delete(turnId);
+      return;
+    }
+    activeDelightPolls.set(turnId, setTimeout(tick, DELIGHT_POLL_INTERVAL_MS));
+  }
+
+  activeDelightPolls.set(turnId, 0);
+  void tick();
+}
+
+/** Update a specific turn in a delight's turns array after polling completes. */
+function applyTurnResult(bvid, turnId, turn) {
+  const updated = state.activeDelights.map((item) => {
+    const norm = normalizeDelightCandidate(item);
+    if (norm.bvid !== bvid) return item;
+    const turns = (norm.turns || []).map((t) => {
+      if (t.turn_id !== turnId) return t;
+      return { ...t, reply: turn.reply || "", status: turn.status, error: turn.error || "" };
+    });
+    const lastCompleted = turn.status === "completed";
+    return {
+      ...item,
+      turns,
+      state: lastCompleted ? "chatted" : (turn.status === "failed" ? norm.state : "chatting"),
+      response_message: lastCompleted ? "这句已经记下，后面会更会试探。" : (turn.status === "failed" ? "这句还没发出去，稍后再试。" : norm.response_message),
+      chat_reply: lastCompleted ? (turn.reply || "") : norm.chat_reply,
+    };
+  });
+  patchState({ activeDelights: updated });
+  rerenderDelightOnly();
+}
+
+/** Send a chat message for a delight inline chat turn. */
+async function sendDelightChat(d, message) {
+  const turnId = createClientTurnId("delight");
+  const userTurn = { turn_id: turnId, message, reply: "", status: "pending", error: "" };
+
+  // Optimistically append user+pending turn
+  const updated = state.activeDelights.map((item) => {
+    const norm = normalizeDelightCandidate(item);
+    if (norm.bvid !== d.bvid) return item;
+    return {
+      ...item,
+      turns: [...norm.turns, userTurn],
+      draft: "",
+      state: "chatting",
+      response_message: "阿B 正在品你这句话。",
+      chat_turn_id: turnId,
+    };
+  });
+  patchState({ activeDelights: updated });
+  rerenderDelightOnly();
+
+  try {
+    const turn = await startChatTurn({
+      turnId,
+      ...getMobileChatSession("delight"),
+      subjectId: d.bvid,
+      subjectTitle: d.title,
+      message,
+    });
+    if (turn.status === "completed" || turn.status === "failed") {
+      applyTurnResult(d.bvid, turnId, turn);
+    } else {
+      pollDelightTurn(turnId, d.bvid);
+    }
+  } catch {
+    // Mark the turn as failed locally
+    applyTurnResult(d.bvid, turnId, { reply: "", status: "failed", error: "网络错误" });
+  }
+}
+
 // ── Delight Tray ─────────────────────────────────────────────
 function renderDelightTray() {
   const delights = state.activeDelights;
@@ -284,6 +408,7 @@ function renderDelightTray() {
     tray.innerHTML += `<div class="delight-result-state" data-tone="${esc(uiState.response_tone)}">${esc(uiState.response_message)}</div>`;
   } else {
     // Action buttons
+    const isChatState = d.state === "chatted" || d.state === "chatting";
     const actions = document.createElement("div");
     actions.className = "delight-actions";
     const btns = [
@@ -297,9 +422,83 @@ function renderDelightTray() {
       btn.className = `btn ${b.action === "view" ? "btn-brand" : "btn-outline"}`;
       btn.textContent = b.label;
       btn.addEventListener("click", () => handleDelightAction(d, b.action));
+      if (isChatState && (b.action === "like" || b.action === "reject")) {
+        btn.disabled = true;
+      }
       actions.appendChild(btn);
     }
     tray.appendChild(actions);
+  }
+
+  // ── Chat bubbles (turns history) ────────────────────────────
+  const turns = d.turns || [];
+  if (turns.length > 0) {
+    const bubbleArea = document.createElement("div");
+    bubbleArea.className = "delight-chat-area";
+    for (const t of turns) {
+      // User bubble
+      const userBubble = document.createElement("div");
+      userBubble.className = "delight-chat-bubble user";
+      userBubble.textContent = t.message;
+      bubbleArea.appendChild(userBubble);
+      // AI bubble
+      const aiBubble = document.createElement("div");
+      if (t.status === "pending") {
+        aiBubble.className = "delight-chat-bubble assistant thinking";
+        aiBubble.textContent = "阿B 正在品你这句话…";
+      } else if (t.status === "failed") {
+        aiBubble.className = "delight-chat-bubble assistant error";
+        aiBubble.textContent = t.error || "这句还没发出去，稍后再试。";
+      } else {
+        aiBubble.className = "delight-chat-bubble assistant";
+        aiBubble.textContent = t.reply || "";
+      }
+      bubbleArea.appendChild(aiBubble);
+    }
+    tray.appendChild(bubbleArea);
+  }
+
+  // ── Inline composer ─────────────────────────────────────────
+  if (d.composer_open) {
+    const composer = document.createElement("div");
+    composer.className = "delight-composer";
+
+    const input = document.createElement("textarea");
+    input.className = "delight-composer-input";
+    input.rows = 2;
+    input.placeholder = "\u804A\u804A\u8FD9\u6761\u63A8\u8350\u2026";
+    input.value = d.draft || "";
+    input.addEventListener("input", () => {
+      // Save draft in-place without re-rendering
+      const cur = state.activeDelights[state.delightCurrentIndex];
+      if (cur && normalizeDelightCandidate(cur).bvid === d.bvid) {
+        cur.draft = input.value;
+      }
+    });
+
+    const sendBtn = document.createElement("button");
+    sendBtn.className = "btn btn-brand delight-composer-send";
+    sendBtn.textContent = "\u53D1\u51FA\u53BB";
+    sendBtn.addEventListener("click", () => {
+      const text = input.value.trim();
+      if (!text) { input.focus(); return; }
+      sendDelightChat(d, text);
+    });
+
+    // Allow Enter to send (Shift+Enter for newline)
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendBtn.click();
+      }
+    });
+
+    composer.appendChild(input);
+    composer.appendChild(sendBtn);
+    tray.appendChild(composer);
+
+    // Focus the textarea after DOM insertion
+    requestAnimationFrame(() => input.focus());
   }
 
   tray.querySelector("#delight-later")?.addEventListener("click", () => {
@@ -337,12 +536,16 @@ async function handleDelightAction(d, action) {
   const { apiResponse, uiState, permanent } = getDelightActionState(action);
 
   if (action === "chat") {
-    const { startContextualChat } = await import("./chat.js");
-    startContextualChat({
-      scope: "delight",
-      subjectId: d.bvid,
-      subjectTitle: d.title,
+    // Toggle inline composer on the delight — never navigate to chat tab.
+    const updated = state.activeDelights.map((item) => {
+      const norm = normalizeDelightCandidate(item);
+      if (norm.bvid === d.bvid) {
+        return { ...item, composer_open: !norm.composer_open };
+      }
+      return item;
     });
+    patchState({ activeDelights: updated });
+    rerenderDelightOnly();
     return;
   }
 
@@ -399,16 +602,164 @@ function renderLoadMoreRow() {
   $root.appendChild(actions);
 }
 
+function waitForCoverPreload(promises, timeoutMs) {
+  if (promises.length === 0) return Promise.resolve();
+  return Promise.race([
+    Promise.all(promises),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
+function warmRecommendationCovers(
+  items,
+  { start = 0, limit = COVER_PRELOAD_BATCH_SIZE, waitForDecode = false } = {},
+) {
+  if (typeof Image === "undefined") return Promise.resolve();
+  const urls = getRecommendationCoverPreloadUrls(items, { start, limit });
+  const pending = [];
+  for (const src of urls) {
+    if (warmedCoverUrls.has(src)) continue;
+    warmedCoverUrls.add(src);
+
+    const img = new Image();
+    const cleanup = () => warmingImages.delete(src);
+    const markDecoded = () => { cleanup(); decodedCoverUrls.add(src); };
+    const loaded = new Promise((resolve) => {
+      img.onload = () => { markDecoded(); resolve(); };
+      img.onerror = () => { cleanup(); resolve(); };
+    });
+    img.decoding = "async";
+    img.loading = "eager";
+    warmingImages.set(src, img);
+    img.src = src;
+    let ready = loaded;
+    if (typeof img.decode === "function") {
+      ready = img.decode().then(markDecoded).catch(cleanup);
+    }
+    if (waitForDecode) pending.push(ready);
+  }
+  if (!waitForDecode) return Promise.resolve();
+  return waitForCoverPreload(pending, COVER_PRELOAD_WAIT_TIMEOUT_MS);
+}
+
+function disconnectScrollPreheatObserver() {
+  if (!scrollPreheatObserver) return;
+  scrollPreheatObserver.disconnect();
+  scrollPreheatObserver = null;
+}
+
+function observeScrollPreheat() {
+  disconnectScrollPreheatObserver();
+  if (!$root || typeof IntersectionObserver === "undefined") return;
+
+  const cards = $root.querySelectorAll(".card");
+  if (!cards.length) return;
+
+  scrollPreheatObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      scrollPreheatObserver.unobserve(entry.target);
+
+      // Find this card's index and preheat the next batch ahead
+      const allCards = Array.from($root.querySelectorAll(".card"));
+      const idx = allCards.indexOf(entry.target);
+      if (idx < 0) continue;
+
+      const recs = state.recommendations || [];
+      const start = Math.min(idx + 1, recs.length);
+      if (start < recs.length) {
+        warmRecommendationCovers(recs, { start, limit: SCROLL_PREHEAT_LOOKAHEAD });
+      }
+    }
+  }, {
+    root: null,
+    rootMargin: SCROLL_PREHEAT_ROOT_MARGIN,
+    threshold: 0,
+  });
+
+  cards.forEach((card) => scrollPreheatObserver.observe(card));
+}
+
+function disconnectAutoAppendObserver() {
+  if (!autoAppendObserver) return;
+  autoAppendObserver.disconnect();
+  autoAppendObserver = null;
+}
+
+function observeAutoAppendSentinel() {
+  disconnectAutoAppendObserver();
+  if (!$root || typeof IntersectionObserver === "undefined") return;
+  const loadMoreRow = $root.querySelector(".load-more-row");
+  if (!loadMoreRow) return;
+
+  autoAppendObserver = new IntersectionObserver((entries) => {
+    if (!entries.some((entry) => entry.isIntersecting)) return;
+    if (!shouldAutoAppendRecommendations({
+      loading,
+      autoAppendExhausted,
+      activeTab: state.activeTab,
+      userArmed: autoAppendUserArmed,
+    })) return;
+    autoAppendUserArmed = false;
+    handleAppend();
+  }, {
+    root: document.getElementById("app"),
+    rootMargin: AUTO_APPEND_ROOT_MARGIN,
+    threshold: 0,
+  });
+  autoAppendObserver.observe(loadMoreRow);
+}
+
+function resetAutoAppendIntent() {
+  autoAppendUserArmed = false;
+  autoAppendTouchY = null;
+}
+
+function armAutoAppendIntent() {
+  if (state.activeTab !== "recommend") return;
+  autoAppendUserArmed = true;
+}
+
+function initAutoAppendIntent() {
+  if (autoAppendIntentInitialized) return;
+  const container = document.getElementById("app");
+  if (!container) return;
+  autoAppendIntentInitialized = true;
+
+  container.addEventListener("wheel", (event) => {
+    if (event.deltaY > 0) armAutoAppendIntent();
+  }, { passive: true });
+
+  container.addEventListener("touchstart", (event) => {
+    autoAppendTouchY = event.touches?.[0]?.clientY ?? null;
+  }, { passive: true });
+
+  container.addEventListener("touchmove", (event) => {
+    const y = event.touches?.[0]?.clientY ?? null;
+    if (autoAppendTouchY !== null && y !== null && autoAppendTouchY - y > 12) {
+      armAutoAppendIntent();
+    }
+    autoAppendTouchY = y;
+  }, { passive: true });
+
+  window.addEventListener("keydown", (event) => {
+    if (["ArrowDown", "PageDown", "End", " "].includes(event.key)) {
+      armAutoAppendIntent();
+    }
+  }, { passive: true });
+}
+
 // ── Recommendation Card ──────────────────────────────────────
-function renderCard(rawItem) {
+function renderCard(rawItem, index = 0) {
   const item = normalizeRecommendation(rawItem);
   const card = document.createElement("div");
   card.className = "card";
   const url = buildContentUrl(item);
   const cover = getCoverImageAttrs(item.cover_url);
+  const imageAttrs = getRecommendationImageLoadingAttrs(index);
 
   const coverHtml = cover
-    ? `<div class="card-cover-frame"><img class="card-cover" src="${esc(cover.src)}" alt="" loading="lazy" onerror="this.parentElement.classList.add('is-error');this.remove()"></div>`
+    ? `<div class="card-cover-frame"><img class="card-cover" src="${esc(cover.src)}" alt="" loading="${esc(imageAttrs.loading)}" fetchpriority="${esc(imageAttrs.fetchPriority)}" decoding="async" onerror="this.parentElement.classList.add('is-error');this.remove()"></div>`
     : `<div class="card-cover-frame is-error"></div>`;
 
   card.innerHTML = `
@@ -576,18 +927,22 @@ async function handleReshuffle() {
   if (now - lastReshuffleAt < RESHUFFLE_COOLDOWN_MS) return;
   lastReshuffleAt = now;
   loading = true;
+  resetAutoAppendIntent();
   render();
   try {
     reshuffleInFlight = reshuffleRecommendations();
     const result = await reshuffleInFlight;
-    patchState({ recommendations: (result.items || []).map(normalizeRecommendation) });
+    autoAppendExhausted = false;
+    const normalizedRecs = (result.items || []).map(normalizeRecommendation);
+    rememberRecommendationFeedback(normalizedRecs);
+    patchState({ recommendations: normalizedRecs });
   } catch { /* ignore */ }
   reshuffleInFlight = null;
   loading = false;
   render();
 }
 
-async function refreshReadOnlyData({ includeStatus = true } = {}) {
+async function refreshReadOnlyData({ includeStatus = true, resetAppendState = false } = {}) {
   const [recs, status, delights, activity] = await Promise.all([
     fetchRecommendations().catch(() => state.recommendations),
     includeStatus ? fetchRuntimeStatus().catch(() => null) : Promise.resolve(null),
@@ -595,11 +950,11 @@ async function refreshReadOnlyData({ includeStatus = true } = {}) {
     fetchActivityFeed({ limit: 5 }).catch(() => state.activityFeed),
   ]);
   const normalizedRecs = (recs || []).map(normalizeRecommendation);
-  for (const rec of normalizedRecs) {
-    if (rec.feedback_type && !feedbackDone.has(rec.id)) {
-      feedbackDone.set(rec.id, rec.feedback_type);
-    }
+  if (resetAppendState) {
+    autoAppendExhausted = false;
+    resetAutoAppendIntent();
   }
+  rememberRecommendationFeedback(normalizedRecs);
   patchState({
     recommendations: normalizedRecs,
     runtimeStatus: status ? normalizeRuntimeStatus(status) : state.runtimeStatus,
@@ -619,18 +974,25 @@ async function handleAppend() {
   if (appendBtnEl) { appendBtnEl.disabled = true; appendBtnEl.textContent = "\u52A0\u8F7D\u4E2D\u2026"; }
 
   try {
+    const startIndex = state.recommendations.length;
     const existing = state.recommendations.map((i) => i.bvid).filter(Boolean);
     const result = await appendRecommendations(existing);
     const newItems = (result.items || []).map(normalizeRecommendation);
+    autoAppendExhausted = newItems.length === 0;
+    await warmRecommendationCovers(newItems, { limit: newItems.length, waitForDecode: true });
     patchState({ recommendations: [...state.recommendations, ...newItems] });
 
     // Append new cards before the load-more row without rebuilding existing ones.
     if (loadMoreRow) {
-      for (const item of newItems) {
-        $root.insertBefore(renderCard(item), loadMoreRow);
+      for (const [offset, item] of newItems.entries()) {
+        const card = renderCard(item, startIndex + offset);
+        $root.insertBefore(card, loadMoreRow);
+        if (scrollPreheatObserver) scrollPreheatObserver.observe(card);
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    autoAppendExhausted = true;
+  }
 
   loading = false;
   // Restore button state.
@@ -639,6 +1001,7 @@ async function handleAppend() {
     const headerState = getMobileRecommendationHeaderState();
     appendBtnEl.textContent = headerState.secondaryActionLabel;
   }
+  observeAutoAppendSentinel();
 }
 
 // ── Pull-to-Refresh ──────────────────────────────────────────
@@ -672,15 +1035,114 @@ function initPullRefresh() {
   }, { passive: true });
 }
 
+// ── Delight Chat Hydration ───────────────────────────────────
+/** Fetch durable delight turns and backfill into each delight's turns array. */
+async function hydrateDelightTurns() {
+  try {
+    const payload = await fetchChatTurns({ ...getMobileChatSession("delight"), limit: 200 });
+    const items = payload.items || [];
+    if (items.length === 0) return;
+
+    // Group turns by subject_id (bvid)
+    const byBvid = new Map();
+    for (const turn of items) {
+      if (!turn.subject_id) continue;
+      let arr = byBvid.get(turn.subject_id);
+      if (!arr) { arr = []; byBvid.set(turn.subject_id, arr); }
+      arr.push({
+        turn_id: turn.turn_id,
+        message: turn.message || "",
+        reply: turn.reply || "",
+        status: turn.status || "pending",
+        error: turn.error || "",
+      });
+    }
+
+    // Merge into existing delights
+    let changed = false;
+    const updated = state.activeDelights.map((item) => {
+      const norm = normalizeDelightCandidate(item);
+      const serverTurns = byBvid.get(norm.bvid);
+      if (!serverTurns) return item;
+      changed = true;
+      // Merge: keep local turns that aren't on server yet, then overlay server data
+      const localIds = new Set((norm.turns || []).map((t) => t.turn_id));
+      const merged = serverTurns.map((st) => {
+        const local = (norm.turns || []).find((t) => t.turn_id === st.turn_id);
+        return local ? { ...local, ...st } : st;
+      });
+      // Append any local-only turns (optimistic sends not yet on server)
+      for (const lt of (norm.turns || [])) {
+        if (!serverTurns.some((st) => st.turn_id === lt.turn_id)) merged.push(lt);
+      }
+      const lastTurn = merged[merged.length - 1];
+      const lastReply = lastTurn?.status === "completed" ? lastTurn.reply : norm.chat_reply;
+      return { ...item, turns: merged, chat_reply: lastReply || norm.chat_reply };
+    });
+
+    if (changed) {
+      patchState({ activeDelights: updated });
+      rerenderDelightOnly();
+    }
+
+    // Resume polling for any pending turns
+    for (const turn of items) {
+      if (turn.status === "pending" && turn.subject_id) {
+        pollDelightTurn(turn.turn_id, turn.subject_id);
+      }
+    }
+  } catch { /* best-effort hydration */ }
+}
+
 // ── Load ─────────────────────────────────────────────────────
+function rememberRecommendationFeedback(normalizedRecs) {
+  for (const rec of normalizedRecs) {
+    if (rec.feedback_type && !feedbackDone.has(rec.id)) {
+      feedbackDone.set(rec.id, rec.feedback_type);
+    }
+  }
+}
+
 async function loadData() {
   loading = true;
   render();
   try {
-    await refreshReadOnlyData();
+    await refreshReadOnlyData({ resetAppendState: true });
   } catch { /* ignore */ }
   loading = false;
   render();
+  // Hydrate durable delight chat turns after initial render
+  hydrateDelightTurns();
+}
+
+function scheduleRecommendationItemsRefresh() {
+  if (recommendationItemsRefreshTimer !== null) {
+    clearTimeout(recommendationItemsRefreshTimer);
+  }
+  recommendationItemsRefreshTimer = setTimeout(
+    runScheduledRecommendationItemsRefresh,
+    RECOMMENDATION_ITEMS_REFRESH_DEBOUNCE_MS,
+  );
+}
+
+async function runScheduledRecommendationItemsRefresh() {
+  recommendationItemsRefreshTimer = null;
+  if (recommendationItemsRefreshInFlight) {
+    recommendationItemsRefreshPending = true;
+    return;
+  }
+  recommendationItemsRefreshInFlight = true;
+  try {
+    await refreshReadOnlyData({ includeStatus: false, resetAppendState: true });
+    render();
+  } catch { /* best-effort live refresh */ }
+  finally {
+    recommendationItemsRefreshInFlight = false;
+    if (recommendationItemsRefreshPending) {
+      recommendationItemsRefreshPending = false;
+      scheduleRecommendationItemsRefresh();
+    }
+  }
 }
 
 // ── Public API ───────────────────────────────────────────────
@@ -689,6 +1151,7 @@ export function initRecommendView(root) {
   if (!loaded) {
     loaded = true;
     initPullRefresh();
+    initAutoAppendIntent();
     loadData();
   }
   // Tab switch back: don't refetch — just re-render with existing state.
@@ -698,13 +1161,12 @@ export function initRecommendView(root) {
 export function onStreamEvent(payload) {
   const type = payload?.type || payload?.event;
   if (type === "refresh.pool_updated") {
-    // Merge runtime status from event
+    // Merge runtime status and coalesce the recommendation list fetch.
     patchState({
       runtimeStatus: mergeRuntimeStatusEvent(state.runtimeStatus, payload.data || payload),
     });
-    refreshReadOnlyData({ includeStatus: false })
-      .then(() => render())
-      .catch(() => rerenderHeaderOnly());
+    rerenderHeaderOnly();
+    scheduleRecommendationItemsRefresh();
   } else if (type === "refresh.started" || type === "refresh.strategy") {
     patchState({ runtimeEvent: payload.data || payload });
     rerenderHeaderOnly();
