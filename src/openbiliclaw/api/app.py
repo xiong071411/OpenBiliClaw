@@ -2160,7 +2160,6 @@ def create_app(
         concurrency = getattr(ctx.discovery_engine, "_concurrency", None)
         if concurrency is not None:
             concurrency.chat_active = True
-            await asyncio.sleep(3)
         try:
             reply = await asyncio.wait_for(ctx.dialogue.respond(contextual_message), timeout=30)
         except TimeoutError:
@@ -2214,11 +2213,10 @@ def create_app(
         message = payload.message.strip()
         if not message:
             raise HTTPException(status_code=422, detail="Chat message is required.")
-        # Pause discovery LLM calls and wait for RPM window to clear
+        # Pause discovery LLM calls while user is chatting
         concurrency = getattr(ctx.discovery_engine, "_concurrency", None)
         if concurrency is not None:
             concurrency.chat_active = True
-            await asyncio.sleep(3)  # Let RPM window drain
         try:
             # Bumped from 30s to 120s — deepseek with reasoning_effort=max
             # routinely takes 60-90s for one dialogue turn, so a 30s budget
@@ -2428,6 +2426,7 @@ def create_app(
                     temperature=0.0,
                     json_mode=False,
                     caller="api.sentiment",
+                    bypass_semaphore=True,
                 ),
                 timeout=15,
             )
@@ -2462,7 +2461,6 @@ def create_app(
         concurrency = getattr(ctx.discovery_engine, "_concurrency", None)
         if concurrency is not None:
             concurrency.chat_active = True
-            await asyncio.sleep(3)
         try:
             async with chat_turn_lock:
                 reply = await asyncio.wait_for(
@@ -2721,11 +2719,10 @@ def create_app(
         contextual_message = f"[关于猜测兴趣「{domain}」的反馈] {raw_message}"
         if ctx.dialogue is None:
             return {"ok": False, "action": "chat", "domain": domain, "reply": "对话引擎暂不可用。"}
-        # Pause discovery LLM calls and wait for RPM window to clear
+        # Pause discovery LLM calls while user is chatting
         concurrency = getattr(ctx.discovery_engine, "_concurrency", None)
         if concurrency is not None:
             concurrency.chat_active = True
-            await asyncio.sleep(3)
         try:
             reply = await asyncio.wait_for(
                 ctx.dialogue.respond(contextual_message),
