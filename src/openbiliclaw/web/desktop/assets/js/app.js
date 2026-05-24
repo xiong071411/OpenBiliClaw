@@ -124,6 +124,7 @@
 
     const DISMISS_ON_RESHUFFLE_KEY = "openbiliclaw.dismissOnReshuffle";
     state.dismissOnReshuffle = storageGet(DISMISS_ON_RESHUFFLE_KEY) === "1";
+    const SIDE_DRAWER_OPEN_KEY = "openbiliclaw.sideDrawerOpen";
 
     function normalizeBackendHost(host) {
       const trimmed = String(host || "").trim();
@@ -262,22 +263,30 @@
       }
     }
 
-    function openSideDrawer() {
+    function setSideDrawerOpen(open, { persist = true } = {}) {
       const drawer = document.getElementById("sideDrawer");
-      drawer?.classList.add("is-open");
-      drawer?.setAttribute("aria-hidden", "false");
-      document.body.classList.add("side-drawer-open");
+      drawer?.classList.toggle("is-open", open);
+      drawer?.setAttribute("aria-hidden", open ? "false" : "true");
+      document.body.classList.toggle("side-drawer-open", open);
       const button = document.getElementById("sideDrawerBtn");
-      if (button) button.setAttribute("aria-expanded", "true");
+      if (button) {
+        button.setAttribute("aria-expanded", open ? "true" : "false");
+        button.setAttribute("aria-label", open ? "收起侧边菜单" : "展开侧边菜单");
+      }
+      if (persist) storageSet(SIDE_DRAWER_OPEN_KEY, open ? "1" : "0");
     }
 
-    function closeSideDrawer() {
+    function openSideDrawer(options) {
+      setSideDrawerOpen(true, options);
+    }
+
+    function closeSideDrawer(options) {
+      setSideDrawerOpen(false, options);
+    }
+
+    function toggleSideDrawer() {
       const drawer = document.getElementById("sideDrawer");
-      drawer?.classList.remove("is-open");
-      drawer?.setAttribute("aria-hidden", "true");
-      document.body.classList.remove("side-drawer-open");
-      const button = document.getElementById("sideDrawerBtn");
-      if (button) button.setAttribute("aria-expanded", "false");
+      setSideDrawerOpen(!drawer?.classList.contains("is-open"));
     }
 
     function isMobileViewport() {
@@ -2261,7 +2270,7 @@
       }, 5000);
     }
 
-    safeBind("#sideDrawerBtn", "click", openSideDrawer);
+    safeBind("#sideDrawerBtn", "click", toggleSideDrawer);
     safeBind("#sideDrawerClose", "click", closeSideDrawer);
     safeBind("#sideDrawerScrim", "click", closeSideDrawer);
     safeBind("#mobileMenuBtn", "click", openMobileMenu);
@@ -2374,6 +2383,7 @@
     }));
 
     restoreBackendEndpoint();
+    setSideDrawerOpen(!isMobileViewport() && storageGet(SIDE_DRAWER_OPEN_KEY) !== "0", { persist: false });
     startChatPlaceholderRotation();
     try {
       renderAll();
