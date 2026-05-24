@@ -500,6 +500,7 @@
       body.mobile-menu-open { overflow: hidden; }
       body.side-drawer-open .layout,
       body.side-drawer-open .fatal-banner { transform: none; }
+      .side-drawer { display: none; }
       .topbar { grid-template-columns: minmax(0, 1fr) auto; padding: var(--space-3); gap: var(--space-3); }
       .topbar .search, .topbar .nav-actions, .topbar .top-actions, .side-drawer-btn { display: none; }
       .mobile-menu-btn { display: inline-grid; place-items: center; }
