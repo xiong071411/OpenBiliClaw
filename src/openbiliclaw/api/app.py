@@ -2197,6 +2197,7 @@ def create_app(
                     "WHERE bvid = ?",
                     (bvid,),
                 )
+                ctx.database.mark_delight_notified(bvid)
             except Exception:
                 logger.debug("Failed to record delight like for %s", bvid)
             label = title or bvid
@@ -2220,10 +2221,12 @@ def create_app(
         if response_type == "dislike":
             try:
                 ctx.database._execute_write(
-                    "UPDATE content_cache SET pool_status = 'purged_by_dislike' "
-                    "WHERE bvid = ? AND COALESCE(pool_status, 'fresh') = 'fresh'",
+                    "UPDATE content_cache SET pool_status = 'purged_by_dislike', "
+                    "feedback_type='dislike', feedback_at=CURRENT_TIMESTAMP "
+                    "WHERE bvid = ?",
                     (bvid,),
                 )
+                ctx.database.mark_delight_notified(bvid)
             except Exception:
                 logger.debug("Failed to purge delight bvid %s", bvid)
             label = title or bvid
@@ -2287,6 +2290,8 @@ def create_app(
             "delight_chat",
             detail=f"你的反馈：{raw_message}\n阿b的回复：{reply}",
         )
+        with suppress(Exception):
+            ctx.database.mark_delight_notified(bvid)
         await _publish_probe_event("delight.chat", f"关于「{label}」你说：{raw_message}", bvid)
         return JSONResponse(content={"ok": True, "action": "chat", "bvid": bvid, "reply": reply})
 

@@ -4000,6 +4000,62 @@ class TestBackendAPI:
         # But layers_updated should be empty because ingest raised.
         assert response.json()["layers_updated"] == []
 
+    def test_delight_like_marks_candidate_consumed(self) -> None:
+        from fastapi.testclient import TestClient
+
+        class FakeDatabase:
+            def __init__(self) -> None:
+                self.writes: list[tuple[str, tuple[object, ...]]] = []
+                self.notified: list[str] = []
+
+            def _execute_write(self, query: str, params: tuple[object, ...]) -> None:
+                self.writes.append((query, params))
+
+            def mark_delight_notified(self, bvid: str) -> None:
+                self.notified.append(bvid)
+
+        database = FakeDatabase()
+        app = create_app(memory_manager=object(), database=database, soul_engine=object())
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/delight/respond",
+            json={"bvid": "BV1DL", "title": "惊喜", "response": "like"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["action"] == "liked"
+        assert database.notified == ["BV1DL"]
+        assert any("feedback_type='like'" in query for query, _params in database.writes)
+
+    def test_delight_dislike_marks_candidate_consumed(self) -> None:
+        from fastapi.testclient import TestClient
+
+        class FakeDatabase:
+            def __init__(self) -> None:
+                self.writes: list[tuple[str, tuple[object, ...]]] = []
+                self.notified: list[str] = []
+
+            def _execute_write(self, query: str, params: tuple[object, ...]) -> None:
+                self.writes.append((query, params))
+
+            def mark_delight_notified(self, bvid: str) -> None:
+                self.notified.append(bvid)
+
+        database = FakeDatabase()
+        app = create_app(memory_manager=object(), database=database, soul_engine=object())
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/delight/respond",
+            json={"bvid": "BV1DL", "title": "惊喜", "response": "dislike"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["action"] == "disliked"
+        assert database.notified == ["BV1DL"]
+        assert any("feedback_type='dislike'" in query for query, _params in database.writes)
+
     def test_get_config_returns_llm_and_embedding_settings(
         self,
         monkeypatch,
