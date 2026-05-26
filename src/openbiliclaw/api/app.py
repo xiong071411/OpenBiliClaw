@@ -92,6 +92,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _CONFIG_SAVE_LOCK = asyncio.Lock()
+_fire_and_forget_tasks: set[asyncio.Task[None]] = set()
 
 SOURCE_LABELS = {
     "feedback": "推荐反馈",
@@ -3323,7 +3324,9 @@ def create_app(
                             domain,
                         )
 
-                asyncio.create_task(_apply_confirmed_avoidance())
+                task = asyncio.create_task(_apply_confirmed_avoidance())
+                _fire_and_forget_tasks.add(task)
+                task.add_done_callback(_fire_and_forget_tasks.discard)
             return {"ok": ok, "action": "confirmed", "domain": domain}
 
         if response_type == "reject":

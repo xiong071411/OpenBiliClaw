@@ -1614,7 +1614,6 @@
         body: JSON.stringify({
           bvid: delight.bvid,
           response,
-          response,
           title: delight.title,
           message: ""
         })
