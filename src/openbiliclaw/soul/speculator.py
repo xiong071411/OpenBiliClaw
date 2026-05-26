@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -25,6 +26,9 @@ if TYPE_CHECKING:
     from openbiliclaw.soul.profile import OnionProfile
 
 logger = logging.getLogger(__name__)
+
+_CHALLENGE_PROBE_MODES = {"lateral", "bridge", "wildcard"}
+_DEFAULT_CHALLENGE_MAX_ACTIVE = 3
 
 
 # ---------------------------------------------------------------------------
@@ -71,9 +75,16 @@ class SpeculativeInterest:
     ttl_days: int = 14
     confirmation_count: int = 0
     confirmation_threshold: int = 3
-    status: str = "active"  # "active" | "promoted" | "rejected"
+    status: str = "active"  # "active" | "confirmed" | "promoted" | "rejected"
     confirming_events: list[str] = field(default_factory=list)
     specifics: list[SpeculativeSpecific] = field(default_factory=list)
+    probe_mode: str = "near"
+    confirmation_source: str = ""
+    confirmed_at: str = ""
+
+    @property
+    def challenge(self) -> bool:
+        return self.probe_mode in {"lateral", "bridge", "wildcard"}
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +102,9 @@ class SpeculativeInterest:
             "status": self.status,
             "confirming_events": list(self.confirming_events),
             "specifics": [s.to_dict() for s in self.specifics],
+            "probe_mode": self.probe_mode,
+            "confirmation_source": self.confirmation_source,
+            "confirmed_at": self.confirmed_at,
         }
 
     @classmethod
@@ -114,6 +128,9 @@ class SpeculativeInterest:
                 for s in (data.get("specifics") or [])
                 if isinstance(s, dict)
             ],
+            probe_mode=_normalize_probe_mode(data.get("probe_mode")),
+            confirmation_source=str(data.get("confirmation_source", "")),
+            confirmed_at=str(data.get("confirmed_at", "")),
         )
 
 
@@ -300,7 +317,7 @@ def _normalize_probe_term(value: Any) -> str:
 
 
 PROBE_FEEDBACK_HISTORY_LIMIT = 100
-NEGATIVE_PROBE_FEEDBACK_RESPONSES = {"reject", "chat_negative"}
+NEGATIVE_PROBE_FEEDBACK_RESPONSES = {"reject", "chat_negative", "chat_rejected"}
 
 
 def _string_field(value: Any) -> str:
@@ -335,10 +352,22 @@ def normalize_probe_feedback_history(history: object) -> list[dict[str, object]]
             "domain": domain,
             "response": response,
         }
-        for key in ("axis", "category", "reason", "message", "created_at"):
+        for key in (
+            "axis",
+            "category",
+            "reason",
+            "message",
+            "raw_text_excerpt",
+            "classification",
+            "classifier",
+            "resulting_action",
+            "created_at",
+            "source_mode",
+            "source_signal",
+        ):
             text = _string_field(item.get(key))
             if text:
-                record[key] = text
+                record[key] = text[:240] if key == "raw_text_excerpt" else text
         specifics = _specific_names(item.get("specifics"))
         if specifics:
             record["specifics"] = specifics
@@ -462,11 +491,7 @@ class ProbeNoveltyGuard:
         return any(_has_probe_term_overlap(domain, term) for term in self.fuzzy_terms)
 
     def filter_specifics(self, specifics: list[str]) -> list[str]:
-        return [
-            specific
-            for specific in specifics
-            if not self.is_duplicate_domain(specific)
-        ]
+        return [specific for specific in specifics if not self.is_duplicate_domain(specific)]
 
 
 def observe_events(
@@ -533,8 +558,7 @@ def promote_ready(state: SpeculativeState) -> tuple[list[SpeculativeInterest], S
     remaining: list[SpeculativeInterest] = []
     for spec in state.active:
         ready = (
-            spec.status == "active"
-            and spec.confirmation_count >= spec.confirmation_threshold
+            spec.status == "active" and spec.confirmation_count >= spec.confirmation_threshold
         ) or spec.status == "confirmed"
         if ready:
             spec.status = "promoted"
@@ -645,6 +669,7 @@ class InterestSpeculator:
         cooldown_days: int = 7,
         confirmation_threshold: int = 3,
         max_active: int = 5,
+        challenge_max_active: int = _DEFAULT_CHALLENGE_MAX_ACTIVE,
         max_primary_interests: int = 15,
         max_secondary_interests: int = 60,
         min_confidence: float = 0.30,
@@ -656,6 +681,7 @@ class InterestSpeculator:
         self._cooldown_days = cooldown_days
         self._confirmation_threshold = confirmation_threshold
         self._max_active = max_active
+        self._challenge_max_active = challenge_max_active
         self._max_primary_interests = max_primary_interests
         self._max_secondary_interests = max_secondary_interests
         # Quality gate: discard candidates whose self-rated confidence
@@ -780,8 +806,13 @@ class InterestSpeculator:
         # flow regardless of how many interests are already
         # confirmed.
         active_count = sum(1 for s in state.active if s.status == "active")
+        near_slots, challenge_slots = _available_probe_slots(
+            state.active,
+            near_limit=self._max_active,
+            challenge_limit=self._challenge_max_active,
+        )
         can_generate = (
-            active_count < self._max_active
+            near_slots + challenge_slots > 0
             and active_count < self._max_primary_interests
             and self._llm_service is not None
         )
@@ -810,7 +841,15 @@ class InterestSpeculator:
                 len(result.rejected),
             )
         else:
-            logger.debug("Speculator force_tick: no-op (active full, nothing to expire/promote)")
+            near_count, challenge_count = _active_probe_slot_counts(state.active)
+            logger.debug(
+                "Speculator force_tick: no-op "
+                "(near=%d/%d, challenge=%d/%d, nothing to expire/promote)",
+                near_count,
+                self._max_active,
+                challenge_count,
+                self._challenge_max_active,
+            )
         return result
 
     def observe(self, events: list[dict[str, Any]]) -> int:
@@ -871,8 +910,14 @@ class InterestSpeculator:
                 continue
             if novelty_guard.is_duplicate_domain(domain):
                 continue
-            if len(state.active) >= self._max_active:
-                break
+            probe_mode = _normalize_probe_mode(seed.get("probe_mode"))
+            if not _probe_slot_available(
+                state.active,
+                probe_mode,
+                near_limit=self._max_active,
+                challenge_limit=self._challenge_max_active,
+            ):
+                continue
 
             state.active.append(
                 SpeculativeInterest(
@@ -884,6 +929,7 @@ class InterestSpeculator:
                     created_at=now.isoformat(),
                     ttl_days=self._default_ttl_days,
                     confirmation_threshold=self._confirmation_threshold,
+                    probe_mode=probe_mode,
                 )
             )
             existing_domains.add(domain.lower())
@@ -899,7 +945,12 @@ class InterestSpeculator:
         state = self._load_state()
         return [s for s in state.active if s.status == "active"]
 
-    def user_confirm_speculation(self, domain: str) -> bool:
+    def user_confirm_speculation(
+        self,
+        domain: str,
+        *,
+        confirmation_source: str = "probe_confirmed",
+    ) -> bool:
         """User explicitly confirmed a speculated interest. Force-promote it.
 
         Sets ``status="confirmed"`` so the API stops surfacing this row in
@@ -911,10 +962,13 @@ class InterestSpeculator:
         was ignored.
         """
         state = self._load_state()
+        now = datetime.now().isoformat()
         for spec in state.active:
             if spec.domain.lower() == domain.lower() and spec.status == "active":
                 spec.confirmation_count = spec.confirmation_threshold  # Meet threshold
-                spec.confirming_events.append("user_confirmed")
+                spec.confirming_events.append(confirmation_source)
+                spec.confirmation_source = confirmation_source
+                spec.confirmed_at = now
                 spec.status = "confirmed"
                 self._save_state(state)
                 return True
@@ -963,7 +1017,13 @@ class InterestSpeculator:
         - interval not yet elapsed
         """
         active_count = sum(1 for s in state.active if s.status == "active")
-        if active_count >= self._max_active:
+        near_slots, challenge_slots = _available_probe_slots(
+            state.active,
+            near_limit=self._max_active,
+            challenge_limit=self._challenge_max_active,
+        )
+        available_slots = near_slots + challenge_slots
+        if available_slots <= 0:
             return False
 
         # Slot-aware throttle: when there's only 1 free slot, the dedup
@@ -973,12 +1033,17 @@ class InterestSpeculator:
         # domains and adding 0 new probes, burning ~¥0.005 per tick on
         # nothing. Require at least 2 free slots so the candidate yield
         # is realistic for the LLM call cost.
-        if self._max_active - active_count < 2:
+        if available_slots < 2:
+            near_count, challenge_count = _active_probe_slot_counts(state.active)
             logger.debug(
-                "Speculation skipped: only %d slot(s) free of %d, "
+                "Speculation skipped: only %d slot(s) free "
+                "(near=%d/%d, challenge=%d/%d), "
                 "not worth an LLM call (most candidates would dedup-fail).",
-                self._max_active - active_count,
+                available_slots,
+                near_count,
                 self._max_active,
+                challenge_count,
+                self._challenge_max_active,
             )
             return False
 
@@ -1030,7 +1095,12 @@ class InterestSpeculator:
         cooldown_domains = [c.domain for c in state.cooldown]
         confirmed_domains = [d.domain for d in profile.interest.likes]
 
-        slots = self._max_active - sum(1 for s in state.active if s.status == "active")
+        near_slots, challenge_slots = _available_probe_slots(
+            state.active,
+            near_limit=self._max_active,
+            challenge_limit=self._challenge_max_active,
+        )
+        slots = near_slots + challenge_slots
         if slots <= 0:
             return state
 
@@ -1039,7 +1109,11 @@ class InterestSpeculator:
             existing_speculations=[s.domain for s in state.active],
             cooldown_domains=cooldown_domains,
             confirmed_domains=confirmed_domains,
-            count=min(max(slots * 2, 5), 7),
+            count=min(max(slots * 2, 5), 10),
+            probe_mode_request=_probe_mode_request_for_slots(
+                near_slots=near_slots,
+                challenge_slots=challenge_slots,
+            ),
         )
 
         try:
@@ -1124,6 +1198,7 @@ class InterestSpeculator:
                     reason=reason_text,
                     experience_mode=_normalize_experience_mode(item.get("experience_mode")),
                     entry_load=_normalize_entry_load(item.get("entry_load")),
+                    probe_mode=_normalize_probe_mode(item.get("probe_mode")),
                     confidence=confidence,
                     weight=confidence,
                     created_at=now.isoformat(),
@@ -1141,14 +1216,20 @@ class InterestSpeculator:
             )
 
         existing_active = [s for s in state.active if s.status == "active"]
-        for candidate in _select_diverse_candidates(
+        for candidate in _select_candidates_for_probe_slots(
             candidates,
-            limit=slots,
+            near_limit=near_slots,
+            challenge_limit=challenge_slots,
             existing=existing_active,
             feedback_history=feedback_history,
         ):
-            if len(state.active) >= self._max_active:
-                break
+            if not _probe_slot_available(
+                state.active,
+                candidate.probe_mode,
+                near_limit=self._max_active,
+                challenge_limit=self._challenge_max_active,
+            ):
+                continue
             state.active.append(candidate)
             existing_domains.add(candidate.domain.lower())
 
@@ -1188,6 +1269,75 @@ def _normalize_experience_mode(value: Any) -> str:
 def _normalize_entry_load(value: Any) -> str:
     text = str(value or "").strip().lower()
     return text if text in {"light", "heavy"} else ""
+
+
+def _normalize_probe_mode(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return text if text in {"near", "lateral", "bridge", "wildcard"} else "near"
+
+
+def _is_challenge_probe_mode(value: Any) -> bool:
+    return _normalize_probe_mode(value) in _CHALLENGE_PROBE_MODES
+
+
+def _active_probe_slot_counts(specs: list[SpeculativeInterest]) -> tuple[int, int]:
+    near_count = 0
+    challenge_count = 0
+    for spec in specs:
+        if spec.status != "active":
+            continue
+        if _is_challenge_probe_mode(spec.probe_mode):
+            challenge_count += 1
+        else:
+            near_count += 1
+    return near_count, challenge_count
+
+
+def _available_probe_slots(
+    specs: list[SpeculativeInterest],
+    *,
+    near_limit: int,
+    challenge_limit: int,
+) -> tuple[int, int]:
+    near_count, challenge_count = _active_probe_slot_counts(specs)
+    return (
+        max(0, near_limit - near_count),
+        max(0, challenge_limit - challenge_count),
+    )
+
+
+def _probe_slot_available(
+    specs: list[SpeculativeInterest],
+    probe_mode: Any,
+    *,
+    near_limit: int,
+    challenge_limit: int,
+) -> bool:
+    near_slots, challenge_slots = _available_probe_slots(
+        specs,
+        near_limit=near_limit,
+        challenge_limit=challenge_limit,
+    )
+    if _is_challenge_probe_mode(probe_mode):
+        return challenge_slots > 0
+    return near_slots > 0
+
+
+def _probe_mode_request_for_slots(*, near_slots: int, challenge_slots: int) -> str:
+    if near_slots <= 0 and challenge_slots > 0:
+        return (
+            "本轮普通 near 池已满，只补挑战探针。"
+            "所有候选的 probe_mode 必须从 lateral / bridge / wildcard 中选择，"
+            "不要输出 near。"
+        )
+    if challenge_slots <= 0 and near_slots > 0:
+        return "本轮挑战池已满，只补普通探针。所有候选的 probe_mode 必须是 near。"
+    if near_slots > 0 and challenge_slots > 0:
+        return (
+            f"本轮还有 {near_slots} 个 near 普通槽和 {challenge_slots} 个挑战槽；"
+            "请同时给 near 和 lateral / bridge / wildcard 候选，避免全部输出 near。"
+        )
+    return "本轮没有可用探针槽位。"
 
 
 def _candidate_priority(
@@ -1238,6 +1388,131 @@ def _pick_best_candidate(
     )
 
 
+def _probe_mode(candidate: SpeculativeInterest) -> str:
+    return _normalize_probe_mode(candidate.probe_mode)
+
+
+def _best_unselected_by_probe_mode(
+    ordered: list[SpeculativeInterest],
+    selected: list[SpeculativeInterest],
+    context: list[SpeculativeInterest],
+    *,
+    avoid_axes: set[str],
+    modes: set[str],
+) -> SpeculativeInterest | None:
+    pool = [
+        candidate
+        for candidate in ordered
+        if candidate not in selected and _probe_mode(candidate) in modes
+    ]
+    if not pool:
+        return None
+    return max(
+        pool,
+        key=lambda candidate: _candidate_priority(
+            candidate,
+            context + selected,
+            avoid_axes=avoid_axes,
+        ),
+    )
+
+
+def _replace_weakest_selected(
+    selected: list[SpeculativeInterest],
+    replacement: SpeculativeInterest,
+    context: list[SpeculativeInterest],
+    *,
+    avoid_axes: set[str],
+    replace_modes: set[str],
+) -> bool:
+    replaceable = [candidate for candidate in selected if _probe_mode(candidate) in replace_modes]
+    if not replaceable:
+        return False
+    weakest = min(
+        replaceable,
+        key=lambda candidate: _candidate_priority(
+            candidate,
+            context + selected,
+            avoid_axes=avoid_axes,
+        ),
+    )
+    selected[selected.index(weakest)] = replacement
+    return True
+
+
+def _apply_probe_mode_quotas(
+    ordered: list[SpeculativeInterest],
+    selected: list[SpeculativeInterest],
+    *,
+    limit: int,
+    context: list[SpeculativeInterest],
+    avoid_axes: set[str],
+) -> list[SpeculativeInterest]:
+    if not selected:
+        return selected
+
+    available_modes = {_probe_mode(candidate) for candidate in ordered}
+    challenge_modes = {"lateral", "bridge", "wildcard"}
+    challenge_available = bool(available_modes & challenge_modes)
+    if challenge_available and not any(_probe_mode(item) in challenge_modes for item in selected):
+        replacement = _best_unselected_by_probe_mode(
+            ordered,
+            selected,
+            context,
+            avoid_axes=avoid_axes,
+            modes=challenge_modes,
+        )
+        if replacement is not None:
+            _replace_weakest_selected(
+                selected,
+                replacement,
+                context,
+                avoid_axes=avoid_axes,
+                replace_modes={"near"},
+            )
+
+    if challenge_available:
+        near_max = max(1, math.ceil(limit * 0.40))
+        while sum(1 for item in selected if _probe_mode(item) == "near") > near_max:
+            replacement = _best_unselected_by_probe_mode(
+                ordered,
+                selected,
+                context,
+                avoid_axes=avoid_axes,
+                modes=challenge_modes,
+            )
+            if replacement is None:
+                break
+            if not _replace_weakest_selected(
+                selected,
+                replacement,
+                context,
+                avoid_axes=avoid_axes,
+                replace_modes={"near"},
+            ):
+                break
+
+    selected_modes = {_probe_mode(item) for item in selected}
+    if limit >= 4 and len(available_modes) >= 2 and len(selected_modes) < 2:
+        replacement = _best_unselected_by_probe_mode(
+            ordered,
+            selected,
+            context,
+            avoid_axes=avoid_axes,
+            modes=available_modes - selected_modes,
+        )
+        if replacement is not None:
+            _replace_weakest_selected(
+                selected,
+                replacement,
+                context,
+                avoid_axes=avoid_axes,
+                replace_modes=selected_modes,
+            )
+
+    return selected
+
+
 def _select_diverse_candidates(
     candidates: list[SpeculativeInterest],
     *,
@@ -1270,8 +1545,7 @@ def _select_diverse_candidates(
             selected.append(light_pick)
 
     if not any(
-        item.experience_mode and item.experience_mode != "knowledge"
-        for item in context + selected
+        item.experience_mode and item.experience_mode != "knowledge" for item in context + selected
     ):
         non_knowledge_pick = _pick_best_candidate(
             ordered,
@@ -1296,7 +1570,55 @@ def _select_diverse_candidates(
                 ),
             )
         )
-    return selected[:limit]
+    return _apply_probe_mode_quotas(
+        ordered,
+        selected[:limit],
+        limit=limit,
+        context=context,
+        avoid_axes=avoid_axes,
+    )
+
+
+def _select_candidates_for_probe_slots(
+    candidates: list[SpeculativeInterest],
+    *,
+    near_limit: int,
+    challenge_limit: int,
+    existing: list[SpeculativeInterest] | None = None,
+    feedback_history: object | None = None,
+) -> list[SpeculativeInterest]:
+    selected: list[SpeculativeInterest] = []
+    context = list(existing or [])
+
+    if near_limit > 0:
+        near_candidates = [
+            candidate
+            for candidate in candidates
+            if not _is_challenge_probe_mode(candidate.probe_mode)
+        ]
+        selected.extend(
+            _select_diverse_candidates(
+                near_candidates,
+                limit=near_limit,
+                existing=context,
+                feedback_history=feedback_history,
+            )
+        )
+
+    if challenge_limit > 0:
+        challenge_candidates = [
+            candidate for candidate in candidates if _is_challenge_probe_mode(candidate.probe_mode)
+        ]
+        selected.extend(
+            _select_diverse_candidates(
+                challenge_candidates,
+                limit=challenge_limit,
+                existing=context + selected,
+                feedback_history=feedback_history,
+            )
+        )
+
+    return selected
 
 
 def build_probe_axis(*, experience_mode: Any, entry_load: Any) -> str:
@@ -1312,10 +1634,12 @@ def choose_next_probe_candidate(
     *,
     probed_domains: set[str] | None = None,
     probed_axes: set[str] | None = None,
+    probed_probe_modes: set[str] | None = None,
     feedback_history: object | None = None,
 ) -> Any | None:
     recent_domains = probed_domains or set()
     recent_axes = probed_axes or set()
+    recent_probe_modes = {_normalize_probe_mode(mode) for mode in (probed_probe_modes or set())}
     negative_domains = _negative_probe_feedback_domains(feedback_history)
     negative_axes = _negative_probe_feedback_axes(feedback_history)
     candidates = []
@@ -1348,7 +1672,13 @@ def choose_next_probe_candidate(
         )
         and axis not in recent_axes
     ]
-    pool = fresh_axis or same_pressure
+    axis_pool = fresh_axis or same_pressure
+    fresh_probe_mode = [
+        candidate
+        for candidate in axis_pool
+        if _normalize_probe_mode(getattr(candidate, "probe_mode", "")) not in recent_probe_modes
+    ]
+    pool = fresh_probe_mode or axis_pool
     return max(
         pool,
         key=lambda candidate: (
@@ -1357,6 +1687,7 @@ def choose_next_probe_candidate(
                 entry_load=getattr(candidate, "entry_load", ""),
             )
             not in negative_axes,
+            _normalize_probe_mode(getattr(candidate, "probe_mode", "")) not in recent_probe_modes,
             float(getattr(candidate, "weight", 0.0) or 0.0),
             float(getattr(candidate, "confidence", 0.0) or 0.0),
         ),

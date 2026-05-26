@@ -20,9 +20,15 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from openbiliclaw.memory.manager import MemoryManager
+    from openbiliclaw.soul.avoidance_speculator import AvoidanceSpeculator
     from openbiliclaw.soul.preference_analyzer import PreferenceAnalyzer
     from openbiliclaw.soul.profile_builder import ProfileBuilder
     from openbiliclaw.soul.speculator import InterestSpeculator
+
+from openbiliclaw.soul.dislike_writeback import (
+    apply_new_dislikes,
+    topics_for_confirmed_avoidance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -448,6 +454,9 @@ def signal_from_recommendation_click(
     recommendation_id: int | None = None,
     topic_label: str = "",
     up_name: str = "",
+    content_id: str = "",
+    content_url: str = "",
+    source_platform: str = "",
 ) -> ProfileSignal:
     """Convert a recommendation click-through into a strong profile signal.
 
@@ -467,6 +476,12 @@ def signal_from_recommendation_click(
         payload["topic_label"] = topic_label
     if up_name:
         payload["up_name"] = up_name
+    if content_id:
+        payload["content_id"] = content_id
+    if content_url:
+        payload["content_url"] = content_url
+    if source_platform:
+        payload["source_platform"] = source_platform
     return _make_signal(SignalType.RECOMMENDATION_CLICK, "recommendation", payload)
 
 
@@ -557,6 +572,7 @@ class ProfileUpdatePipeline:
         profile_builder: ProfileBuilder,
         thresholds: dict[OnionLayer, LayerThreshold] | None = None,
         speculator: InterestSpeculator | None = None,
+        avoidance_speculator: AvoidanceSpeculator | None = None,
         embedding_service: Any | None = None,
         cognition_cycle: Any | None = None,
         speculator_idle_interval_minutes: int = 30,
@@ -566,6 +582,7 @@ class ProfileUpdatePipeline:
         self._profile_builder = profile_builder
         self._thresholds = thresholds or dict(DEFAULT_THRESHOLDS)
         self._speculator = speculator
+        self._avoidance_speculator = avoidance_speculator
         self._embedding_service = embedding_service
         self._cognition_cycle = cognition_cycle
         data_dir = getattr(memory, "_data_dir", None)
@@ -623,13 +640,18 @@ class ProfileUpdatePipeline:
         result.layers_buffered = sorted(layers_touched)
 
         # Speculator observation (lightweight keyword matching)
-        if self._speculator:
+        if self._speculator or self._avoidance_speculator:
             raw_events = [
                 sig.get("payload", {}) if isinstance(sig.get("payload"), dict) else {}
                 for signal in signals
                 for sig in [{"payload": signal.payload}]
             ]
+        else:
+            raw_events = []
+        if self._speculator:
             self._speculator.observe(raw_events)
+        if self._avoidance_speculator:
+            self._avoidance_speculator.observe(raw_events)
 
         # Check thresholds and update ready layers.
         # Strong-signal types (feedback, dialogue) bypass the min_signals gate.
@@ -673,13 +695,19 @@ class ProfileUpdatePipeline:
         #   (b) idle interval (30 min) has elapsed since the last tick —
         #       safety net so expire/promote still happens for users
         #       whose profile is stable but who interact with probes
-        if self._speculator:
+        if self._speculator or self._avoidance_speculator:
             should_tick_speculator = bool(result.layers_updated) or (
                 self._last_speculator_tick_at is None
                 or now - self._last_speculator_tick_at >= self._speculator_idle_min_interval
             )
             if should_tick_speculator:
-                await self._run_speculator_tick(result)
+                if self._speculator:
+                    await self._run_speculator_tick(result)
+                if self._avoidance_speculator:
+                    try:
+                        await self._run_avoidance_speculator_tick(result)
+                    except Exception:
+                        logger.warning("Avoidance speculator tick failed", exc_info=True)
                 self._last_speculator_tick_at = now
 
         # Cognition cycle: throttled awareness + insight regeneration.
@@ -817,7 +845,7 @@ class ProfileUpdatePipeline:
 
     async def _run_speculator_tick(self, result: FlushResult) -> None:
         """Run speculator lifecycle: expire, promote, generate."""
-        from openbiliclaw.soul.profile import InterestDomain
+        from openbiliclaw.soul.interest_writeback import merge_confirmed_interest
 
         profile = self._load_profile()
         feedback_history: object = []
@@ -838,14 +866,19 @@ class ProfileUpdatePipeline:
         # Promote confirmed speculations into the interest layer
         if tick_result.promoted:
             for spec in tick_result.promoted:
-                profile.interest.likes.append(
-                    InterestDomain(
-                        domain=spec.domain,
-                        weight=0.3,
-                        source="speculated",
-                        first_seen=spec.created_at,
-                        last_seen=datetime.now().isoformat(),
-                    )
+                specifics = [
+                    str(getattr(specific, "name", "")).strip()
+                    for specific in getattr(spec, "specifics", [])
+                    if str(getattr(specific, "name", "")).strip()
+                ]
+                source = str(getattr(spec, "confirmation_source", "") or "speculated")
+                merge_confirmed_interest(
+                    profile,
+                    domain=str(getattr(spec, "domain", "")),
+                    specifics=specifics,
+                    source=source,
+                    first_seen=str(getattr(spec, "created_at", "")),
+                    last_seen=str(getattr(spec, "confirmed_at", "")) or datetime.now().isoformat(),
                 )
 
             self._save_profile(profile)
@@ -863,6 +896,58 @@ class ProfileUpdatePipeline:
             )
             result.layers_updated.append(update_result)
             self._record_changelog(update_result)
+
+    async def _run_avoidance_speculator_tick(self, result: FlushResult) -> None:
+        """Run avoidance speculator lifecycle and write confirmed topics."""
+        profile = self._load_profile()
+        feedback_history: object = []
+        load_runtime_state = getattr(self._memory, "load_discovery_runtime_state", None)
+        if callable(load_runtime_state):
+            try:
+                runtime_state = load_runtime_state()
+                if isinstance(runtime_state, dict):
+                    feedback_history = runtime_state.get("avoidance_probe_feedback_history", [])
+            except Exception:
+                logger.debug("Failed to load avoidance probe feedback history", exc_info=True)
+
+        tick = self._avoidance_speculator.tick  # type: ignore[union-attr]
+        try:
+            tick_result = await tick(profile, feedback_history=feedback_history)
+        except TypeError:
+            tick_result = await tick(profile)
+
+        if not tick_result.promoted:
+            return
+
+        topics: list[str] = []
+        for avoidance in tick_result.promoted:
+            topics.extend(topics_for_confirmed_avoidance(avoidance))
+        if not topics:
+            return
+
+        changes = await apply_new_dislikes(
+            memory=self._memory,
+            database=getattr(self._memory, "_database", None),
+            embedding_service=self._embedding_service,
+            llm_service=getattr(self._preference_analyzer, "registry", None),
+            topics=topics,
+        )
+        if not changes:
+            return
+
+        update_result = LayerUpdateResult(
+            layer=OnionLayer.INTEREST,
+            changed=True,
+            changes=changes,
+            signals_consumed=0,
+            trigger="避雷方向确认",
+            evidence=", ".join(
+                f"{item.domain}({item.confirmation_count}次确认)" for item in tick_result.promoted
+            ),
+            timestamp=datetime.now().isoformat(),
+        )
+        result.layers_updated.append(update_result)
+        self._record_changelog(update_result)
 
     def _save_state(self) -> None:
         """Persist buffer state to disk."""

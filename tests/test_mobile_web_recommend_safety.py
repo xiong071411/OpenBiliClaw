@@ -34,7 +34,7 @@ def test_mobile_web_load_data_does_not_consume_recommendation_pool() -> None:
     load_data = _function_body(js, "loadData")
     read_only = _function_body(js, "refreshReadOnlyData")
 
-    assert "await refreshReadOnlyData({ resetAppendState: true })" in load_data
+    assert "fetchRecommendations().catch" in load_data
     assert "reshuffleRecommendations(" not in load_data
     assert "fetchRecommendations().catch" in read_only
 

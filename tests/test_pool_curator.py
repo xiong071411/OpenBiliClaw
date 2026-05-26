@@ -318,6 +318,71 @@ def test_build_context_reads_recommendation_history() -> None:
     assert "search" in ctx.recent_sources
 
 
+def test_get_recommendation_signals_since_uses_presented_at_rolling_budget_window() -> None:
+    db, _ = _make_db()
+    now = datetime.now(UTC)
+    db.cache_content(
+        "BV_OLD",
+        title="Old",
+        up_name="UP",
+        source="search",
+        topic_key="old",
+        topic_group="旧方向",
+    )
+    db.cache_content(
+        "BV_RECENT",
+        title="Recent",
+        up_name="UP",
+        source="search",
+        topic_key="recent",
+        topic_group="城市基础设施观察",
+    )
+    old_id = db.insert_recommendation("BV_OLD", confidence=0.8)
+    recent_id = db.insert_recommendation("BV_RECENT", confidence=0.8)
+    db._execute_write(
+        "UPDATE recommendations SET presented = 1, presented_at = ? WHERE id = ?",
+        ((now - timedelta(days=2)).isoformat(sep=" "), old_id),
+    )
+    db._execute_write(
+        "UPDATE recommendations SET presented = 1, presented_at = ? WHERE id = ?",
+        ((now - timedelta(hours=1)).isoformat(sep=" "), recent_id),
+    )
+
+    rows = db.get_recent_recommendation_signals_since(
+        since=now - timedelta(hours=24),
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["bvid"] == "BV_RECENT"
+    assert rows[0]["topic_group"] == "城市基础设施观察"
+
+
+def test_pool_curator_marks_over_budget_amplification_key() -> None:
+    db, _ = _make_db()
+    now = datetime.now(UTC)
+    db.cache_content(
+        "BV_RECENT",
+        title="Recent",
+        up_name="UP",
+        source="search",
+        topic_key="城市基础设施观察:桥梁",
+        topic_group="城市基础设施观察",
+    )
+    rec_id = db.insert_recommendation("BV_RECENT", confidence=0.8)
+    db._execute_write(
+        "UPDATE recommendations SET presented = 1, presented_at = ? WHERE id = ?",
+        ((now - timedelta(hours=1)).isoformat(sep=" "), rec_id),
+    )
+    curator = PoolCurator(db)
+
+    context = curator.build_context(
+        newly_confirmed_amplification_keys={"城市基础设施观察"},
+        rolling_window_hours=24,
+    )
+
+    assert "城市基础设施观察" in context.over_budget_amplification_keys
+
+
 def test_build_context_reads_feedback_signals() -> None:
     db, _ = _make_db()
     db.cache_content("BV1", title="A", up_name="UP", up_mid=42, source="search", topic_key="game")
@@ -350,6 +415,8 @@ def test_needs_replenishment_false_when_pool_full() -> None:
             source="search",
             pool_expression="x",
             pool_topic_label="y",
+            style_key="tutorial",
+            topic_group=f"分组{i}",
         )
     curator = PoolCurator(db)
     assert curator.needs_replenishment() is False
@@ -369,6 +436,8 @@ def test_evict_stale_pool_items_marks_old_items() -> None:
         source="search",
         pool_expression="x",
         pool_topic_label="y",
+        style_key="tutorial",
+        topic_group="测试分组",
     )
     # Backdate the discovered_at to 20 days ago
     db.conn.execute(
@@ -382,6 +451,8 @@ def test_evict_stale_pool_items_marks_old_items() -> None:
         source="search",
         pool_expression="x",
         pool_topic_label="y",
+        style_key="tutorial",
+        topic_group="测试分组",
     )
     evicted = db.evict_stale_pool_items(max_age_days=14)
     assert evicted == 1

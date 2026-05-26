@@ -329,7 +329,13 @@ class MemoryManager:
             "recent_pool_topics": [],
             "probed_domains": {},
             "probed_axes": {},
+            "probed_distance_bands": {},
             "probe_feedback_history": [],
+            "short_term_exploration_buffer": {"entries": []},
+            "probed_avoidance_domains": {},
+            "probed_avoidance_axes": {},
+            "avoidance_probe_feedback_history": [],
+            "last_probe_kind": "",
         }
         if not self._discovery_runtime_state_path.exists():
             return default_state
@@ -348,9 +354,20 @@ class MemoryManager:
             "recent_pool_topics": self._as_str_list(loaded.get("recent_pool_topics", [])),
             "probed_domains": loaded.get("probed_domains", {}),
             "probed_axes": loaded.get("probed_axes", {}),
+            "probed_distance_bands": loaded.get("probed_distance_bands", {}),
             "probe_feedback_history": self._as_dict_list(loaded.get("probe_feedback_history", []))[
                 -100:
             ],
+            "short_term_exploration_buffer": loaded.get(
+                "short_term_exploration_buffer",
+                {"entries": []},
+            ),
+            "probed_avoidance_domains": loaded.get("probed_avoidance_domains", {}),
+            "probed_avoidance_axes": loaded.get("probed_avoidance_axes", {}),
+            "avoidance_probe_feedback_history": self._as_dict_list(
+                loaded.get("avoidance_probe_feedback_history", [])
+            )[-100:],
+            "last_probe_kind": str(loaded.get("last_probe_kind", "")),
             "last_delight_notification_at": str(loaded.get("last_delight_notification_at", "")),
         }
 
@@ -368,9 +385,20 @@ class MemoryManager:
             "recent_pool_topics": self._as_str_list(state.get("recent_pool_topics", [])),
             "probed_domains": state.get("probed_domains", {}),
             "probed_axes": state.get("probed_axes", {}),
+            "probed_distance_bands": state.get("probed_distance_bands", {}),
             "probe_feedback_history": self._as_dict_list(state.get("probe_feedback_history", []))[
                 -100:
             ],
+            "short_term_exploration_buffer": state.get(
+                "short_term_exploration_buffer",
+                {"entries": []},
+            ),
+            "probed_avoidance_domains": state.get("probed_avoidance_domains", {}),
+            "probed_avoidance_axes": state.get("probed_avoidance_axes", {}),
+            "avoidance_probe_feedback_history": self._as_dict_list(
+                state.get("avoidance_probe_feedback_history", [])
+            )[-100:],
+            "last_probe_kind": str(state.get("last_probe_kind", "")),
             "last_delight_notification_at": str(state.get("last_delight_notification_at", "")),
         }
         with open(self._discovery_runtime_state_path, "w", encoding="utf-8") as file:

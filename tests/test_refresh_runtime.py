@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from openbiliclaw.recommendation.delight import DEFAULT_DELIGHT_THRESHOLD
+from openbiliclaw.runtime.events import RuntimeEventHub
 from openbiliclaw.runtime.presence import PresenceTracker
 from openbiliclaw.runtime.refresh import ContinuousRefreshController
 
@@ -56,12 +57,16 @@ class _FakeDatabase:
         *,
         pool_count: int = 30,
         source_counts: dict[str, int] | None = None,
+        pool_raw_count: int | None = None,
+        pool_pending_count: int = 0,
         reactivate_pool_count: int = 0,
         delight_candidate: dict[str, object] | None = None,
         delight_count: int = 0,
     ) -> None:
         self.events = events
         self.pool_count = pool_count
+        self.pool_raw_count = pool_raw_count
+        self.pool_pending_count = pool_pending_count
         self.source_counts = source_counts or {}
         self.reactivate_pool_count = reactivate_pool_count
         self.delight_candidate = delight_candidate
@@ -106,6 +111,13 @@ class _FakeDatabase:
 
     def count_pool_candidates(self) -> int:
         return self.pool_count
+
+    def count_pool_readiness(self) -> dict[str, int]:
+        return {
+            "available": self.pool_count,
+            "raw": self.pool_count if self.pool_raw_count is None else self.pool_raw_count,
+            "pending": self.pool_pending_count,
+        }
 
     def count_pool_candidates_by_source(self) -> dict[str, int]:
         return dict(self.source_counts)
@@ -305,7 +317,7 @@ _LOOP_BODY_ATTRS = [
         (
             "prepare_delight_candidates",
             "_publish_delight_if_available",
-            "_publish_interest_probe_if_available",
+            "_publish_probe_if_available",
         ),
     ),
 ]
@@ -485,6 +497,7 @@ class _FakeSpeculation:
         confirmation_count: int = 0,
         experience_mode: str = "",
         entry_load: str = "",
+        probe_mode: str = "near",
         specifics: list[object] | None = None,
     ) -> None:
         self.domain = domain
@@ -495,6 +508,7 @@ class _FakeSpeculation:
         self.confirmation_count = confirmation_count
         self.experience_mode = experience_mode
         self.entry_load = entry_load
+        self.probe_mode = probe_mode
         self.specifics = specifics or []
 
 
@@ -504,6 +518,14 @@ class _FakeSpeculator:
 
     def get_active_speculations(self) -> list[_FakeSpeculation]:
         return list(self._specs)
+
+
+class _FakeAvoidanceSpeculator:
+    def __init__(self, avoidances: list[_FakeSpeculation]) -> None:
+        self._avoidances = avoidances
+
+    def get_active_avoidances(self) -> list[_FakeSpeculation]:
+        return list(self._avoidances)
 
 
 async def test_refresh_controller_falls_back_to_full_plan_when_below_target() -> None:
@@ -688,6 +710,22 @@ async def test_refresh_controller_uses_shared_delight_threshold_for_runtime_quer
     assert database.get_delight_thresholds == [DEFAULT_DELIGHT_THRESHOLD]
 
 
+def test_runtime_status_reports_pool_readiness_counts() -> None:
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=_FakeDatabase([], pool_count=0, pool_raw_count=142, pool_pending_count=142),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+    )
+
+    status = controller.get_runtime_status()
+
+    assert status["pool_available_count"] == 0
+    assert status["pool_raw_count"] == 142
+    assert status["pool_pending_count"] == 142
+
+
 async def test_refresh_controller_prepares_delight_candidates_without_refresh() -> None:
     recommendations = _FakeRecommendationEngine()
     controller = ContinuousRefreshController(
@@ -736,6 +774,8 @@ async def test_periodic_pool_precompute_reports_newly_available_inventory() -> N
             "phase": "done",
             "message": "刚补进 16 条新的",
             "pool_available_count": 16,
+            "pool_raw_count": 16,
+            "pool_pending_count": 0,
             "last_discovered_count": 21,
             "last_replenished_count": 16,
             "recent_pool_topics": [],
@@ -1397,6 +1437,286 @@ async def test_publish_interest_probe_skips_recent_axis_repeat() -> None:
     probe_events = [event for event in event_hub.events if event["type"] == "interest.probe"]
     assert len(probe_events) == 1
     assert probe_events[0]["domain"] == "城市漫游"
+
+
+async def test_publish_interest_probe_records_probed_distance_bands() -> None:
+    event_hub = _FakeEventHub()
+    memory = _FakeMemoryManager(
+        {
+            "probed_domains": {},
+            "probed_axes": {},
+            "probed_distance_bands": {},
+        }
+    )
+
+    class _SoulEngineWithSpeculator(_FakeSoulEngine):
+        def __init__(self) -> None:
+            self._speculator = _FakeSpeculator(
+                [
+                    _FakeSpeculation(
+                        domain="桥接方向",
+                        reason="从已有兴趣自然跨到一个挑战方向。",
+                        weight=0.5,
+                        probe_mode="bridge",
+                    )
+                ]
+            )
+
+    controller = ContinuousRefreshController(
+        memory_manager=memory,
+        database=_FakeDatabase(events=[]),
+        soul_engine=_SoulEngineWithSpeculator(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        event_hub=event_hub,
+    )
+
+    await controller._publish_interest_probe_if_available()
+
+    assert "bridge" in memory.state["probed_distance_bands"]
+
+
+async def test_publish_interest_probe_does_not_record_probe_without_stream_subscriber() -> None:
+    memory = _FakeMemoryManager(
+        {
+            "last_event_refresh_at": "",
+            "last_trending_refresh_at": "",
+            "last_explore_refresh_at": "",
+            "last_processed_event_id": 0,
+            "last_notification_at": "",
+            "last_discovered_count": 0,
+            "last_replenished_count": 0,
+            "recent_pool_topics": [],
+            "probed_domains": {},
+            "probed_axes": {},
+        }
+    )
+
+    class _SoulEngineWithSpeculator(_FakeSoulEngine):
+        def __init__(self) -> None:
+            self._speculator = _FakeSpeculator(
+                [
+                    _FakeSpeculation(
+                        domain="城市漫游",
+                        reason="能从场景里看结构。",
+                        weight=0.5,
+                        experience_mode="wander_observe",
+                        entry_load="light",
+                    )
+                ]
+            )
+
+    controller = ContinuousRefreshController(
+        memory_manager=memory,
+        database=_FakeDatabase(events=[]),
+        soul_engine=_SoulEngineWithSpeculator(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        event_hub=RuntimeEventHub(),
+    )
+
+    await controller._publish_interest_probe_if_available()
+
+    assert memory.state["probed_domains"] == {}
+    assert memory.state["probed_axes"] == {}
+
+
+async def test_publish_avoidance_probe_skips_recent_axis_repeat() -> None:
+    event_hub = _FakeEventHub()
+    memory = _FakeMemoryManager(
+        {
+            "last_event_refresh_at": "",
+            "last_trending_refresh_at": "",
+            "last_explore_refresh_at": "",
+            "last_processed_event_id": 0,
+            "last_notification_at": "",
+            "last_discovered_count": 0,
+            "last_replenished_count": 0,
+            "recent_pool_topics": [],
+            "probed_avoidance_domains": {},
+            "probed_avoidance_axes": {"knowledge|heavy": datetime.now().isoformat()},
+        }
+    )
+
+    class _SoulEngineWithAvoidanceSpeculator(_FakeSoulEngine):
+        def __init__(self) -> None:
+            self._avoidance_speculator = _FakeAvoidanceSpeculator(
+                [
+                    _FakeSpeculation(
+                        domain="标题党热点解读",
+                        reason="容易造成低信息密度重复消费。",
+                        weight=0.9,
+                        experience_mode="knowledge",
+                        entry_load="heavy",
+                    ),
+                    _FakeSpeculation(
+                        domain="浅层情绪争吵",
+                        reason="和用户偏好的冷静分析方式冲突。",
+                        weight=0.5,
+                        experience_mode="wander_observe",
+                        entry_load="light",
+                    ),
+                ]
+            )
+
+    controller = ContinuousRefreshController(
+        memory_manager=memory,
+        database=_FakeDatabase(events=[]),
+        soul_engine=_SoulEngineWithAvoidanceSpeculator(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        event_hub=event_hub,
+    )
+
+    await controller._publish_avoidance_probe_if_available()
+
+    probe_events = [event for event in event_hub.events if event["type"] == "avoidance.probe"]
+    assert len(probe_events) == 1
+    assert probe_events[0]["domain"] == "浅层情绪争吵"
+
+
+async def test_publish_avoidance_probe_does_not_record_without_stream_subscriber() -> None:
+    memory = _FakeMemoryManager(
+        {
+            "last_event_refresh_at": "",
+            "last_trending_refresh_at": "",
+            "last_explore_refresh_at": "",
+            "last_processed_event_id": 0,
+            "last_notification_at": "",
+            "last_discovered_count": 0,
+            "last_replenished_count": 0,
+            "recent_pool_topics": [],
+            "probed_avoidance_domains": {},
+            "probed_avoidance_axes": {},
+        }
+    )
+
+    class _SoulEngineWithAvoidanceSpeculator(_FakeSoulEngine):
+        def __init__(self) -> None:
+            self._avoidance_speculator = _FakeAvoidanceSpeculator(
+                [
+                    _FakeSpeculation(
+                        domain="标题党热点解读",
+                        reason="容易造成低信息密度重复消费。",
+                        weight=0.5,
+                        experience_mode="knowledge",
+                        entry_load="light",
+                    )
+                ]
+            )
+
+    controller = ContinuousRefreshController(
+        memory_manager=memory,
+        database=_FakeDatabase(events=[]),
+        soul_engine=_SoulEngineWithAvoidanceSpeculator(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        event_hub=RuntimeEventHub(),
+    )
+
+    await controller._publish_avoidance_probe_if_available()
+
+    assert memory.state["probed_avoidance_domains"] == {}
+    assert memory.state["probed_avoidance_axes"] == {}
+
+
+async def test_proactive_probe_push_publishes_only_one_probe_per_tick() -> None:
+    event_hub = _FakeEventHub()
+    memory = _FakeMemoryManager(
+        {
+            "last_event_refresh_at": "",
+            "last_trending_refresh_at": "",
+            "last_explore_refresh_at": "",
+            "last_processed_event_id": 0,
+            "last_notification_at": "",
+            "last_discovered_count": 0,
+            "last_replenished_count": 0,
+            "recent_pool_topics": [],
+            "probed_domains": {},
+            "probed_axes": {},
+            "probed_avoidance_domains": {},
+            "probed_avoidance_axes": {},
+            "last_probe_kind": "",
+        }
+    )
+
+    class _SoulEngineWithBothSpeculators(_FakeSoulEngine):
+        def __init__(self) -> None:
+            self._speculator = _FakeSpeculator(
+                [_FakeSpeculation(domain="城市漫游", reason="能从场景里看结构。")]
+            )
+            self._avoidance_speculator = _FakeAvoidanceSpeculator(
+                [_FakeSpeculation(domain="标题党热点解读", reason="低信息密度。")]
+            )
+
+    controller = ContinuousRefreshController(
+        memory_manager=memory,
+        database=_FakeDatabase(events=[]),
+        soul_engine=_SoulEngineWithBothSpeculators(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        event_hub=event_hub,
+    )
+
+    await controller._publish_probe_if_available()
+
+    probe_events = [
+        event
+        for event in event_hub.events
+        if event["type"] in {"interest.probe", "avoidance.probe"}
+    ]
+    assert len(probe_events) == 1
+    assert probe_events[0]["type"] == "interest.probe"
+    assert memory.state["last_probe_kind"] == "interest"
+
+    await controller._publish_probe_if_available()
+
+    probe_events = [
+        event
+        for event in event_hub.events
+        if event["type"] in {"interest.probe", "avoidance.probe"}
+    ]
+    assert len(probe_events) == 2
+    assert probe_events[1]["type"] == "avoidance.probe"
+    assert memory.state["last_probe_kind"] == "avoidance"
+
+
+async def test_proactive_probe_push_does_not_record_kind_when_publish_fails() -> None:
+    memory = _FakeMemoryManager(
+        {
+            "last_event_refresh_at": "",
+            "last_trending_refresh_at": "",
+            "last_explore_refresh_at": "",
+            "last_processed_event_id": 0,
+            "last_notification_at": "",
+            "last_discovered_count": 0,
+            "last_replenished_count": 0,
+            "recent_pool_topics": [],
+            "probed_domains": {},
+            "probed_axes": {},
+            "last_probe_kind": "",
+        }
+    )
+
+    class _SoulEngineWithSpeculator(_FakeSoulEngine):
+        def __init__(self) -> None:
+            self._speculator = _FakeSpeculator(
+                [_FakeSpeculation(domain="城市漫游", reason="能从场景里看结构。")]
+            )
+
+    controller = ContinuousRefreshController(
+        memory_manager=memory,
+        database=_FakeDatabase(events=[]),
+        soul_engine=_SoulEngineWithSpeculator(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        event_hub=RuntimeEventHub(),
+    )
+
+    await controller._publish_probe_if_available()
+
+    assert memory.state["last_probe_kind"] == ""
+    assert memory.state["probed_domains"] == {}
 
 
 # ===========================================================================
@@ -2198,6 +2518,34 @@ async def test_refresh_publishes_pool_status_when_count_changes() -> None:
     assert pool_events[0]["pool_target_count"] == 30
 
 
+async def test_refresh_pool_status_includes_readiness_counts() -> None:
+    event_hub = _FakeEventHub()
+    database = _FakeDatabase([], pool_count=0, pool_raw_count=142, pool_pending_count=142)
+
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=database,
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        event_hub=event_hub,
+        pool_target_count=30,
+    )
+
+    await controller._publish_pool_status_if_changed()
+
+    pool_events = [e for e in event_hub.events if e["type"] == "pool_status"]
+    assert pool_events == [
+        {
+            "type": "pool_status",
+            "pool_available_count": 0,
+            "pool_raw_count": 142,
+            "pool_pending_count": 142,
+            "pool_target_count": 30,
+        }
+    ]
+
+
 async def test_refresh_pool_status_dedupes_unchanged_count() -> None:
     """Calling ``_publish_pool_status_if_changed`` repeatedly with the
     same count must only emit the first one — popup-side state
@@ -2248,3 +2596,38 @@ async def test_refresh_pool_status_re_emits_when_count_rotates() -> None:
     pool_events = [e for e in event_hub.events if e["type"] == "pool_status"]
     counts = [e["pool_available_count"] for e in pool_events]
     assert counts == [42, 20, 42]
+
+
+async def test_refresh_if_needed_skips_when_scheduler_disabled() -> None:
+    """refresh_if_needed must respect the LLM gate so event-ingest and
+    feedback paths don't fire discovery when 停止后台 LLM 请求 is on."""
+    controller = _controller_with_gate(
+        scheduler_config=SimpleNamespace(enabled=False, pause_on_extension_disconnect=False),
+    )
+
+    result = await controller.refresh_if_needed()
+
+    assert result["refreshed"] is False
+    assert result["reason"] == "llm_paused"
+
+
+async def test_refresh_after_event_ingest_skips_when_scheduler_disabled() -> None:
+    controller = _controller_with_gate(
+        scheduler_config=SimpleNamespace(enabled=False, pause_on_extension_disconnect=False),
+    )
+
+    result = await controller.refresh_after_event_ingest()
+
+    assert result["refreshed"] is False
+    assert result["reason"] == "llm_paused"
+
+
+async def test_refresh_after_feedback_skips_when_scheduler_disabled() -> None:
+    controller = _controller_with_gate(
+        scheduler_config=SimpleNamespace(enabled=False, pause_on_extension_disconnect=False),
+    )
+
+    result = await controller.refresh_after_feedback()
+
+    assert result["refreshed"] is False
+    assert result["reason"] == "llm_paused"

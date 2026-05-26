@@ -36,6 +36,7 @@ import {
   validateCommentInput,
   getCommentSubmitUiState,
   buildContentUrl,
+  buildRecommendationClickPayload,
   normalizeSourcePlatform,
   getSourceLabel,
   formatRelativeTimestamp,
@@ -782,7 +783,7 @@ function renderCard(rawItem, index = 0) {
   const alreadyFeedback = feedbackDone.get(item.id);
 
   const openBtn = createCardAction("\u{1F517} \u6253\u5F00", () => {
-    reportClick({ bvid: item.bvid, title: item.title, recommendation_id: item.id, topic_label: item.topic_label, up_name: item.up_name });
+    reportClick(buildRecommendationClickPayload(item, url));
     if (url) window.open(url, "_blank");
   });
 
@@ -844,7 +845,7 @@ function renderCard(rawItem, index = 0) {
   if (url) {
     card.style.cursor = "pointer";
     card.addEventListener("click", () => {
-      reportClick({ bvid: item.bvid, title: item.title, recommendation_id: item.id, topic_label: item.topic_label, up_name: item.up_name });
+      reportClick(buildRecommendationClickPayload(item, url));
       window.open(url, "_blank");
     });
   }
@@ -1107,12 +1108,47 @@ async function loadData() {
   loading = true;
   render();
   try {
-    await refreshReadOnlyData({ resetAppendState: true });
+    const recs = await fetchRecommendations().catch(() => []);
+    const normalizedRecs = recs.map(normalizeRecommendation);
+    autoAppendExhausted = false;
+    resetAutoAppendIntent();
+    // Restore feedback state from backend so it survives page refresh.
+    rememberRecommendationFeedback(normalizedRecs);
+    patchState({
+      recommendations: normalizedRecs,
+    });
   } catch { /* ignore */ }
   loading = false;
   render();
-  // Hydrate durable delight chat turns after initial render
-  hydrateDelightTurns();
+  void hydrateRecommendSideChannels();
+}
+
+function hydrateRecommendSideChannels() {
+  fetchRuntimeStatus()
+    .then((status) => {
+      if (!status) return;
+      patchState({ runtimeStatus: normalizeRuntimeStatus(status) });
+      rerenderHeaderOnly();
+    })
+    .catch(() => {});
+
+  fetchActivityFeed({ limit: 5 })
+    .then((activityFeed) => {
+      patchState({ activityFeed });
+      rerenderHeaderOnly();
+    })
+    .catch(() => {});
+
+  fetchDelightBatch()
+    .then((delights) => {
+      patchState({
+        activeDelights: delights.map(normalizeDelightCandidate),
+        delightCurrentIndex: 0,
+      });
+      rerenderDelightOnly();
+      void hydrateDelightTurns();
+    })
+    .catch(() => {});
 }
 
 function scheduleRecommendationItemsRefresh() {

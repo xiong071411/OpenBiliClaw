@@ -244,6 +244,9 @@ export async function submitFeedback(payload) {
  *
  * @param {{
  *   bvid: string,
+ *   content_id?: string,
+ *   content_url?: string,
+ *   source_platform?: string,
  *   title?: string,
  *   recommendation_id?: number | null,
  *   topic_label?: string,
@@ -326,6 +329,21 @@ export async function respondToInterestProbe(domain, responseType, message = "")
   const timeout = setTimeout(() => controller.abort(), 35_000);
   try {
     return await requestJson("/interest-probes/respond", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain, response: responseType, message }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function respondToAvoidanceProbe(domain, responseType, message = "") {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 35_000);
+  try {
+    return await requestJson("/avoidance-probes/respond", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ domain, response: responseType, message }),

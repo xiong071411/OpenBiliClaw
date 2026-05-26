@@ -19,6 +19,8 @@ def _seed_visible(db: Database, bvid: str, **kwargs: Any) -> None:
     """
     kwargs.setdefault("pool_expression", "测试推荐文案")
     kwargs.setdefault("pool_topic_label", "测试主题")
+    kwargs.setdefault("style_key", "tutorial")
+    kwargs.setdefault("topic_group", "测试分组")
     db.cache_content(bvid, **kwargs)
 
 
@@ -30,6 +32,25 @@ class TestDatabase:
             db = Database(Path(tmpdir) / "test.db")
             db.initialize()
             assert db.conn is not None
+            db.close()
+
+    def test_initialize_creates_recommendation_read_indexes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            recommendation_indexes = {
+                str(row["name"])
+                for row in db.conn.execute("PRAGMA index_list(recommendations)").fetchall()
+            }
+            content_indexes = {
+                str(row["name"])
+                for row in db.conn.execute("PRAGMA index_list(content_cache)").fetchall()
+            }
+
+            assert "idx_recommendations_created_id" in recommendation_indexes
+            assert "idx_content_cache_content_id" in content_indexes
+
             db.close()
 
     def test_insert_and_get_events(self) -> None:
@@ -723,6 +744,7 @@ class TestDatabase:
                     up_name="UP",
                     source="search",
                     relevance_score=0.95,
+                    topic_group=f"搜索分组{i}",
                 )
             for i in range(3):
                 note_id = f"xhs-reactivate-{i}"
@@ -735,6 +757,7 @@ class TestDatabase:
                     source_platform="xiaohongshu",
                     content_url=(f"https://www.xiaohongshu.com/explore/{note_id}?xsec_token=ABC="),
                     relevance_score=0.80,
+                    topic_group=f"小红书分组{i}",
                 )
                 db._execute_write(
                     "UPDATE content_cache SET pool_status = 'suppressed' WHERE bvid = ?",
@@ -1257,6 +1280,8 @@ class TestDatabase:
                 relevance_score=0.84,
                 pool_expression="这条先给你备好了推荐理由。",
                 pool_topic_label="先备好的那股味儿",
+                style_key="tutorial",
+                topic_group="测试分组",
             )
 
             items = db.get_pool_candidates(limit=10)
@@ -1302,6 +1327,8 @@ class TestDatabase:
                 relevance_score=0.8,
                 pool_expression="LLM 文案",
                 pool_topic_label="LLM topic",
+                style_key="tutorial",
+                topic_group="测试分组",
             )
 
             rows = db.get_pool_candidates(limit=10)
@@ -1317,10 +1344,49 @@ class TestDatabase:
             db.initialize()
 
             db.cache_content("a", title="a", source="search", relevance_score=0.5)
-            db.cache_content("b", title="b", source="search", relevance_score=0.5)
+            db.cache_content(
+                "b",
+                title="b",
+                source="search",
+                relevance_score=0.5,
+                style_key="tutorial",
+                topic_group="测试分组",
+            )
             db.update_pool_copy("b", expression="x", topic_label="y")
 
             assert db.count_pool_candidates() == 1
+
+            db.close()
+
+    def test_count_pool_candidates_respects_default_topic_group_window(self) -> None:
+        """The public available count uses the same topic_group cap as pool load."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            for index in range(5):
+                _seed_visible(
+                    db,
+                    f"BVAI{index}",
+                    title=f"AI 候选 {index}",
+                    source="search",
+                    topic_group="人工智能",
+                    relevance_score=0.95 - index * 0.01,
+                )
+            _seed_visible(
+                db,
+                "BVDOC",
+                title="纪录片候选",
+                source="explore",
+                topic_group="人物纪录",
+                relevance_score=0.75,
+            )
+
+            assert db.count_pool_candidates() == 4
+            assert db.count_pool_candidates(max_per_topic_group=0) == 6
+            rows = db.get_pool_candidates(limit=10)
+            assert len(rows) == 4
+            assert [row["topic_group"] for row in rows].count("人工智能") == 3
 
             db.close()
 
@@ -1331,7 +1397,14 @@ class TestDatabase:
             db = Database(Path(tmpdir) / "test.db")
             db.initialize()
 
-            db.cache_content("BVPENDING", title="待生成", source="search", relevance_score=0.7)
+            db.cache_content(
+                "BVPENDING",
+                title="待生成",
+                source="search",
+                relevance_score=0.7,
+                style_key="tutorial",
+                topic_group="测试分组",
+            )
             assert db.count_pool_candidates() == 0
             assert db.get_pool_candidates(limit=10) == []
 
@@ -1340,6 +1413,80 @@ class TestDatabase:
             assert db.count_pool_candidates() == 1
             rows = db.get_pool_candidates(limit=10)
             assert [r["bvid"] for r in rows] == ["BVPENDING"]
+
+            db.close()
+
+    def test_count_pool_candidates_refreshes_stale_read_snapshot(self) -> None:
+        """Runtime status must not report stale availability after another
+        connection consumes a pool row."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            db_a = Database(db_path)
+            db_a.initialize()
+            _seed_visible(
+                db_a,
+                "BVSTALE",
+                title="会被另一个连接消费",
+                source="search",
+                relevance_score=0.9,
+            )
+
+            db_a.conn.execute("BEGIN")
+            assert db_a.count_pool_candidates() == 1
+
+            db_b = Database(db_path)
+            db_b.initialize()
+            db_b.insert_recommendation(
+                "BVSTALE",
+                confidence=0.9,
+                expression="已经进入推荐历史",
+                topic="测试主题",
+            )
+
+            assert db_a.count_pool_candidates() == 0
+
+            db_b.close()
+            db_a.close()
+
+    def test_count_pool_readiness_keeps_viewed_rows_out_of_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            _seed_visible(
+                db,
+                "BVREADY",
+                title="可换",
+                source="search",
+                relevance_score=0.91,
+            )
+            _seed_visible(
+                db,
+                "BVSEEN",
+                title="看过",
+                source="search",
+                relevance_score=0.9,
+            )
+            db.cache_content(
+                "BVPENDING",
+                title="待整理",
+                source="search",
+                relevance_score=0.89,
+                style_key="tutorial",
+                topic_group="测试分组",
+            )
+            db.insert_event(
+                "view",
+                title="看过",
+                url="https://www.bilibili.com/video/BVSEEN",
+                metadata={"bvid": "BVSEEN"},
+            )
+
+            assert db.count_pool_readiness() == {
+                "available": 1,
+                "raw": 3,
+                "pending": 1,
+            }
 
             db.close()
 
@@ -1586,6 +1733,44 @@ class TestDatabase:
             assert row["source_platform"] == "xiaohongshu"
             assert row["content_url"] == tokenized_url
             assert row["content_id"] == note_id
+
+            db.close()
+
+    def test_get_recommendation_by_id_joins_multi_source_click_fields(self) -> None:
+        """Recommendation click hydration needs source-aware URL fields."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            video_id = "KPoJ7p9iy4Q"
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            db.cache_content(
+                bvid=video_id,
+                title="A YouTube deep dive",
+                up_name="YT Creator",
+                cover_url="https://i.ytimg.com/vi/KPoJ7p9iy4Q/hqdefault.jpg",
+                source="yt_search",
+                content_id=video_id,
+                content_url=video_url,
+                source_platform="youtube",
+                author_name="YT Creator",
+            )
+            rec_id = db.insert_recommendation(
+                video_id,
+                confidence=0.9,
+                expression="",
+                topic="技术长视频",
+                presented=0,
+            )
+
+            row = db.get_recommendation_by_id(rec_id)
+
+            assert row is not None
+            assert row["bvid"] == video_id
+            assert row["topic_label"] == "技术长视频"
+            assert row["content_id"] == video_id
+            assert row["content_url"] == video_url
+            assert row["source_platform"] == "youtube"
 
             db.close()
 
@@ -2015,8 +2200,7 @@ class TestEventSatisfactionPersistence:
         )
 
         rows = db.conn.execute(
-            "SELECT event_type, inferred_satisfaction, satisfaction_reason "
-            "FROM events ORDER BY id"
+            "SELECT event_type, inferred_satisfaction, satisfaction_reason FROM events ORDER BY id"
         ).fetchall()
         assert rows[0]["event_type"] == "like"
         assert rows[0]["inferred_satisfaction"] == "positive"
@@ -2051,9 +2235,7 @@ class TestEventSatisfactionPersistence:
         assert positives[0]["title"] == "好内容"
 
         # Positive + unknown also includes the missing_dwell row.
-        mixed = db.query_events(
-            satisfaction_modes=frozenset({"positive", "unknown"}), limit=10
-        )
+        mixed = db.query_events(satisfaction_modes=frozenset({"positive", "unknown"}), limit=10)
         assert {row["title"] for row in mixed} == {"好内容", "未知"}
         db.close()
 

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from openbiliclaw.api.runtime_context import build_youtube_discovery_producer
 from openbiliclaw.bilibili.api import BilibiliAPIClient
 from openbiliclaw.bilibili.auth import resolve_runtime_cookie
 from openbiliclaw.config import Config, load_config
+from openbiliclaw.config import llm_concurrency_from_config as _llm_concurrency_from_config
 from openbiliclaw.discovery.engine import ContentDiscoveryEngine
 from openbiliclaw.discovery.strategies.strategies import (
     ExploreStrategy,
@@ -30,6 +31,9 @@ from openbiliclaw.storage.database import Database
 
 from .operations import OpenClawAdapter
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 
 @dataclass(slots=True)
 class OpenClawAdapterServices:
@@ -47,7 +51,7 @@ class OpenClawAdapterServices:
     account_sync_service: AccountSyncService | Any
 
 
-def _supports_keyword(factory: object, keyword: str) -> bool:
+def _supports_keyword(factory: Callable[..., Any], keyword: str) -> bool:
     try:
         parameters = inspect.signature(factory).parameters
     except (TypeError, ValueError):
@@ -62,7 +66,7 @@ def build_openclaw_adapter_services() -> OpenClawAdapterServices:
     config = load_config()
     llm_registry = build_llm_registry(config)
     module_overrides = module_overrides_from_config(config)
-    llm_concurrency = int(getattr(getattr(config, "llm", None), "concurrency", 3))
+    llm_concurrency = _llm_concurrency_from_config(config)
 
     database = Database(config.data_path / "openbiliclaw.db")
     database.initialize()
@@ -82,16 +86,36 @@ def build_openclaw_adapter_services() -> OpenClawAdapterServices:
         speculation_max_active=config.scheduler.speculation_max_active,
         speculation_max_primary_interests=config.scheduler.speculation_max_primary_interests,
         speculation_max_secondary_interests=config.scheduler.speculation_max_secondary_interests,
+        avoidance_speculation_interval_minutes=int(
+            getattr(config.scheduler, "avoidance_speculation_interval_minutes", 10)
+        ),
+        avoidance_speculation_ttl_days=int(
+            getattr(config.scheduler, "avoidance_speculation_ttl_days", 3)
+        ),
+        avoidance_speculation_cooldown_days=int(
+            getattr(config.scheduler, "avoidance_speculation_cooldown_days", 7)
+        ),
+        avoidance_speculation_confirmation_threshold=int(
+            getattr(config.scheduler, "avoidance_speculation_confirmation_threshold", 3)
+        ),
+        avoidance_speculation_max_active=int(
+            getattr(config.scheduler, "avoidance_speculation_max_active", 5)
+        ),
         speculator_idle_interval_minutes=config.scheduler.speculator_idle_interval_minutes,
     )
-    llm_service_kwargs: dict[str, object] = {
-        "registry": llm_registry,
-        "memory": memory_manager,
-        "module_overrides": module_overrides,
-    }
     if _supports_keyword(LLMService, "concurrency"):
-        llm_service_kwargs["concurrency"] = llm_concurrency
-    llm_service = LLMService(**llm_service_kwargs)
+        llm_service = LLMService(
+            registry=llm_registry,
+            memory=memory_manager,
+            module_overrides=module_overrides,
+            concurrency=llm_concurrency,
+        )
+    else:
+        llm_service = LLMService(
+            registry=llm_registry,
+            memory=memory_manager,
+            module_overrides=module_overrides,
+        )
     from openbiliclaw.llm.registry import build_embedding_service
     from openbiliclaw.recommendation.curator import PoolCurator
 

@@ -28,6 +28,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
+from openbiliclaw.config import llm_concurrency_from_config as _llm_concurrency_from_config
 from openbiliclaw.runtime.presence import PresenceTracker
 from openbiliclaw.runtime.presence import background_llm_work_allowed as _gate
 from openbiliclaw.runtime.source_policy import effective_pool_source_shares
@@ -307,7 +308,7 @@ class RuntimeContext:
         new_registry = build_llm_registry(new_config)
         new_usage_recorder = UsageRecorder(sink=self.database)
         new_module_overrides = module_overrides_from_config(new_config)
-        llm_concurrency = int(getattr(getattr(new_config, "llm", None), "concurrency", 3))
+        llm_concurrency = _llm_concurrency_from_config(new_config)
         new_llm_service = LLMService(
             registry=new_registry,
             memory=self.memory_manager,
@@ -365,8 +366,26 @@ class RuntimeContext:
             speculation_max_secondary_interests=int(
                 getattr(new_config.scheduler, "speculation_max_secondary_interests", 60)
             ),
+            avoidance_speculation_interval_minutes=int(
+                getattr(new_config.scheduler, "avoidance_speculation_interval_minutes", 10)
+            ),
+            avoidance_speculation_ttl_days=int(
+                getattr(new_config.scheduler, "avoidance_speculation_ttl_days", 3)
+            ),
+            avoidance_speculation_cooldown_days=int(
+                getattr(new_config.scheduler, "avoidance_speculation_cooldown_days", 7)
+            ),
+            avoidance_speculation_confirmation_threshold=int(
+                getattr(new_config.scheduler, "avoidance_speculation_confirmation_threshold", 3)
+            ),
+            avoidance_speculation_max_active=int(
+                getattr(new_config.scheduler, "avoidance_speculation_max_active", 5)
+            ),
             speculator_idle_interval_minutes=int(
                 getattr(new_config.scheduler, "speculator_idle_interval_minutes", 30)
+            ),
+            feedback_batch_threshold=int(
+                getattr(new_config.scheduler, "feedback_batch_threshold", 3)
             ),
         )
 
@@ -627,25 +646,24 @@ class RuntimeContext:
 
         llm_work_allowed = self.background_llm_work_allowed()
 
-        # Kick speculator to seed speculative interests
+        # Kick speculators to seed speculative interests / avoidances
         if self.soul_engine is not None and llm_work_allowed:
             try:
                 profile = await self.soul_engine.get_profile()
+                runtime_state: dict[str, object] = {}
+                load_runtime_state = getattr(
+                    self.memory_manager,
+                    "load_discovery_runtime_state",
+                    None,
+                )
+                if callable(load_runtime_state):
+                    loaded = load_runtime_state()
+                    if isinstance(loaded, dict):
+                        runtime_state = loaded
+
                 speculator = getattr(self.soul_engine, "_speculator", None)
                 if speculator is not None:
-                    feedback_history: object = []
-                    load_runtime_state = getattr(
-                        self.memory_manager,
-                        "load_discovery_runtime_state",
-                        None,
-                    )
-                    if callable(load_runtime_state):
-                        runtime_state = load_runtime_state()
-                        if isinstance(runtime_state, dict):
-                            feedback_history = runtime_state.get(
-                                "probe_feedback_history",
-                                [],
-                            )
+                    feedback_history: object = runtime_state.get("probe_feedback_history", [])
                     self.task_registry.track(
                         "post_reload_speculate",
                         self._safe_post_reload_speculate(
@@ -655,6 +673,21 @@ class RuntimeContext:
                         ),
                     )
                     logger.debug("post-reload speculator scheduled as background task")
+
+                avoidance_speculator = getattr(self.soul_engine, "_avoidance_speculator", None)
+                if avoidance_speculator is not None:
+                    avoidance_feedback: object = runtime_state.get(
+                        "avoidance_probe_feedback_history", []
+                    )
+                    self.task_registry.track(
+                        "post_reload_avoidance_speculate",
+                        self._safe_post_reload_speculate(
+                            avoidance_speculator,
+                            profile,
+                            avoidance_feedback,
+                        ),
+                    )
+                    logger.debug("post-reload avoidance speculator scheduled as background task")
             except Exception:
                 pass  # Profile not initialized yet — skip silently
 

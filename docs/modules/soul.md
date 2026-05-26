@@ -13,6 +13,7 @@
 - **DialogueInsightAnalyzer** — 从聊天中提取候选长期理解信号
 - **ToneProfile** — 从画像、偏好和近期反馈推断语气风格，用于推荐、画像总结和对话
 - **SocraticDialogue** — 苏格拉底式用户对话，通过追问深化理解
+- **AvoidanceSpeculator** — 主动确认用户可能想避开的内容方向
 - **SoulProfile** — 用户灵魂画像数据结构
 
 ## 已实现功能
@@ -45,7 +46,7 @@
 | SoulEngine.record_immediate_feedback_cognition() | ✅ | 单条 `dislike/comment` 可即时写入结构化 cognition card，供插件画像页展示；评论类更新会带上对应内容标题，避免脱离上下文 |
 | DialogueInsightAnalyzer | ✅ | 从聊天轮次提取 `goal/value/interest/dislike/state` 候选信号 |
 | SoulEngine.learn_from_dialogue() | ✅ | 聊天落 `dialogue` 事件、累计 insight candidate；单条 `interest/value/goal/dislike` 聊天信号到中高置信度时会先写入轻量 cognition update，达阈值后再驱动偏好/画像更新 |
-| 兴趣探针聊天情绪判断 | ✅ | `/api/interest-probes/respond` 的 chat 分支会先让对话引擎回复，再用非 JSON 的单词分类 LLM 调用判断 `positive / negative / neutral`，失败时回退关键词，避免把标量分类请求错误发送成 `json_object` |
+| 兴趣探针聊天情绪判断 | ✅ | `/api/interest-probes/respond` 的 chat 分支会先让对话引擎回复，再用非 JSON 的单词分类 LLM 调用判断 `strong_positive / weak_positive / neutral / negative`，失败时回退关键词；强正向直接确认，弱正向进入短期探索 buffer，避免一句“有点意思”立刻写成长期兴趣 |
 | 账户同步事件分析 | ✅ | 后台低频同步导入的 `view/favorite/follow` 事件会复用 `analyze_events()` 进入偏好与画像链 |
 | 小红书初始化画像信号 | ✅ | `openbiliclaw init` 会把插件解析到的小红书 `saved/liked/xhs_history` 转成 `favorite/like/view` 事件，并与 B 站历史、收藏、关注一起进入 `analyze_events()` 和初始画像 history |
 | 抖音初始化画像信号 | ✅ | `openbiliclaw init --yes-douyin` 会把插件解析到的抖音 `dy_post/dy_collect/dy_like/dy_follow` 转成 `view/favorite/like/follow` 事件，并进入偏好分析和初始画像 history |
@@ -53,7 +54,9 @@
 | ToneProfile | ✅ | 从 `OnionProfile`、偏好摘要和近期反馈推断 `density/warmth/playfulness/directness`，统一驱动推荐、画像和聊天语气 |
 | Cognition updates | ✅ | 在反馈刷新和聊天学习后生成 `interest_added / dislike_added / profile_shift` 结构化 cognition card，包含 `summary / context_line / source_label / expand_hint / impact / reasoning / evidence / source / created_at`，供插件提醒与画像页展开展示；即时反馈和聊天会尽量指出具体内容或本轮聊天，聚合判断则保守回退到”基于最近几条相关内容” |
 | Layered profile cognition | ✅ | `OnionProfile` 新增 MBTI / Values / Interest 等分层，画像生成会同时消费 `history + preference + awareness + insights`，避免把兴趣 topic 堆成整段画像 |
-| 猜测兴趣系统 | ✅ | `InterestSpeculator` 定期通过 LLM 过采样生成猜测兴趣方向，并按 `[scheduler]` 的 generation interval、TTL、cooldown、确认阈值和上限运行；通过事件确认后转正为正式兴趣，未确认则拒绝并冷却 |
+| 猜测兴趣系统 | ✅ | `InterestSpeculator` 定期通过 LLM 过采样生成猜测兴趣方向，并按 `[scheduler]` 的 generation interval、TTL、cooldown、确认阈值和上限运行；候选带 `probe_mode=near/lateral/bridge/wildcard` 四档距离，普通 `near` 池最多 5 条，`lateral/bridge/wildcard` 挑战池单独最多 3 条；通过事件或用户确认后按来源权重转正为正式兴趣，未确认则拒绝并冷却 |
+| 短期探索 buffer | ✅ | `exploration_buffer.py` 把弱正向聊天、推荐喜欢、惊喜喜欢、普通点击和负反馈汇总到 `discovery_runtime_state["short_term_exploration_buffer"]`；7 天内显式弱证据累计到阈值后以 `buffer_promoted` 写回兴趣，负向反馈会进入 48h 冷却并抵消分数 |
+| 不喜欢领域探针系统 | ✅ | `AvoidanceSpeculator` 与正向兴趣探针并行运行，最多 5 条 active 避雷假设；只在用户确认或显式负向证据达到阈值后写入 `disliked_topics`，未确认前不参与 discovery / recommendation 过滤 |
 | ROLE/VALUES/CORE 增量更新器 | ✅ | `_update_role`（`build_role_delta_prompt`，基于信号证据 + LLM diff-protection）、`_update_values`（LLM delta，每周期最多 add/remove 1 条，注入完整画像上下文）、`_update_core`（`build_core_delta_prompt`，更新 traits/needs/MBTI，强 diff-protection）均已完整实现 |
 | v0.3.74 Soul 结构化 JSON 容错统一 | ✅ | ProfileBuilder、PreferenceAnalyzer、DialogueInsightAnalyzer、AwarenessAnalyzer、InsightAnalyzer、LayerUpdaters 和 InterestSpeculator 都收敛到 `llm.json_utils`，每个任务用 predicate 约束自己需要的 schema；MiMo / 非 OpenAI wrapper 不再只修 awareness 一处 |
 
@@ -77,7 +80,7 @@
 
 ### 数据结构
 
-- **SpeculativeInterest**: domain, category, reason(心理学桥接), experience_mode, entry_load, confidence, ttl_days, confirmation_count/threshold, status
+- **SpeculativeInterest**: domain, category, reason(心理学桥接), experience_mode, entry_load, `probe_mode`, confidence, ttl_days, confirmation_count/threshold, `confirmation_source`, `confirmed_at`, status
 - **CooldownEntry**: 被拒绝的方向 + 冷却到期时间
 - **SpeculativeState**: 活跃猜测 + 冷却列表，存储在 `data/memory/speculative_state.json`
 
@@ -90,14 +93,28 @@
 
 - generation 不再把 LLM 返回的前几条候选直接塞进 active pool，而是先过一层本地 balanced selector
 - selector 会把既有 active pool 也作为选择上下文，优先补缺失的 `experience_mode` / `entry_load`，再按 confidence / weight 补齐剩余槽位
+- selector 还会执行 distance-band quota：当存在挑战候选时 `near` 最多约占 40%，并尽量保证 `lateral/bridge/wildcard` 至少有一条进入 active pool
 - 当模型没有提供足够丰富的候选时，会自动降级回普通排序，不阻塞 speculative 生成
+
+### Probe Distance Bands
+
+`probe_mode` 是探针距离，不直接作为用户文案：
+
+| probe_mode | 语义 |
+|------------|------|
+| `near` | 靠近已知兴趣的低风险确认 |
+| `lateral` | 同一能力 / 审美 / 需求下的横向相邻方向 |
+| `bridge` | 从已知兴趣桥接到另一个内容域，挑战但可解释 |
+| `wildcard` | 更远的探索项，用于打破短期口味收窄 |
+
+`SpeculativeInterest.challenge` 对 `lateral/bridge/wildcard` 返回 `True`。`GET /api/profile-summary`、`GET /api/interest-probes/pending` 和 `interest.probe` runtime event 都会暴露 `probe_mode` 与 `challenge`，让 UI 可以区分普通确认和挑战探针。挑战探针有独立 active 额度：普通 `near` 继续使用 `scheduler.speculation_max_active`（默认 5），挑战池固定最多 3 条，不再被 5 个普通探针占满后挤掉。
 
 ### Probe Novelty Guard
 
 - LLM 生成候选和 `PreferenceAnalyzer` seed 注入都会经过 `ProbeNoveltyGuard`
 - guard 会收集画像 `interest.likes[*].domain`、画像 `specifics[*].name`、active speculation、cooldown speculation、近期 probe history 和显式负向 probe feedback
 - 第一版使用规范化字符串和中文 bigram overlap 做本地判重，不引入 embedding 成本
-- 与已有画像 domain / specific、active / cooldown、近期 `probed_domains`、`probe_feedback_history` 中 reject / chat_negative 记录明显重复的候选会被丢弃；候选 specifics 若部分重复，会先移除重复细项，剩余不足 2 条时丢弃候选
+- 与已有画像 domain / specific、active / cooldown、近期 `probed_domains`、`probe_feedback_history` 中 reject / chat_rejected 记录明显重复的候选会被丢弃；候选 specifics 若部分重复，会先移除重复细项，剩余不足 2 条时丢弃候选
 
 ### 配置项
 
@@ -107,7 +124,7 @@
 | `scheduler.speculation_ttl_days` | 3 | 猜测存活期。注意：`SpeculativeInterest` 数据类本身的 `ttl_days` 字段默认值为 14，仅作为反序列化不含该字段的历史数据时的兜底值；实际新产生的猜测兴趣均使用此配置项的 3 天 |
 | `scheduler.speculation_cooldown_days` | 7 | 拒绝后冷却期 |
 | `scheduler.speculation_confirmation_threshold` | 3 | 转正所需确认数 |
-| `scheduler.speculation_max_active` | 5 | 最大活跃猜测数 |
+| `scheduler.speculation_max_active` | 5 | 最大活跃普通 `near` 猜测数；挑战探针 `lateral/bridge/wildcard` 另有固定 3 条 active 额度 |
 | `scheduler.speculation_max_primary_interests` | 15 | 活跃猜测一级上限；不再把已确认兴趣计入，避免画像丰富后探针系统永久停摆 |
 | `scheduler.speculation_max_secondary_interests` | 60 | 活跃猜测二级上限；不再把已确认细项计入，避免画像丰富后探针系统永久停摆 |
 | `scheduler.speculator_idle_interval_minutes` | 30 | `ProfileUpdatePipeline` 空闲时检查猜测兴趣生命周期的间隔；`speculation_interval_minutes` 仍作为 speculator 内部生成间隔 gate |
@@ -121,7 +138,7 @@
 | 进程启动 | `force_tick()` via `startup_refresh_loop()` | API 启动时确保有活跃猜测 |
 | 偏好分析 | `ingest_seeds()` via `_update_interest()` | PreferenceAnalyzer 附带的推测兴趣注入 |
 
-`force_tick()` 忽略间隔计时器，但仍尊重活跃猜测上限和 `max_active`。
+`force_tick()` 忽略间隔计时器，但仍尊重普通 `near` 上限和独立挑战上限；即使 5 条普通探针已满，只要挑战池未满，仍会尝试生成挑战探针。生成 prompt 会根据空位写入动态 `probe_mode_request`：near 池满时明确要求只输出 `lateral/bridge/wildcard`，挑战池满时只输出 `near`，最终入池仍由本地 slot selector 硬约束。
 
 ### 兴趣上限机制
 
@@ -146,22 +163,104 @@
 
 ### API 集成
 
-- `GET /api/profile` 返回 `speculative_interests` 字段（`SpeculativeInterestOut` 列表）
+- `GET /api/profile-summary` 返回 `speculative_interests` 字段（`SpeculativeInterestOut` 列表），包含 `probe_mode` 与 `challenge`
 - 从 `speculative_state.json` 直接加载，最多返回 6 条活跃猜测
+- `POST /api/interest-probes/respond` 的 profile 页面确认会传 `surface="profile"` 并记录为 `profile_confirmed`；runtime/inbox 卡片确认默认仍是 `probe_confirmed`；聊天强确认记录为 `chat_confirmed`，buffer 晋升记录为 `buffer_promoted`
 
 ### Probe 选择
 
 - runtime push 和 OpenClaw `get_next_probe()` 共用同一套 probe selection 规则
 - `confirmation_count` 仍然是第一优先级；当验证压力相同，会优先选择最近没推过的 `experience_mode + entry_load` 组合
-- probe 去重状态写入并持久化到 `discovery_runtime_state["probed_domains"]` 和 `discovery_runtime_state["probed_axes"]`
-- `/api/interest-probes/respond` 会把 confirm / reject / chat sentiment 写入 `discovery_runtime_state["probe_feedback_history"]`；chat sentiment 是 `positive / negative / neutral` 标量判断，走普通文本 LLM 调用而不是 structured JSON 模式，失败时使用关键词兜底；后续生成会降低 reject / chat_negative 体验轴的入池优先级，选择会跳过明显重复的 domain，并在同等压力下避开负向反馈过的体验轴
-- runtime push 与 OpenClaw `get_next_probe()` 成功选择后都会记录本次 domain / axis，连续调用不会重复返回同一条 active probe
+- probe 去重状态写入并持久化到 `discovery_runtime_state["probed_domains"]`、`discovery_runtime_state["probed_axes"]` 和 `discovery_runtime_state["probed_distance_bands"]`；runtime push 只有在 `interest.probe` 实际投递到至少一个 runtime stream 订阅者后才记录，避免前端离线时误消耗探针
+- `/api/interest-probes/respond` 会把 confirm / reject / chat classification 写入 `discovery_runtime_state["probe_feedback_history"]`；classification 保留 `raw_text_excerpt / classifier / resulting_action` 等审计字段。后续生成会降低 reject / chat_rejected 体验轴的入池优先级，选择会跳过明显重复的 domain，并在同等压力下避开负向反馈过的体验轴与 probe distance
+- runtime push 成功投递后、OpenClaw `get_next_probe()` 成功返回后，都会记录本次 domain / axis / probe_mode，连续调用不会重复返回同一条 active probe
+
+### 短期探索 Buffer
+
+弱正向不是长期偏好确认。`short_term_exploration_buffer` 用 10 天 TTL 存储近期探索证据，7 天 promotion window 内满足 `score >= 4.0` 且显式弱正向证据足够时才晋升：
+
+| source_event | 权重 | 来源 |
+|--------------|------|------|
+| `weak_positive_chat` | `+1.5` | 兴趣探针聊天里的弱正向表达 |
+| `card_like` | `+1.5` | 普通推荐卡片喜欢 |
+| `card_more_like` | `+1.5` | 惊喜推荐喜欢 |
+| `long_watch` | `+0.5` | 预留长观看弱证据 |
+| `plain_click` | `+0.25` | 普通推荐点击，只能作为弱辅助 |
+| `negative` | `-3.0` | dislike / 不感兴趣，触发 48h 冷却 |
+
+晋升时调用 `merge_confirmed_interest(source="buffer_promoted")`，与手动确认使用同一套兴趣合并逻辑，不重复插入同名 domain。
 
 ### 关键文件
 
 - `src/openbiliclaw/soul/speculator.py` — 核心引擎（生成/观测/转正/过期/force_tick）
 - `src/openbiliclaw/llm/prompts.py` — `build_speculation_generation_prompt()`
 - `tests/test_speculator.py` — speculative lifecycle / novelty / probe selection 单元测试
+
+## 不喜欢领域探针系统 (Avoidance Probe Lifecycle)
+
+系统会主动探索用户可能想避开的内容形态、质量边界或表达方式。它和正向 `InterestSpeculator` 分开存储、分开配额，默认最多 5 条 active，不占正向兴趣探针的 5 条配额。
+
+### 生命周期
+
+```
+生成 (Generate) — LLM 根据 dislike、正向边界和风格画像生成 2-4 个细分避雷假设
+    ↓  受独立 active 上限限制，到达 5 条则跳过
+活跃 (Active) — 只观测显式负向证据
+    ├→ 用户 confirm 或 confirmation_count >= threshold
+    │    → 标记 confirmed/promoted
+    │    → Pipeline/API 调用 apply_new_dislikes()
+    │    → 写入 preference.disliked_topics + 同步 soul layer + 清理候选池
+    └→ 用户 reject 或 TTL 到期
+         → 进入 cooldown，不写画像，不过滤推荐
+```
+
+`AvoidanceSpeculator.tick()` 和 `force_tick()` 会在生成、转正、拒绝时输出 INFO 级摘要；active 已满或无 LLM 服务导致 `force_tick()` 无变化时只输出 DEBUG。LLM 返回的候选若被 novelty / quality gate 丢弃，会记录丢弃原因，方便排查“post-reload 已触发但没有新避雷探针”的生产问题。
+
+active 池会做两层多样性保护：词面 / specifics 的 novelty guard 阻止明显重复，source/topic guard 额外阻止同一 `source_mode` 下围绕同一粗主题连续换皮（例如多个 AI positive_boundary 只留一条）。如果历史 active 已经重复，下一轮 tick 会保留更具体 / 置信度更高的一条，其余写入 cooldown；新生成候选也会参考当前 active 的 `source_mode`、`source_signal`、体验轴和 specifics，避免一批避雷探针都围绕同一个证据源。
+
+### 确认语义
+
+- `confirm` 表示“确实不喜欢 / 需要避开”。写回时优先写 `specifics[*].name`；只有 specifics 为空时才兜底写 domain，避免把子方向扩大成整个领域。
+- `reject` 表示“我并不排斥这个方向”。它只进入 cooldown 和 `avoidance_probe_feedback_history`，用于后续去重。
+- `chat` 使用 `scope="avoidance_probe"` 的 durable chat。用户在多聊中表达“对，这类不喜欢”会走 confirm-like 反馈；表达“不是，我其实可以看”会走 reject-like 反馈；中立只留审计记录。
+
+### 写回路径
+
+确认后的持久化源头是 flat preference：
+
+`apply_new_dislikes()` → `preference_layer.data["disliked_topics"]` → `OnionProfile.populate_from_flat_preference()` → `soul` layer / profile files → pool purge。
+
+`AvoidanceSpeculator` 只维护自己的 `avoidance_state.json`，不直接跨模块修改 `disliked_topics`、`soul` layer 或候选池。API confirm 和 pipeline 自动 promote 都调用 `soul.dislike_writeback.apply_new_dislikes()`，因此手动确认和观察驱动确认走同一条写回与清池路径。
+
+### 观察规则
+
+自动确认只消费高确信负向信号：`feedback_type=dislike`、`reaction=thumbs_down`、`event_type=dislike` 或避雷探针聊天里明确的负向表达。`quick_exit` / `inferred_satisfaction=negative` 这类被动信号不会增加 confirmation count；这是有意严于 preference 层 dislike 抽取的规则，因为避雷探针确认会写入长期过滤偏好。
+
+### 配置项
+
+| 配置 | 默认值 | 说明 |
+|------|--------|------|
+| `scheduler.avoidance_speculation_interval_minutes` | 10 | 负向探针生成间隔（分钟） |
+| `scheduler.avoidance_speculation_ttl_days` | 3 | 负向探针存活期 |
+| `scheduler.avoidance_speculation_cooldown_days` | 7 | 否认或过期后的冷却期 |
+| `scheduler.avoidance_speculation_confirmation_threshold` | 3 | 自动确认所需显式负向证据数 |
+| `scheduler.avoidance_speculation_max_active` | 5 | 最大活跃避雷假设数 |
+
+### 集成边界
+
+- `GET /api/profile-summary` 返回 `speculative_avoidances`，供移动 Web、桌面 Web 和插件画像页展示。
+- `GET /api/avoidance-probes/pending` / `POST /api/avoidance-probes/respond` / `POST /api/avoidance-probes/trigger` 提供前端与 OpenClaw 的操作入口。
+- runtime stream 推送 `avoidance.probe`，确认、否认和聊天分别广播 `avoidance.confirmed` / `avoidance.rejected` / `avoidance.chat`。
+- 配置热重载后，`RuntimeContext.restart_background_tasks()` 会 detached 调度避雷 speculator 的 `force_tick()`，并传入 `discovery_runtime_state["avoidance_probe_feedback_history"]`；这条 one-shot 与正向兴趣 speculator 共用 `_safe_post_reload_speculate()`，避免阻塞 `/api/config` 响应。
+- `ProfileUpdatePipeline.tick()` 调用避雷 speculator 时会捕获并记录 warning，避免 refresh loop 外层的 broad suppress 把异常静默吞掉。
+- 未确认避雷探针不会挂到 `profile._active_speculations`，也不会进入 discovery、curator、delight 或 recommendation prompt。
+
+### 关键文件
+
+- `src/openbiliclaw/soul/avoidance_speculator.py` — 负向探针状态机、novelty guard、候选选择
+- `src/openbiliclaw/soul/dislike_writeback.py` — confirmed dislike 写回、profile 同步和候选池清理
+- `src/openbiliclaw/llm/prompts.py` — `build_avoidance_generation_prompt()`
+- `tests/test_avoidance_speculator.py` — avoidance lifecycle / novelty / probe selection 单元测试
 
 ## 画像更新逻辑详解
 
@@ -907,7 +1006,7 @@ tone = build_tone_profile(
 ## 设计决策
 
 1. **偏好提取用 json_mode**：确保 LLM 返回结构化 JSON，便于程序处理
-2. **标量分类不用 json_mode**：兴趣探针聊天情绪只需要 `positive / negative / neutral` 单词，走普通文本调用；只有真正返回 JSON 的任务才启用 structured task
+2. **标量分类不用 json_mode**：兴趣探针聊天情绪只需要 `strong_positive / weak_positive / neutral / negative` 单词，走普通文本调用；只有真正返回 JSON 的任务才启用 structured task
 3. **对话错误优雅降级**：LLM 调用失败时返回友好中文提示，不崩溃
 4. **`_build_service()` 回退**：未注入 LLMService 时从 SoulEngine 自动构建
 5. **历史格式转换**：`agent` → `assistant` 角色映射，适配 OpenAI 消息格式

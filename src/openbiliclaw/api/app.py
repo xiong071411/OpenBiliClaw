@@ -15,6 +15,7 @@ import tempfile
 import uuid
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, BinaryIO, cast
+from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -81,6 +82,10 @@ from openbiliclaw.api.models import (
     XiaohongshuSourceConfigOut,
     YoutubeSourceConfigOut,
 )
+from openbiliclaw.soul.dislike_writeback import (
+    apply_new_dislikes,
+    topics_for_confirmed_avoidance,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -88,6 +93,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _CONFIG_SAVE_LOCK = asyncio.Lock()
+_fire_and_forget_tasks: set[asyncio.Task[None]] = set()
 
 SOURCE_LABELS = {
     "feedback": "推荐反馈",
@@ -96,6 +102,8 @@ SOURCE_LABELS = {
 }
 
 _SOURCE_SHARE_ORDER = ("bilibili", "xiaohongshu", "douyin", "youtube")
+_PROBE_MODES = {"near", "lateral", "bridge", "wildcard"}
+_PROBE_CHALLENGE_MODES = {"lateral", "bridge", "wildcard"}
 
 _RFC1918_NETWORKS = tuple(
     ipaddress.ip_network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
@@ -338,6 +346,51 @@ def _config_reveal_allowed(request: Request) -> bool:
     return _is_private_or_loopback_host(effective_host) and _is_private_or_loopback_host(
         host_header
     )
+
+
+def _infer_source_platform_from_url(url: object) -> str:
+    text = str(url or "").strip().lower()
+    if "youtube.com" in text or "youtu.be" in text:
+        return "youtube"
+    if "xiaohongshu.com" in text or "xhslink.com" in text:
+        return "xiaohongshu"
+    if "douyin.com" in text:
+        return "douyin"
+    if "bilibili.com" in text or "b23.tv" in text:
+        return "bilibili"
+    return ""
+
+
+def _fallback_recommendation_click_url(
+    *,
+    source_platform: str,
+    content_id: str,
+    bvid: str,
+) -> str:
+    """Build a canonical click URL when the recommendation row lacks one."""
+    item_id = (content_id or bvid).strip()
+    if not item_id:
+        return ""
+    if source_platform == "youtube":
+        return f"https://www.youtube.com/watch?v={quote(item_id, safe='')}"
+    if source_platform == "douyin":
+        return f"https://www.douyin.com/video/{quote(item_id, safe='')}"
+    if source_platform == "bilibili":
+        return f"https://www.bilibili.com/video/{quote(bvid or item_id, safe='')}"
+    return ""
+
+
+def _normalize_probe_mode_for_payload(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in _PROBE_MODES else "near"
+
+
+def _probe_metadata_for_payload(item: object) -> tuple[str, bool]:
+    probe_mode = _normalize_probe_mode_for_payload(getattr(item, "probe_mode", ""))
+    challenge = probe_mode in _PROBE_CHALLENGE_MODES
+    with suppress(Exception):
+        challenge = challenge or bool(getattr(item, "challenge", False))
+    return probe_mode, challenge
 
 
 def _cap_by_franchise(
@@ -716,10 +769,6 @@ def create_app(
     async def _run_post_feedback_tasks() -> None:
         with suppress(Exception):
             await ctx.soul_engine.process_feedback_batch_if_needed()
-        refresh_after_feedback = getattr(ctx.runtime_controller, "refresh_after_feedback", None)
-        if callable(refresh_after_feedback):
-            with suppress(Exception):
-                await refresh_after_feedback()
 
     async def _ingest_profile_update_events(events: list[dict[str, Any]]) -> None:
         """Feed source task events into the profile-update pipeline when ready.
@@ -837,7 +886,7 @@ def create_app(
 
     def _normalize_chat_scope(scope: str) -> str:
         normalized = scope.strip().lower()
-        if normalized in {"chat", "delight", "probe"}:
+        if normalized in {"chat", "delight", "probe", "avoidance_probe"}:
             return normalized
         return "chat"
 
@@ -1438,9 +1487,12 @@ def create_app(
             InterestSpecificOut,
             MBTIDimensionOut,
             MBTIOut,
+            SpeculativeAvoidanceOut,
             SpeculativeInterestOut,
+            SpeculativeSpecificOut,
             StylePreferenceOut,
         )
+        from openbiliclaw.soul.avoidance_speculator import load_avoidance_state
         from openbiliclaw.soul.speculator import load_speculative_state
 
         prefs = profile.preferences
@@ -1539,9 +1591,10 @@ def create_app(
 
         # ── Speculative interests ──
         spec_items: list[SpeculativeInterestOut] = []
+        avoidance_items: list[SpeculativeAvoidanceOut] = []
+        runtime_config = getattr(ctx, "config", None) or config
         try:
-            spec_state = load_speculative_state(ctx.config.data_path)
-            from openbiliclaw.api.models import SpeculativeSpecificOut
+            spec_state = load_speculative_state(runtime_config.data_path)
 
             # Filter status="active" only — confirmed/rejected items are
             # technically still in spec_state.active until force_tick rotates
@@ -1549,11 +1602,42 @@ def create_app(
             # clicked 喜欢 has already given their answer and expects the
             # row to disappear, not to re-render with a "已确认" tag.
             active_specs = [item for item in spec_state.active if item.status == "active"]
-            spec_items = [
-                SpeculativeInterestOut(
+            for item in active_specs[:6]:
+                probe_mode, challenge = _probe_metadata_for_payload(item)
+                spec_items.append(
+                    SpeculativeInterestOut(
+                        domain=item.domain,
+                        reason=item.reason,
+                        confidence=item.confidence,
+                        probe_mode=probe_mode,
+                        challenge=challenge,
+                        confirmation_count=item.confirmation_count,
+                        confirmation_threshold=item.confirmation_threshold,
+                        status=item.status,
+                        specifics=[
+                            SpeculativeSpecificOut(
+                                name=s.name,
+                                confirmation_count=s.confirmation_count,
+                            )
+                            for s in item.specifics
+                            if s.name.strip()
+                        ],
+                    )
+                )
+        except Exception:
+            logger.debug("Failed to load speculative state for profile summary")
+
+        # ── Speculative avoidances ──
+        try:
+            avoidance_state = load_avoidance_state(runtime_config.data_path)
+            active_avoidances = [item for item in avoidance_state.active if item.status == "active"]
+            avoidance_items = [
+                SpeculativeAvoidanceOut(
                     domain=item.domain,
                     reason=item.reason,
                     confidence=item.confidence,
+                    source_mode=item.source_mode,
+                    source_signal=item.source_signal,
                     confirmation_count=item.confirmation_count,
                     confirmation_threshold=item.confirmation_threshold,
                     status=item.status,
@@ -1566,10 +1650,10 @@ def create_app(
                         if s.name.strip()
                     ],
                 )
-                for item in active_specs[:6]
+                for item in active_avoidances[:6]
             ]
         except Exception:
-            logger.debug("Failed to load speculative state for profile summary")
+            logger.debug("Failed to load avoidance state for profile summary")
 
         active_insights_out = [
             InsightHypothesisOut(
@@ -1618,6 +1702,7 @@ def create_app(
             exploration_openness=exploration_openness,
             # Cross-cutting
             speculative_interests=spec_items,
+            speculative_avoidances=avoidance_items,
             recent_cognition_updates=cognition_updates,
             has_more_cognition_updates=has_more_cognition_updates,
             next_cognition_cursor=next_cognition_cursor,
@@ -2104,23 +2189,39 @@ def create_app(
 
         Body:
         ``{ "bvid": "...", "title": "...", "response": "view"|"dislike"|"chat",
-        "message": "..." }``
+        "message": "..." }``. ``dismiss`` is accepted as a response so clients
+        can consume a delight recommendation without also calling
+        ``/api/delight/sent``.
         """
         from fastapi.responses import JSONResponse
 
         bvid = str(payload.get("bvid", "")).strip()
         title = str(payload.get("title", "")).strip()
-        response_type = str(payload.get("response", "")).strip().lower()
+        response_type = str(payload.get("response") or "").strip().lower()
         if not bvid:
             raise HTTPException(status_code=422, detail="bvid is required")
-        if response_type not in {"view", "like", "dislike", "chat"}:
+        if response_type not in {"view", "like", "dislike", "chat", "dismiss"}:
             raise HTTPException(
                 status_code=422,
-                detail="response must be view, like, dislike, or chat",
+                detail="response must be view, like, dislike, chat, or dismiss",
             )
+
+        def mark_delight_consumed() -> None:
+            mark_sent = getattr(ctx.runtime_controller, "mark_delight_sent", None)
+            if callable(mark_sent):
+                mark_sent(bvid)
+            else:
+                ctx.database.mark_delight_notified(bvid)
 
         if response_type == "view":
             return JSONResponse(content={"ok": True, "action": "viewed", "bvid": bvid})
+
+        if response_type == "dismiss":
+            try:
+                mark_delight_consumed()
+            except Exception:
+                logger.debug("Failed to dismiss delight bvid %s", bvid)
+            return JSONResponse(content={"ok": True, "action": "dismissed", "bvid": bvid})
 
         if response_type == "like":
             # User marks this delight as liked WITHOUT having opened the
@@ -2135,6 +2236,7 @@ def create_app(
                     "WHERE bvid = ?",
                     (bvid,),
                 )
+                mark_delight_consumed()
             except Exception:
                 logger.debug("Failed to record delight like for %s", bvid)
             label = title or bvid
@@ -2148,15 +2250,22 @@ def create_app(
                 f"好，「{label}」这类多来点。",
                 bvid,
             )
+            _record_exploration_buffer_event(
+                domain=label,
+                source_event="card_more_like",
+                evidence_id=bvid,
+            )
             return JSONResponse(content={"ok": True, "action": "liked", "bvid": bvid})
 
         if response_type == "dislike":
             try:
                 ctx.database._execute_write(
-                    "UPDATE content_cache SET pool_status = 'purged_by_dislike' "
-                    "WHERE bvid = ? AND COALESCE(pool_status, 'fresh') = 'fresh'",
+                    "UPDATE content_cache SET pool_status = 'purged_by_dislike', "
+                    "feedback_type='dislike', feedback_at=CURRENT_TIMESTAMP "
+                    "WHERE bvid = ?",
                     (bvid,),
                 )
+                mark_delight_consumed()
             except Exception:
                 logger.debug("Failed to purge delight bvid %s", bvid)
             label = title or bvid
@@ -2169,6 +2278,11 @@ def create_app(
                 "delight.disliked",
                 f"好，「{label}」这类先不推了。",
                 bvid,
+            )
+            _record_exploration_buffer_event(
+                domain=label,
+                source_event="negative",
+                evidence_id=bvid,
             )
             return JSONResponse(content={"ok": True, "action": "disliked", "bvid": bvid})
 
@@ -2215,6 +2329,8 @@ def create_app(
             "delight_chat",
             detail=f"你的反馈：{raw_message}\n阿b的回复：{reply}",
         )
+        with suppress(Exception):
+            mark_delight_consumed()
         await _publish_probe_event("delight.chat", f"关于「{label}」你说：{raw_message}", bvid)
         return JSONResponse(content={"ok": True, "action": "chat", "bvid": bvid, "reply": reply})
 
@@ -2262,6 +2378,7 @@ def create_app(
         domain: str,
         action: str,
         *,
+        source: str = "interest_probe",
         detail: str = "",
     ) -> None:
         """Write a cognition update so probe feedback shows in '阿b最近记住了什么'."""
@@ -2274,7 +2391,7 @@ def create_app(
                     "summary": summary,
                     "detail": detail or f"兴趣探针反馈：{action} — {domain}",
                     "created_at": datetime.now().isoformat(),
-                    "source": "interest_probe",
+                    "source": source,
                     "tone": "success" if action == "confirmed" else "info",
                 }
             )
@@ -2296,40 +2413,50 @@ def create_app(
                 }
             )
 
-    def _probe_metadata_from_active_speculation(
-        speculator: Any,
+    def _probe_metadata_from_active_item(
+        get_active: Any,
         domain: str,
+        *,
+        include_category: bool = False,
+        include_source_mode: bool = False,
     ) -> dict[str, object]:
         """Read active probe metadata before confirm/reject mutates state."""
         from openbiliclaw.soul.speculator import build_probe_axis
 
-        get_active = getattr(speculator, "get_active_speculations", None)
         if not callable(get_active):
             return {"domain": domain}
         try:
-            active_specs = list(get_active())
+            active_items = list(get_active())
         except Exception:
             logger.debug("Failed to read active probe metadata", exc_info=True)
             return {"domain": domain}
 
-        for spec in active_specs:
-            spec_domain = str(getattr(spec, "domain", "")).strip()
+        for item in active_items:
+            spec_domain = str(getattr(item, "domain", "")).strip()
             if spec_domain.lower() != domain.lower():
                 continue
             specifics = [
-                str(getattr(item, "name", "")).strip()
-                for item in getattr(spec, "specifics", [])
-                if str(getattr(item, "name", "")).strip()
+                str(getattr(specific, "name", "")).strip()
+                for specific in getattr(item, "specifics", [])
+                if str(getattr(specific, "name", "")).strip()
             ]
             axis = build_probe_axis(
-                experience_mode=getattr(spec, "experience_mode", ""),
-                entry_load=getattr(spec, "entry_load", ""),
+                experience_mode=getattr(item, "experience_mode", ""),
+                entry_load=getattr(item, "entry_load", ""),
             )
             metadata: dict[str, object] = {
                 "domain": spec_domain or domain,
-                "category": str(getattr(spec, "category", "")).strip(),
-                "reason": str(getattr(spec, "reason", "")).strip(),
+                "reason": str(getattr(item, "reason", "")).strip(),
             }
+            if include_category:
+                metadata["category"] = str(getattr(item, "category", "")).strip()
+            if include_source_mode:
+                source_mode = str(getattr(item, "source_mode", "")).strip()
+                source_signal = str(getattr(item, "source_signal", "")).strip()
+                if source_mode:
+                    metadata["source_mode"] = source_mode
+                if source_signal:
+                    metadata["source_signal"] = source_signal
             if axis:
                 metadata["axis"] = axis
             if specifics:
@@ -2337,12 +2464,39 @@ def create_app(
             return metadata
         return {"domain": domain}
 
+    def _probe_metadata_from_active_speculation(
+        speculator: Any,
+        domain: str,
+    ) -> dict[str, object]:
+        """Read active interest probe metadata before state mutation."""
+        return _probe_metadata_from_active_item(
+            getattr(speculator, "get_active_speculations", None),
+            domain,
+            include_category=True,
+        )
+
+    def _probe_metadata_from_active_avoidance(
+        speculator: Any,
+        domain: str,
+    ) -> dict[str, object]:
+        """Read active avoidance probe metadata before state mutation."""
+        return _probe_metadata_from_active_item(
+            getattr(speculator, "get_active_avoidances", None),
+            domain,
+            include_source_mode=True,
+        )
+
     def _record_probe_feedback_history(
         domain: str,
         response: str,
         *,
         speculator: Any,
         message: str = "",
+        classification: str = "",
+        classifier: str = "",
+        resulting_action: str = "",
+        state_key: str = "probe_feedback_history",
+        metadata_fn: Any | None = None,
     ) -> None:
         """Persist explicit user feedback for future probe novelty checks."""
         from openbiliclaw.soul.speculator import append_probe_feedback_history
@@ -2356,12 +2510,22 @@ def create_app(
             return
         try:
             state = load_state()
-            entry = _probe_metadata_from_active_speculation(speculator, domain)
+            if metadata_fn is not None:
+                entry = metadata_fn(domain)
+            else:
+                entry = _probe_metadata_from_active_speculation(speculator, domain)
             entry["response"] = response
             if message:
                 entry["message"] = message
-            state["probe_feedback_history"] = append_probe_feedback_history(
-                state.get("probe_feedback_history", []),
+                entry["raw_text_excerpt"] = message[:240]
+            if classification:
+                entry["classification"] = classification
+            if classifier:
+                entry["classifier"] = classifier
+            if resulting_action:
+                entry["resulting_action"] = resulting_action
+            state[state_key] = append_probe_feedback_history(
+                state.get(state_key, []),
                 entry,
             )
             save_state(state)
@@ -2373,52 +2537,58 @@ def create_app(
         ai_reply: str,
         domain: str,
     ) -> str:
-        """Judge whether the user's probe chat is positive, negative, or neutral.
+        """Judge the user's probe chat as a 4-way confirmation signal."""
+        sentiment, _classifier = await _classify_probe_sentiment(
+            user_message,
+            ai_reply,
+            domain,
+        )
+        return sentiment
 
-        Uses LLM first; falls back to keyword detection on failure.
-        Returns: "positive", "negative", or "neutral".
-        """
-        # Try LLM judgment
+    async def _classify_probe_sentiment(
+        user_message: str,
+        ai_reply: str,
+        domain: str,
+    ) -> tuple[str, str]:
+        """Return ``(classification, classifier)`` for probe chat feedback."""
         llm_result = await _llm_judge_sentiment(user_message, ai_reply, domain)
-        if llm_result in ("positive", "negative"):
-            return llm_result
-        # Fallback: keyword detection
-        return _keyword_judge_sentiment(user_message)
+        if llm_result in {"strong_positive", "weak_positive", "negative"}:
+            return llm_result, "llm"
+        keyword_result = _keyword_judge_sentiment(user_message)
+        if keyword_result != "neutral":
+            return keyword_result, "keyword"
+        return "neutral", "neutral_default"
 
     def _keyword_judge_sentiment(user_message: str) -> str:
         """Fallback keyword-based sentiment detection."""
         msg = user_message.lower()
-        neg = {
+        negative_terms = {
             "不喜欢",
-            "太硬",
-            "太艰涩",
-            "没兴趣",
             "不感兴趣",
+            "不是这个意思",
+            "别推",
+            "没兴趣",
             "不想看",
-            "太深",
-            "太学术",
-            "无聊",
-            "不行",
-            "算了",
-            "不要",
-            "讨厌",
         }
-        pos = {
-            "有意思",
-            "感兴趣",
-            "想看看",
-            "挺好",
-            "可以",
-            "继续",
-            "不错",
+        strong_positive_terms = {
+            "以后多推",
+            "这就是我想看的",
+            "我就喜欢",
+            "加入我的画像",
+        }
+        weak_positive_terms = {
             "有点意思",
-            "想了解",
-            "喜欢",
+            "可以看看",
+            "偶尔看看",
+            "还行",
+            "先试试",
         }
-        if any(kw in msg for kw in neg):
+        if any(kw in msg for kw in negative_terms):
             return "negative"
-        if any(kw in msg for kw in pos):
-            return "positive"
+        if any(kw in msg for kw in strong_positive_terms):
+            return "strong_positive"
+        if any(kw in msg for kw in weak_positive_terms):
+            return "weak_positive"
         return "neutral"
 
     async def _llm_judge_sentiment(
@@ -2426,7 +2596,7 @@ def create_app(
         ai_reply: str,
         domain: str,
     ) -> str:
-        """LLM-based sentiment judgment. Returns positive/negative/neutral."""
+        """LLM-based sentiment judgment for probe chat."""
         if ctx.recommendation_engine is None:
             return "neutral"
         llm = getattr(ctx.recommendation_engine, "_llm", None)
@@ -2438,10 +2608,12 @@ def create_app(
                     system_instruction=(
                         "任务：判断用户对一个兴趣方向的态度。\n\n"
                         "规则：\n"
-                        "1. 只输出一个英文单词：positive 或 negative 或 neutral\n"
+                        "1. 只输出一个英文标签："
+                        "strong_positive、weak_positive、neutral 或 negative\n"
                         "2. 不要输出任何其他内容\n\n"
                         "判断标准：\n"
-                        "- positive = 用户表达了兴趣、想了解、觉得有意思\n"
+                        "- strong_positive = 用户明确要加入画像、以后多推、这就是想看的\n"
+                        "- weak_positive = 用户表达轻微兴趣、可以看看、偶尔看看，但未直接确认\n"
                         "- negative = 用户表达了不喜欢、不感兴趣、太难、太无聊\n"
                         "- neutral = 态度不明确\n"
                     ),
@@ -2458,7 +2630,12 @@ def create_app(
             # Extract the first recognizable word
             for word in raw.split():
                 cleaned = word.strip("\"'.,:;!?")
-                if cleaned in ("negative", "positive", "neutral"):
+                if cleaned in (
+                    "strong_positive",
+                    "weak_positive",
+                    "negative",
+                    "neutral",
+                ):
                     logger.info("Sentiment LLM for '%s': %s (raw=%r)", domain, cleaned, raw)
                     return cleaned
             logger.info(
@@ -2469,6 +2646,127 @@ def create_app(
             logger.info("Sentiment LLM for '%s' failed, trying keywords", domain)
             return "neutral"
 
+    def _confirm_speculation_with_source(
+        speculator: Any,
+        domain: str,
+        *,
+        confirmation_source: str,
+    ) -> bool:
+        confirm = getattr(speculator, "user_confirm_speculation", None)
+        if not callable(confirm):
+            return False
+        try:
+            return bool(confirm(domain, confirmation_source=confirmation_source))
+        except TypeError:
+            return bool(confirm(domain))
+
+    def _promote_exploration_buffer_entries(
+        promoted: list[dict[str, object]],
+    ) -> None:
+        if not promoted:
+            return
+        from openbiliclaw.soul.interest_writeback import merge_confirmed_interest
+        from openbiliclaw.soul.profile import OnionProfile
+
+        memory_manager = getattr(ctx, "memory_manager", None)
+        get_layer = getattr(memory_manager, "get_layer", None)
+        if not callable(get_layer):
+            return
+        try:
+            soul_layer = get_layer("soul")
+            raw_profile = getattr(soul_layer, "data", {})
+            profile = (
+                OnionProfile.from_dict(raw_profile)
+                if isinstance(raw_profile, dict) and raw_profile
+                else OnionProfile()
+            )
+            changed = False
+            for entry in promoted:
+                raw_specifics = entry.get("specifics", [])
+                specifics = (
+                    [str(item) for item in raw_specifics if str(item).strip()]
+                    if isinstance(raw_specifics, list)
+                    else []
+                )
+                changed = (
+                    merge_confirmed_interest(
+                        profile,
+                        domain=str(entry.get("domain", "")),
+                        specifics=specifics,
+                        source=str(entry.get("confirmation_source", "buffer_promoted")),
+                        first_seen=str(entry.get("first_seen", "")),
+                        last_seen=str(entry.get("last_seen", "")),
+                    )
+                    or changed
+                )
+            if not changed:
+                return
+            if isinstance(raw_profile, dict):
+                raw_profile.clear()
+                raw_profile.update(profile.to_dict())
+            save = getattr(soul_layer, "save", None)
+            if callable(save):
+                save()
+            sync_profile_files = getattr(memory_manager, "sync_profile_files", None)
+            if callable(sync_profile_files):
+                sync_profile_files(profile)
+        except Exception:
+            logger.exception("Failed to promote exploration buffer entries")
+
+    def _record_exploration_buffer_event(
+        *,
+        domain: str,
+        source_event: str,
+        specifics: list[str] | None = None,
+        evidence_id: str = "",
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from openbiliclaw.soul.exploration_buffer import (
+            pop_promotable_buffer_entries,
+            record_buffer_event,
+        )
+
+        clean_domain = domain.strip()
+        if not clean_domain:
+            return
+        memory_manager = getattr(ctx, "memory_manager", None)
+        load_state = getattr(memory_manager, "load_discovery_runtime_state", None)
+        save_state = getattr(memory_manager, "save_discovery_runtime_state", None)
+        if not callable(load_state) or not callable(save_state):
+            return
+        try:
+            state = load_state()
+            if not isinstance(state, dict):
+                state = {}
+            now = datetime.now(UTC)
+            buffer_state = record_buffer_event(
+                state.get("short_term_exploration_buffer", {}),
+                domain=clean_domain,
+                source_event=source_event,
+                specifics=specifics or [],
+                evidence_id=evidence_id,
+                now=now,
+            )
+            promoted, buffer_state = pop_promotable_buffer_entries(buffer_state, now=now)
+            state["short_term_exploration_buffer"] = buffer_state
+            save_state(state)
+            _promote_exploration_buffer_entries(promoted)
+        except Exception:
+            logger.exception("Failed to record exploration buffer event")
+
+    def _recommendation_buffer_domain(row: dict[str, object]) -> tuple[str, list[str]]:
+        title = str(row.get("title", "")).strip()
+        domain = (
+            str(row.get("topic_group", "")).strip()
+            or str(row.get("topic_label", "")).strip()
+            or str(row.get("topic", "")).strip()
+            or str(row.get("topic_key", "")).strip()
+            or title
+        )
+        specifics = [title] if title and title != domain else []
+        return domain, specifics
+
     def _contextual_chat_message(turn: ChatTurnOut) -> str:
         if turn.scope == "delight":
             label = turn.subject_title or turn.subject_id or "这条惊喜推荐"
@@ -2476,6 +2774,9 @@ def create_app(
         if turn.scope == "probe":
             label = turn.subject_title or turn.subject_id or "这个方向"
             return f"[关于猜测兴趣「{label}」的反馈] {turn.message}"
+        if turn.scope == "avoidance_probe":
+            label = turn.subject_title or turn.subject_id or "这个避雷方向"
+            return f"[关于避雷方向「{label}」的反馈] {turn.message}"
         return turn.message
 
     async def _generate_durable_chat_reply(turn: ChatTurnOut) -> str:
@@ -2516,31 +2817,48 @@ def create_app(
             )
         elif turn.scope == "probe":
             domain = turn.subject_id or turn.subject_title
-            sentiment = await _judge_probe_sentiment(turn.message, reply, domain)
+            sentiment, classifier = await _classify_probe_sentiment(turn.message, reply, domain)
             speculator = getattr(ctx.soul_engine, "_speculator", None)
+            chat_response = "chat_neutral"
+            resulting_action = "none"
             if sentiment == "negative":
+                chat_response = "chat_rejected"
+                resulting_action = "rejected"
                 if speculator is not None:
                     with suppress(Exception):
                         speculator.user_reject_speculation(domain, cooldown_days=14)
                 summary = f"你对「{domain}」的反馈偏负面（{turn.message}），已暂时搁置 14 天。"
-            elif sentiment == "positive":
+            elif sentiment == "strong_positive":
+                chat_response = "chat_confirmed"
+                resulting_action = "confirmed"
                 if speculator is not None:
                     with suppress(Exception):
-                        speculator.observe(
-                            [
-                                {
-                                    "event_type": "dialogue",
-                                    "title": domain,
-                                    "metadata": {
-                                        "user_message": turn.message,
-                                        "source": "probe_chat",
-                                    },
-                                }
-                            ]
+                        _confirm_speculation_with_source(
+                            speculator,
+                            domain,
+                            confirmation_source="chat_confirmed",
                         )
-                summary = f"你对「{domain}」表示了兴趣，确认度 +1。"
+                summary = f"你明确确认了对「{domain}」的兴趣，已加入画像。"
+            elif sentiment == "weak_positive":
+                chat_response = "weak_positive"
+                resulting_action = "weak_positive_deferred"
+                _record_exploration_buffer_event(
+                    domain=domain,
+                    source_event="weak_positive_chat",
+                )
+                summary = f"你对「{domain}」有轻微信号，先作为短期探索方向观察。"
             else:
                 summary = f"关于「{domain}」你说：{turn.message}"
+            if speculator is not None:
+                _record_probe_feedback_history(
+                    domain,
+                    chat_response,
+                    speculator=speculator,
+                    message=turn.message,
+                    classification=sentiment,
+                    classifier=classifier,
+                    resulting_action=resulting_action,
+                )
             _record_probe_cognition(
                 summary,
                 domain,
@@ -2548,6 +2866,65 @@ def create_app(
                 detail=f"你的反馈：{turn.message}\n阿b的回复：{reply}",
             )
             await _publish_probe_event("interest.chat", summary, domain)
+        elif turn.scope == "avoidance_probe":
+            domain = turn.subject_id or turn.subject_title
+            sentiment, classifier = await _classify_probe_sentiment(turn.message, reply, domain)
+            speculator = getattr(ctx.soul_engine, "_avoidance_speculator", None)
+            if sentiment == "negative":
+                chat_response = "avoidance_chat_confirmed"
+                resulting_action = "confirmed"
+                if speculator is not None:
+                    with suppress(Exception):
+                        speculator.observe(
+                            [
+                                {
+                                    "event_type": "dislike",
+                                    "title": domain,
+                                    "metadata": {
+                                        "feedback_type": "dislike",
+                                        "user_message": turn.message,
+                                        "source": "avoidance_probe_chat",
+                                    },
+                                }
+                            ]
+                        )
+                summary = f"你确认「{domain}」偏向不喜欢，确认度 +1。"
+            elif sentiment in {"strong_positive", "weak_positive"}:
+                chat_response = "avoidance_chat_rejected"
+                resulting_action = "rejected"
+                if speculator is not None:
+                    reject_fn = getattr(speculator, "user_reject_avoidance", None)
+                    if callable(reject_fn):
+                        with suppress(Exception):
+                            reject_fn(domain, cooldown_days=14)
+                summary = f"你表示其实不排斥「{domain}」，已暂时搁置 14 天。"
+            else:
+                chat_response = "avoidance_chat_neutral"
+                resulting_action = "none"
+                summary = f"关于避雷方向「{domain}」你说：{turn.message}"
+            if speculator is not None:
+                _record_probe_feedback_history(
+                    domain,
+                    chat_response,
+                    speculator=speculator,
+                    message=turn.message,
+                    classification=sentiment,
+                    classifier=classifier,
+                    resulting_action=resulting_action,
+                    state_key="avoidance_probe_feedback_history",
+                    metadata_fn=lambda item_domain: _probe_metadata_from_active_avoidance(
+                        speculator,
+                        item_domain,
+                    ),
+                )
+            _record_probe_cognition(
+                summary,
+                domain,
+                "chat",
+                source="avoidance_probe",
+                detail=f"你的反馈：{turn.message}\n阿b的回复：{reply}",
+            )
+            await _publish_probe_event("avoidance.chat", summary, domain)
 
         return reply
 
@@ -2627,6 +3004,35 @@ def create_app(
         await publish()
         return {"ok": True, "action": "probe_triggered"}
 
+    @app.get("/api/interest-probes/pending")
+    async def pending_interest_probes() -> dict[str, Any]:
+        """Return active speculative interests that the user hasn't responded to.
+
+        The mobile web UI polls this on page load / bell-click so probes
+        survive page refreshes (unlike WebSocket-only delivery).
+        """
+        try:
+            from openbiliclaw.soul.speculator import load_speculative_state
+
+            spec_state = load_speculative_state(ctx.config.data_path)
+            active = [item for item in spec_state.active if item.status == "active"]
+            items = []
+            for item in active[:6]:
+                probe_mode, challenge = _probe_metadata_for_payload(item)
+                items.append(
+                    {
+                        "domain": item.domain,
+                        "reason": item.reason,
+                        "confidence": item.confidence,
+                        "status": item.status,
+                        "probe_mode": probe_mode,
+                        "challenge": challenge,
+                    }
+                )
+            return {"items": items}
+        except Exception:
+            return {"items": []}
+
     @app.post("/api/interest-probes/respond")
     async def respond_to_interest_probe(payload: dict[str, Any]) -> Any:
         """User responds to a speculated interest probe.
@@ -2650,12 +3056,22 @@ def create_app(
             raise HTTPException(status_code=503, detail="Speculator not available")
 
         if response_type == "confirm":
+            requested_source = str(payload.get("confirmation_source", "")).strip()
+            surface = str(payload.get("surface", "")).strip().lower()
+            confirmation_source = requested_source or (
+                "profile_confirmed" if surface == "profile" else "probe_confirmed"
+            )
             _record_probe_feedback_history(
                 domain,
                 "confirm",
                 speculator=speculator,
+                resulting_action="confirmed",
             )
-            ok = speculator.user_confirm_speculation(domain)
+            ok = _confirm_speculation_with_source(
+                speculator,
+                domain,
+                confirmation_source=confirmation_source,
+            )
             if ok:
                 # Force_tick generates 5 new probes via LLM (~30-60s).
                 # Running it inline blocks the response past the
@@ -2753,7 +3169,7 @@ def create_app(
                 timeout=30,
             )
             # Judge sentiment while discovery is still paused
-            sentiment = await _judge_probe_sentiment(raw_message, reply, domain)
+            sentiment, classifier = await _classify_probe_sentiment(raw_message, reply, domain)
         except TimeoutError:
             return {
                 "ok": False,
@@ -2773,32 +3189,42 @@ def create_app(
             if concurrency is not None:
                 concurrency.chat_active = False
 
-        chat_response = (
-            f"chat_{sentiment}" if sentiment in {"positive", "negative"} else "chat_neutral"
-        )
+        chat_response = "chat_neutral"
+        resulting_action = "none"
+        if sentiment == "negative":
+            chat_response = "chat_rejected"
+            resulting_action = "rejected"
+            speculator.user_reject_speculation(domain, cooldown_days=14)
+            summary = f"你对「{domain}」的反馈偏负面（{raw_message}），已暂时搁置 14 天。"
+        elif sentiment == "strong_positive":
+            chat_response = "chat_confirmed"
+            resulting_action = "confirmed"
+            _confirm_speculation_with_source(
+                speculator,
+                domain,
+                confirmation_source="chat_confirmed",
+            )
+            summary = f"你明确确认了对「{domain}」的兴趣，已加入画像。"
+        elif sentiment == "weak_positive":
+            chat_response = "weak_positive"
+            resulting_action = "weak_positive_deferred"
+            _record_exploration_buffer_event(
+                domain=domain,
+                source_event="weak_positive_chat",
+            )
+            summary = f"你对「{domain}」有轻微信号，先作为短期探索方向观察。"
+        else:
+            summary = f"关于「{domain}」你说：{raw_message}"
+
         _record_probe_feedback_history(
             domain,
             chat_response,
             speculator=speculator,
             message=raw_message,
+            classification=sentiment,
+            classifier=classifier,
+            resulting_action=resulting_action,
         )
-
-        if sentiment == "negative":
-            speculator.user_reject_speculation(domain, cooldown_days=14)
-            summary = f"你对「{domain}」的反馈偏负面（{raw_message}），已暂时搁置 14 天。"
-        elif sentiment == "positive":
-            speculator.observe(
-                [
-                    {
-                        "event_type": "dialogue",
-                        "title": domain,
-                        "metadata": {"user_message": raw_message, "source": "probe_chat"},
-                    }
-                ]
-            )
-            summary = f"你对「{domain}」表示了兴趣，确认度 +1。"
-        else:
-            summary = f"关于「{domain}」你说：{raw_message}"
 
         detail = f"你的反馈：{raw_message}\n阿b的回复：{reply}"
         _record_probe_cognition(summary, domain, "chat", detail=detail)
@@ -2813,11 +3239,241 @@ def create_app(
             content={"ok": True, "action": "chat", "domain": domain, "reply": reply}
         )
 
+    @app.post("/api/avoidance-probes/trigger")
+    async def trigger_avoidance_probe() -> dict[str, Any]:
+        """Manually trigger an avoidance probe push via WebSocket."""
+        controller = ctx.runtime_controller
+        if controller is None:
+            raise HTTPException(status_code=503, detail="Runtime controller not available")
+        publish = getattr(controller, "_publish_avoidance_probe_if_available", None)
+        if not callable(publish):
+            raise HTTPException(status_code=503, detail="Avoidance probe publisher not available")
+        await publish()
+        return {"ok": True, "action": "avoidance_probe_triggered"}
+
+    @app.get("/api/avoidance-probes/pending")
+    async def pending_avoidance_probes() -> dict[str, Any]:
+        """Return active speculative avoidances awaiting user response."""
+        try:
+            from openbiliclaw.soul.avoidance_speculator import load_avoidance_state
+
+            runtime_config = getattr(ctx, "config", None) or config
+            avoidance_state = load_avoidance_state(runtime_config.data_path)
+            active = [item for item in avoidance_state.active if item.status == "active"]
+            items = [
+                {
+                    "domain": item.domain,
+                    "reason": item.reason,
+                    "confidence": item.confidence,
+                    "source_mode": item.source_mode,
+                    "source_signal": item.source_signal,
+                    "status": item.status,
+                    "specifics": [
+                        {"name": specific.name, "confirmation_count": specific.confirmation_count}
+                        for specific in item.specifics
+                        if specific.name.strip()
+                    ],
+                }
+                for item in active[:6]
+            ]
+            return {"items": items}
+        except Exception:
+            logger.debug("Failed to load pending avoidance probes", exc_info=True)
+            return {"items": []}
+
+    @app.post("/api/avoidance-probes/respond")
+    async def respond_to_avoidance_probe(payload: dict[str, Any]) -> Any:
+        """User responds to a speculated avoidance probe."""
+        domain = str(payload.get("domain", "")).strip()
+        response_type = str(payload.get("response", "")).strip().lower()
+
+        if not domain:
+            raise HTTPException(status_code=422, detail="domain is required")
+        if response_type not in {"confirm", "reject", "chat"}:
+            raise HTTPException(status_code=422, detail="response must be confirm, reject, or chat")
+
+        speculator = getattr(ctx.soul_engine, "_avoidance_speculator", None)
+        if speculator is None:
+            raise HTTPException(status_code=503, detail="Avoidance speculator not available")
+
+        def metadata_fn(item_domain: str) -> dict[str, object]:
+            return _probe_metadata_from_active_avoidance(
+                speculator,
+                item_domain,
+            )
+
+        if response_type == "confirm":
+            _record_probe_feedback_history(
+                domain,
+                "confirm",
+                speculator=speculator,
+                state_key="avoidance_probe_feedback_history",
+                metadata_fn=metadata_fn,
+            )
+            confirm_fn = getattr(speculator, "user_confirm_avoidance", None)
+            active_avoidance = confirm_fn(domain) if callable(confirm_fn) else None
+            ok = active_avoidance is not None
+            if ok:
+                topics = topics_for_confirmed_avoidance(active_avoidance)
+                summary = f"你确认了避开「{domain}」，已开始更新不喜欢方向。"
+                _record_probe_cognition(
+                    summary,
+                    domain,
+                    "confirmed",
+                    source="avoidance_probe",
+                )
+                await _publish_probe_event("avoidance.confirmed", summary, domain)
+
+                async def _apply_confirmed_avoidance() -> None:
+                    try:
+                        changes = await apply_new_dislikes(
+                            memory=ctx.memory_manager,
+                            database=getattr(ctx, "database", None)
+                            or getattr(ctx.memory_manager, "_database", None),
+                            embedding_service=getattr(ctx.soul_engine, "_embedding_service", None),
+                            llm_service=getattr(ctx, "llm_service", None),
+                            topics=topics,
+                        )
+                        if changes:
+                            _record_probe_cognition(
+                                f"避雷方向「{domain}」的不喜欢画像已更新。",
+                                domain,
+                                "confirmed",
+                                source="avoidance_probe",
+                                detail="\n".join(changes),
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Background avoidance dislike writeback failed: %s",
+                            domain,
+                        )
+
+                task = asyncio.create_task(_apply_confirmed_avoidance())
+                _fire_and_forget_tasks.add(task)
+                task.add_done_callback(_fire_and_forget_tasks.discard)
+            return {"ok": ok, "action": "confirmed", "domain": domain}
+
+        if response_type == "reject":
+            _record_probe_feedback_history(
+                domain,
+                "reject",
+                speculator=speculator,
+                state_key="avoidance_probe_feedback_history",
+                metadata_fn=metadata_fn,
+            )
+            reject_fn = getattr(speculator, "user_reject_avoidance", None)
+            ok = bool(reject_fn(domain) if callable(reject_fn) else False)
+            if ok:
+                _record_probe_cognition(
+                    f"你表示并不需要避开「{domain}」，30 天内不再推送。",
+                    domain,
+                    "rejected",
+                    source="avoidance_probe",
+                )
+                await _publish_probe_event(
+                    "avoidance.rejected",
+                    f"已记录：你并不需要避开「{domain}」，30 天内不再推送。",
+                    domain,
+                )
+            return {"ok": ok, "action": "rejected", "domain": domain}
+
+        raw_message = str(payload.get("message", "")).strip()
+        if not raw_message:
+            raw_message = f"我想聊聊你猜我可能想避开的「{domain}」这个方向"
+        contextual_message = f"[关于避雷方向「{domain}」的反馈] {raw_message}"
+        if ctx.dialogue is None:
+            return {"ok": False, "action": "chat", "domain": domain, "reply": "对话引擎暂不可用。"}
+
+        concurrency = getattr(ctx.discovery_engine, "_concurrency", None)
+        if concurrency is not None:
+            concurrency.chat_active = True
+        try:
+            reply = await asyncio.wait_for(
+                ctx.dialogue.respond(contextual_message),
+                timeout=30,
+            )
+            sentiment, classifier = await _classify_probe_sentiment(
+                raw_message,
+                reply,
+                domain,
+            )
+        except TimeoutError:
+            return {
+                "ok": False,
+                "action": "chat",
+                "domain": domain,
+                "reply": "后台正忙，等一下再聊。",
+            }
+        except Exception:
+            logger.exception("Dialogue failed for avoidance probe chat: %s", domain)
+            return {
+                "ok": False,
+                "action": "chat",
+                "domain": domain,
+                "reply": "聊天出了点问题，稍后再试。",
+            }
+        finally:
+            if concurrency is not None:
+                concurrency.chat_active = False
+
+        if sentiment == "negative":
+            chat_response = "avoidance_chat_confirmed"
+            resulting_action = "confirmed"
+            speculator.observe(
+                [
+                    {
+                        "event_type": "dislike",
+                        "title": domain,
+                        "metadata": {
+                            "feedback_type": "dislike",
+                            "user_message": raw_message,
+                            "source": "avoidance_probe_chat",
+                        },
+                    }
+                ]
+            )
+            summary = f"你确认「{domain}」偏向不喜欢，确认度 +1。"
+        elif sentiment in {"strong_positive", "weak_positive"}:
+            chat_response = "avoidance_chat_rejected"
+            resulting_action = "rejected"
+            reject_fn = getattr(speculator, "user_reject_avoidance", None)
+            if callable(reject_fn):
+                reject_fn(domain, cooldown_days=14)
+            summary = f"你表示其实不排斥「{domain}」，已暂时搁置 14 天。"
+        else:
+            chat_response = "avoidance_chat_neutral"
+            resulting_action = "none"
+            summary = f"关于避雷方向「{domain}」你说：{raw_message}"
+
+        _record_probe_feedback_history(
+            domain,
+            chat_response,
+            speculator=speculator,
+            message=raw_message,
+            classification=sentiment,
+            classifier=classifier,
+            resulting_action=resulting_action,
+            state_key="avoidance_probe_feedback_history",
+            metadata_fn=metadata_fn,
+        )
+        detail = f"你的反馈：{raw_message}\n阿b的回复：{reply}"
+        _record_probe_cognition(
+            summary,
+            domain,
+            "chat",
+            source="avoidance_probe",
+            detail=detail,
+        )
+        await _publish_probe_event("avoidance.chat", summary, domain)
+        return JSONResponse(
+            content={"ok": True, "action": "chat", "domain": domain, "reply": reply}
+        )
+
     @app.post("/api/feedback", response_model=FeedbackResponse)
     async def feedback(payload: FeedbackIn) -> FeedbackResponse:
         feedback_type = payload.feedback_type.strip().lower()
         note = payload.note.strip()
-        if feedback_type not in {"like", "dislike", "comment"}:
+        if feedback_type not in {"like", "dislike", "comment", "dismiss"}:
             raise HTTPException(status_code=422, detail="Unsupported feedback type.")
         if feedback_type == "comment" and not note:
             raise HTTPException(status_code=422, detail="Comment feedback requires note.")
@@ -2844,6 +3500,7 @@ def create_app(
             "like": "点赞了",
             "dislike": "踩了",
             "comment": "评论了",
+            "dismiss": "忽略了",
         }.get(feedback_type, "反馈了")
         feedback_context = f"在 B 站{feedback_label}《{rec_title}》"
         if note:
@@ -2862,6 +3519,21 @@ def create_app(
                 },
             )
         )
+        buffer_domain, buffer_specifics = _recommendation_buffer_domain(recommendation)
+        if feedback_type == "like":
+            _record_exploration_buffer_event(
+                domain=buffer_domain,
+                specifics=buffer_specifics,
+                source_event="card_like",
+                evidence_id=str(recommendation.get("bvid", "")),
+            )
+        elif feedback_type == "dislike":
+            _record_exploration_buffer_event(
+                domain=buffer_domain,
+                specifics=buffer_specifics,
+                source_event="negative",
+                evidence_id=str(recommendation.get("bvid", "")),
+            )
         record_immediate_feedback_cognition = getattr(
             ctx.soul_engine,
             "record_immediate_feedback_cognition",
@@ -2907,36 +3579,60 @@ def create_app(
             )
 
         bvid = (payload.bvid or "").strip()
+        content_id = (payload.content_id or "").strip()
+        content_url = (payload.content_url or "").strip()
+        source_platform_raw = (payload.source_platform or "").strip()
         title = (payload.title or "").strip()
         topic_label = (payload.topic_label or "").strip()
         up_name = (payload.up_name or "").strip()
 
         if recommendation is not None:
-            bvid = bvid or str(recommendation.get("bvid", "")).strip()
-            title = title or str(recommendation.get("title", "")).strip()
-            topic_label = topic_label or str(recommendation.get("topic_label", "")).strip()
-            up_name = up_name or str(recommendation.get("up_name", "")).strip()
+            bvid = bvid or str(recommendation.get("bvid", "") or "").strip()
+            content_id = content_id or str(recommendation.get("content_id", "") or "").strip()
+            content_url = content_url or str(recommendation.get("content_url", "") or "").strip()
+            source_platform_raw = (
+                source_platform_raw or str(recommendation.get("source_platform", "") or "").strip()
+            )
+            title = title or str(recommendation.get("title", "") or "").strip()
+            topic_label = topic_label or str(recommendation.get("topic_label", "") or "").strip()
+            up_name = up_name or str(recommendation.get("up_name", "") or "").strip()
 
+        content_id = content_id or bvid
+        bvid = bvid or content_id
         if not bvid:
             raise HTTPException(status_code=422, detail="bvid is required.")
+        if not source_platform_raw:
+            source_platform_raw = _infer_source_platform_from_url(content_url)
+        source_platform = _normalize_source_platform(source_platform_raw)
+        if not content_url:
+            content_url = _fallback_recommendation_click_url(
+                source_platform=source_platform,
+                content_id=content_id,
+                bvid=bvid,
+            )
 
         # Persist the click as an event so history/query paths can see it.
         from openbiliclaw.sources.event_format import (
-            SOURCE_BILIBILI,
             build_event,
+            format_event_context,
         )
 
         click_extra_parts: list[str] = []
         if topic_label:
             click_extra_parts.append(f"主题:{topic_label}")
-        if up_name:
-            click_extra_parts.append(f"UP:{up_name}")
-        click_context = f"在 B 站点开了《{title}》"
-        if click_extra_parts:
-            click_context = f"{click_context}({','.join(click_extra_parts)})"
+        click_context = format_event_context(
+            event_type="click",
+            source_platform=source_platform,
+            title=title,
+            author=up_name,
+            extra=",".join(click_extra_parts),
+        )
         click_metadata: dict[str, object] = {
             "recommendation_id": payload.recommendation_id,
             "bvid": bvid,
+            "content_id": content_id,
+            "content_url": content_url,
+            "source_platform": source_platform,
             "topic_label": topic_label,
             "up_name": up_name,
             "source": "recommendation_click",
@@ -2954,14 +3650,27 @@ def create_app(
             await ctx.memory_manager.propagate_event(
                 build_event(
                     event_type="click",
-                    source_platform=SOURCE_BILIBILI,
+                    source_platform=source_platform,
                     title=title,
-                    url=f"https://www.bilibili.com/video/{bvid}" if bvid else "",
+                    url=content_url,
                     author=up_name,
                     context=click_context,
                     metadata=click_metadata,
                 )
             )
+        buffer_domain, buffer_specifics = _recommendation_buffer_domain(
+            {
+                "title": title,
+                "topic_label": topic_label,
+                "bvid": bvid,
+            }
+        )
+        _record_exploration_buffer_event(
+            domain=buffer_domain,
+            specifics=buffer_specifics,
+            source_event="plain_click",
+            evidence_id=bvid,
+        )
 
         # Push a strong signal into the profile update pipeline.
         layers_updated: list[str] = []
@@ -2973,6 +3682,9 @@ def create_app(
                 recommendation_id=payload.recommendation_id,
                 topic_label=topic_label,
                 up_name=up_name,
+                content_id=content_id,
+                content_url=content_url,
+                source_platform=source_platform,
             )
             try:
                 ingest_result = await pipeline.ingest(signal)
@@ -3927,6 +4639,7 @@ def create_app(
             llm=LLMConfigOut(
                 default_provider=cfg.llm.default_provider,
                 concurrency=int(getattr(cfg.llm, "concurrency", 3)),
+                timeout=int(getattr(cfg.llm, "timeout", 300)),
                 fallback_enabled=cfg.llm.fallback_enabled,
                 fallback_provider=cfg.llm.fallback_provider,
                 openai=_provider_out(cfg.llm.openai),
@@ -4037,6 +4750,17 @@ def create_app(
                 speculation_max_secondary_interests=(
                     cfg.scheduler.speculation_max_secondary_interests
                 ),
+                avoidance_speculation_interval_minutes=(
+                    cfg.scheduler.avoidance_speculation_interval_minutes
+                ),
+                avoidance_speculation_ttl_days=cfg.scheduler.avoidance_speculation_ttl_days,
+                avoidance_speculation_cooldown_days=(
+                    cfg.scheduler.avoidance_speculation_cooldown_days
+                ),
+                avoidance_speculation_confirmation_threshold=(
+                    cfg.scheduler.avoidance_speculation_confirmation_threshold
+                ),
+                avoidance_speculation_max_active=cfg.scheduler.avoidance_speculation_max_active,
                 auto_update_enabled=cfg.scheduler.auto_update_enabled,
                 auto_update_check_interval_hours=cfg.scheduler.auto_update_check_interval_hours,
             ),
@@ -4087,6 +4811,7 @@ def create_app(
         from openbiliclaw.config import (
             _DEFAULT_DISCOVERY_LIMIT,
             _DEFAULT_EXPLORE_REFRESH_HOURS,
+            _DEFAULT_FEEDBACK_BATCH_THRESHOLD,
             _DEFAULT_PROACTIVE_PUSH_INTERVAL_SECONDS,
             _DEFAULT_REFRESH_CHECK_INTERVAL_SECONDS,
             _DEFAULT_SIGNAL_EVENT_THRESHOLD,
@@ -4137,6 +4862,10 @@ def create_app(
                 cfg.llm.default_provider = str(llm_data["default_provider"])
             if "concurrency" in llm_data:
                 cfg.llm.concurrency = _normalize_llm_concurrency(llm_data["concurrency"])
+            if "timeout" in llm_data:
+                from openbiliclaw.config import _normalize_llm_timeout
+
+                cfg.llm.timeout = _normalize_llm_timeout(llm_data["timeout"])
             if "fallback_enabled" in llm_data:
                 cfg.llm.fallback_enabled = _as_bool(llm_data["fallback_enabled"])
             if "fallback_provider" in llm_data:
@@ -4340,6 +5069,16 @@ def create_app(
                     5,
                     None,
                 ),
+                "feedback_batch_threshold": (
+                    _DEFAULT_FEEDBACK_BATCH_THRESHOLD,
+                    1,
+                    None,
+                ),
+                "avoidance_speculation_interval_minutes": (10, 1, None),
+                "avoidance_speculation_ttl_days": (3, 1, None),
+                "avoidance_speculation_cooldown_days": (7, 1, None),
+                "avoidance_speculation_confirmation_threshold": (3, 1, None),
+                "avoidance_speculation_max_active": (5, 1, None),
             }
             for key in (
                 "enabled",
@@ -4362,8 +5101,14 @@ def create_app(
                 "speculation_max_active",
                 "speculation_max_primary_interests",
                 "speculation_max_secondary_interests",
+                "avoidance_speculation_interval_minutes",
+                "avoidance_speculation_ttl_days",
+                "avoidance_speculation_cooldown_days",
+                "avoidance_speculation_confirmation_threshold",
+                "avoidance_speculation_max_active",
                 "auto_update_enabled",
                 "auto_update_check_interval_hours",
+                "feedback_batch_threshold",
             ):
                 if key in sdata:
                     current_val = getattr(cfg.scheduler, key)

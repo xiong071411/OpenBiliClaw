@@ -245,6 +245,22 @@ class RecommendationEngine:
         # carryover signals stale-pool / fatigue-bypass.
         self._last_served_bvids: frozenset[str] = frozenset()
 
+    def _pool_readiness_counts(self) -> dict[str, int]:
+        readiness_fn = getattr(self._database, "count_pool_readiness", None)
+        if callable(readiness_fn):
+            try:
+                counts = readiness_fn()
+                available = int(counts.get("available", 0))
+                return {
+                    "available": max(0, available),
+                    "raw": max(0, int(counts.get("raw", available))),
+                    "pending": max(0, int(counts.get("pending", 0))),
+                }
+            except Exception:
+                logger.exception("Failed to load pool readiness counts")
+        available = int(self._database.count_pool_candidates())
+        return {"available": max(0, available), "raw": max(0, available), "pending": 0}
+
     async def serve(
         self,
         profile: SoulProfile,
@@ -271,7 +287,10 @@ class RecommendationEngine:
             List of personalized recommendations.
         """
         multiplier = 4 if excluded_bvids else 3
-        raw_pool_count = self._database.count_pool_candidates()
+        pool_readiness = self._pool_readiness_counts()
+        servable_pool_count = pool_readiness["available"]
+        raw_pool_count = pool_readiness["raw"]
+        pending_pool_count = pool_readiness["pending"]
         candidates = self._load_pool_candidates(limit=max(limit * multiplier, 40))
         loaded_count = len(candidates)
         if excluded_bvids:
@@ -290,35 +309,36 @@ class RecommendationEngine:
         label = "realtime" if expression_mode == "realtime" else "pool"
         prev_bvids = self._last_served_bvids
 
-        # Surface "pool says 97 but serve loads 0" mismatches: count_pool
-        # counts items the user can theoretically reshuffle to, while
-        # _load_pool_candidates filters by candidate_tier / linkable
-        # source / etc. Without this log line, the popup's "还有 N 条"
-        # count rarely matches what serve() actually picks, which makes
-        # "popup shows empty even though pool has items" silent.
-        if raw_pool_count > 0 and after_viewed_count == 0:
+        # Surface "pool says N but serve loads 0" mismatches with enough
+        # readiness detail to distinguish pending material from query drift.
+        if servable_pool_count > 0 and after_viewed_count == 0:
             logger.warning(
-                "serve(/%s) loaded 0 candidates from pool of %d — likely cause: "
+                "serve(/%s) loaded 0 candidates from servable=%d "
+                "(raw=%d pending=%d) — likely cause: "
                 "all items lack required fields (style_key/topic_group), filtered "
                 "by excluded_bvids (%d → %d), or already viewed (%d → 0). "
                 "Inspect content_cache rows directly: "
                 "SELECT count(*), source, source_platform FROM content_cache "
                 "WHERE pool_status='fresh' GROUP BY source, source_platform;",
                 label,
+                servable_pool_count,
                 raw_pool_count,
+                pending_pool_count,
                 loaded_count,
                 after_exclude_count,
                 after_viewed_count,
             )
-        elif raw_pool_count != loaded_count:
+        elif servable_pool_count != loaded_count:
             logger.info(
                 "serve(/%s) pool/load mismatch: count=%d → loaded=%d"
-                " → after_exclude=%d → after_viewed=%d",
+                " → after_exclude=%d → after_viewed=%d (raw=%d pending=%d)",
                 label,
-                raw_pool_count,
+                servable_pool_count,
                 loaded_count,
                 after_exclude_count,
                 after_viewed_count,
+                raw_pool_count,
+                pending_pool_count,
             )
 
         logger.info(
@@ -331,9 +351,11 @@ class RecommendationEngine:
         )
 
         score_override: dict[str, float] | None = None
+        amplification_guard: frozenset[str] = frozenset()
         if self._curator is not None:
             context = self._curator.build_context()
             score_override = self._curator.score_candidates(candidates, context)
+            amplification_guard = context.over_budget_amplification_keys
 
         # v0.3.44+: pre-fetch embeddings for MMR-based diversification.
         # In v0.3.45+ discovery and classify_pool_backlog warm these into
@@ -359,6 +381,7 @@ class RecommendationEngine:
             limit=limit,
             score_override=score_override,
             embeddings=embeddings,
+            amplification_guard=amplification_guard,
         )
         logger.info(
             "Recommendation picked summary (serve/%s): %s",
@@ -1710,6 +1733,7 @@ class RecommendationEngine:
         limit: int,
         score_override: dict[str, float] | None = None,
         embeddings: dict[str, list[float]] | None = None,
+        amplification_guard: set[str] | frozenset[str] | None = None,
         mmr_alpha: float = 0.5,
         mmr_beta: float = 0.5,
     ) -> list[DiscoveredContent]:
@@ -1737,6 +1761,7 @@ class RecommendationEngine:
                 limit=limit,
                 score_override=score_override,
                 embeddings=embeddings,
+                amplification_guard=amplification_guard,
                 alpha=mmr_alpha,
                 beta=mmr_beta,
             )
@@ -1754,11 +1779,14 @@ class RecommendationEngine:
         soft_topic_cap = cls._soft_topic_cap(limit)
         per_style_cap = cls._style_cap(limit)
         broad_cap = cls._broad_topic_cap(limit)
+        amplification_cap = cls._amplification_cap(limit)
+        guard = cls._normalize_amplification_guard(amplification_guard)
         selected: list[DiscoveredContent] = []
         deferred: list[DiscoveredContent] = []
         topic_counts: dict[str, int] = {}
         broad_topic_counts: dict[str, int] = {}
         style_counts: dict[str, int] = {}
+        amplification_counts: dict[str, int] = {}
 
         def _exceeds_broad_cap(item: DiscoveredContent) -> bool:
             bt = cls._broad_topic_token(item)
@@ -1769,9 +1797,22 @@ class RecommendationEngine:
             if bt:
                 broad_topic_counts[bt] = broad_topic_counts.get(bt, 0) + 1
 
+        def _exceeds_amplification_cap(item: DiscoveredContent) -> bool:
+            return any(
+                amplification_counts.get(key, 0) >= amplification_cap
+                for key in cls._candidate_amplification_keys(item) & guard
+            )
+
+        def _track_amplification(item: DiscoveredContent) -> None:
+            for key in cls._candidate_amplification_keys(item) & guard:
+                amplification_counts[key] = amplification_counts.get(key, 0) + 1
+
         for item in ranked:
             tokens = cls._diversity_tokens(item)
             style_token = cls._style_token(item)
+            if _exceeds_amplification_cap(item):
+                deferred.append(item)
+                continue
             if tokens and any(topic_counts.get(token, 0) >= per_topic_cap for token in tokens):
                 deferred.append(item)
                 continue
@@ -1785,6 +1826,7 @@ class RecommendationEngine:
             for token in tokens:
                 topic_counts[token] = topic_counts.get(token, 0) + 1
             _track_broad(item)
+            _track_amplification(item)
             style_counts[style_token] = style_counts.get(style_token, 0) + 1
             if len(selected) >= limit:
                 return _finalize(selected)
@@ -1800,6 +1842,9 @@ class RecommendationEngine:
             for item in pool:
                 tokens = cls._diversity_tokens(item)
                 style_token = cls._style_token(item)
+                if _exceeds_amplification_cap(item):
+                    remaining.append(item)
+                    continue
                 if tokens and any(topic_counts.get(token, 0) >= topic_cap for token in tokens):
                     remaining.append(item)
                     continue
@@ -1813,6 +1858,7 @@ class RecommendationEngine:
                 for token in tokens:
                     topic_counts[token] = topic_counts.get(token, 0) + 1
                 _track_broad(item)
+                _track_amplification(item)
                 style_counts[style_token] = style_counts.get(style_token, 0) + 1
                 if len(selected) >= limit:
                     return []
@@ -1842,15 +1888,44 @@ class RecommendationEngine:
             for item in remaining:
                 bt = cls._broad_topic_token(item)
                 style_token = cls._style_token(item)
+                if _exceeds_amplification_cap(item):
+                    continue
                 if bt and broad_topic_counts.get(bt, 0) >= fallback_broad_cap:
                     continue
                 selected.append(item)
                 if bt:
                     broad_topic_counts[bt] = broad_topic_counts.get(bt, 0) + 1
+                _track_amplification(item)
                 style_counts[style_token] = style_counts.get(style_token, 0) + 1
                 if len(selected) >= limit:
                     break
         return _finalize(selected)
+
+    @staticmethod
+    def _amplification_cap(limit: int) -> int:
+        import math
+
+        return max(1, math.floor(limit * 0.25))
+
+    @staticmethod
+    def _normalize_amplification_guard(
+        amplification_guard: set[str] | frozenset[str] | None,
+    ) -> frozenset[str]:
+        if not amplification_guard:
+            return frozenset()
+        from openbiliclaw.recommendation.curator import normalize_amplification_key
+
+        return frozenset(
+            key
+            for key in (normalize_amplification_key(value) for value in amplification_guard)
+            if key
+        )
+
+    @staticmethod
+    def _candidate_amplification_keys(item: DiscoveredContent) -> set[str]:
+        from openbiliclaw.recommendation.curator import candidate_amplification_keys
+
+        return candidate_amplification_keys(item)
 
     @classmethod
     def _select_with_mmr(
@@ -1860,6 +1935,7 @@ class RecommendationEngine:
         limit: int,
         score_override: dict[str, float] | None,
         embeddings: dict[str, list[float]],
+        amplification_guard: set[str] | frozenset[str] | None,
         alpha: float,
         beta: float,
     ) -> list[DiscoveredContent]:
@@ -1882,9 +1958,12 @@ class RecommendationEngine:
         soft_topic_cap = cls._soft_topic_cap(limit)
         per_style_cap = cls._style_cap(limit)
         broad_cap = cls._broad_topic_cap(limit)
+        amplification_cap = cls._amplification_cap(limit)
+        guard = cls._normalize_amplification_guard(amplification_guard)
         topic_counts: dict[str, int] = {}
         broad_topic_counts: dict[str, int] = {}
         style_counts: dict[str, int] = {}
+        amplification_counts: dict[str, int] = {}
 
         def _exceeds_broad_cap(item: DiscoveredContent) -> bool:
             bt = cls._broad_topic_token(item)
@@ -1897,8 +1976,18 @@ class RecommendationEngine:
             if bt:
                 broad_topic_counts[bt] = broad_topic_counts.get(bt, 0) + 1
             style_counts[cls._style_token(item)] = style_counts.get(cls._style_token(item), 0) + 1
+            for key in cls._candidate_amplification_keys(item) & guard:
+                amplification_counts[key] = amplification_counts.get(key, 0) + 1
+
+        def _exceeds_amplification_cap(item: DiscoveredContent) -> bool:
+            return any(
+                amplification_counts.get(key, 0) >= amplification_cap
+                for key in cls._candidate_amplification_keys(item) & guard
+            )
 
         def _violates_caps(item: DiscoveredContent, *, topic_cap: int) -> bool:
+            if _exceeds_amplification_cap(item):
+                return True
             tokens = cls._diversity_tokens(item)
             if tokens and any(topic_counts.get(t, 0) >= topic_cap for t in tokens):
                 return True
@@ -1975,6 +2064,8 @@ class RecommendationEngine:
                 if len(selected) >= limit:
                     break
                 # Final relaxation: only broad_cap still binding.
+                if _exceeds_amplification_cap(cand):
+                    continue
                 if _exceeds_broad_cap(cand):
                     continue
                 selected.append(cand)

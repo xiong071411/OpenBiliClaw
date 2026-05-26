@@ -417,6 +417,15 @@ def _build_soul_engine() -> Any:
         speculation_max_active=cfg.scheduler.speculation_max_active,
         speculation_max_primary_interests=cfg.scheduler.speculation_max_primary_interests,
         speculation_max_secondary_interests=cfg.scheduler.speculation_max_secondary_interests,
+        avoidance_speculation_interval_minutes=(
+            cfg.scheduler.avoidance_speculation_interval_minutes
+        ),
+        avoidance_speculation_ttl_days=cfg.scheduler.avoidance_speculation_ttl_days,
+        avoidance_speculation_cooldown_days=cfg.scheduler.avoidance_speculation_cooldown_days,
+        avoidance_speculation_confirmation_threshold=(
+            cfg.scheduler.avoidance_speculation_confirmation_threshold
+        ),
+        avoidance_speculation_max_active=cfg.scheduler.avoidance_speculation_max_active,
         speculator_idle_interval_minutes=cfg.scheduler.speculator_idle_interval_minutes,
     )
 
@@ -4840,8 +4849,8 @@ def feedback(
     """对一条推荐记录提交反馈."""
     _require_runtime_config()
     normalized_signal = signal.strip().lower()
-    if normalized_signal not in {"like", "dislike", "comment"}:
-        _print_status_panel("error", "反馈类型无效", "仅支持: like, dislike, comment")
+    if normalized_signal not in {"like", "dislike", "comment", "dismiss"}:
+        _print_status_panel("error", "反馈类型无效", "仅支持: like, dislike, comment, dismiss")
         raise typer.Exit(code=1)
     if normalized_signal == "comment" and not note.strip():
         _print_status_panel("error", "comment 需要备注", "请通过 `--note` 补充一句你的想法。")

@@ -4,6 +4,35 @@
 
 ---
 
+## v0.3.91 / extension v0.3.49: 挑战式兴趣探针与跨源推荐点击修复（2026-05-25）
+
+- 安全清理：移除误提交的 `config.toml.bak`，并将 `config.toml.*` 加入 ignore，避免本地配置备份文件再次进入版本库。
+- 修复 YouTube 推荐点击的跨源链路：推荐卡片和移动 Web 现在向 `/api/recommendation-click` 同步上报 `content_id / content_url / source_platform`；后端会从 payload 或推荐记录补齐来源，YouTube 点击会写成 YouTube URL 和 `source_platform="youtube"` 的事件 / 强画像信号，不再把 `KPoJ7p9iy4Q` 这类 YouTube ID 记成 B 站 BV 号。惊喜推荐 payload 也暴露 `content_url / source_platform`，前端 URL fallback 会按来源构造。
+- 主页 SEO 全面补齐：`docs/index.html` 增加 canonical、hreflang(zh-CN/en/x-default)、完整 OG + Twitter Card、JSON-LD（SoftwareApplication + SoftwareSourceCode + WebSite）、关键词、theme-color、preconnect；i18n 切换语言时同步覆盖 title / description / og / twitter / locale。首屏 hero 图 `fetchpriority=high`，截图全部 `loading=lazy`+显式宽高，CLS 0.00 / LCP 197ms。Lighthouse 移动 + 桌面四项均 100。新增 `docs/sitemap.xml`（含 image sitemap）、`docs/robots.txt`、`docs/seo.md`（Search Console / Bing 提交清单 + 长期维护要点）。
+- 后端源码版本仍为 v0.3.91；浏览器插件版本提升到 extension v0.3.49，准备发布 `extension-v0.3.49`；v0.3.48 已发布，此次补发跨源推荐点击修复。
+- 兴趣探针新增 near / lateral / bridge / wildcard 四档挑战距离，system prompt 保留距离定义，运行时按近期历史和画像状态控制探索远近。
+- 探针反馈改成 4-way 语义：`positive`、`weak_positive`、`negative`、`neutral`；聊天、卡片、OpenClaw adapter 和 avoidance probe 的反向语义都走同一套写回分支。
+- 弱正向兴趣探针先进入短期 exploration buffer，只有积累到足够显式信号后才晋升为正式兴趣，避免单次“有点意思”造成推荐短期刷屏。
+- 推荐侧对新确认方向增加放大保护和 per-refresh 上限，新兴趣可以参与探索，但不会立刻挤占整批推荐。
+- 修复配置热重载后只触发正向兴趣 speculator、漏掉避雷 speculator 的问题；热重载 one-shot 现在会同时调度 `post_reload_avoidance_speculate` 并传入 `avoidance_probe_feedback_history`。避雷 speculator 增加生成 / 转正 / 拒绝 / quality gate 日志，pipeline tick 异常会以 warning 暴露，避免 refresh loop 静默吞掉。
+- 避雷探针新增 source/topic 级别去重：同一 `source_mode` 下的同一粗主题（如 AI 正向边界）只保留一条 active，重复 active 会在下一轮 tick 压入 cooldown；生成 prompt 也会携带 `existing_avoidance_details` 并要求避开同源换皮候选，避免一屏都是 AI 教程 / 测评 / 趋势类避雷。
+- 挑战式兴趣探针改为独立 active 额度：普通 `near` 探针继续最多 5 条，`lateral/bridge/wildcard` 合并为挑战池并单独最多 3 条；5 个普通探针占满时，热重载 / force tick 仍能生成挑战探针，生成 prompt 也会切到 challenge-only 补货提示。
+- 插件 side panel、移动 Web 和桌面 Web 的消息区把普通 `near` 兴趣探针、`lateral/bridge/wildcard` 挑战探针和避雷探针分成不同视觉语义与提示文案：普通兴趣用于“继续探索”，挑战探针提示“把口味往侧边推一点”，避雷用于“少看这类 / 猜错点不是”。
+- 移动 Web 推荐页首屏请求增加超时兜底：推荐 / 惊喜推荐最多等待 12 秒，runtime status / activity 最多等待 5 秒；推荐接口慢或暂时失败时会结束 loading 并显示当前可用状态，避免手机端一直停在加载中。
+- 移动 Web 推荐页加载优化：`recommendations.created_at/id` 与 `content_cache.content_id` 增加读取索引，修复 `/api/recommendations` 的双表扫描；推荐页首屏先渲染 `/api/recommendations` 结果，再异步补 runtime status / activity / delight，消息 badge 首次加载不再额外拉取未使用的 delight batch。
+
+## v0.3.91 / extension v0.3.47: 真实可换库存口径修正 + 不喜欢领域探针（2026-05-24）
+
+- 后端源码版本提升到 v0.3.91，准备发布 `backend-v0.3.91`；浏览器插件版本提升到 extension v0.3.47，准备发布 `extension-v0.3.47`。
+- 修复 runtime status / runtime stream 的候选池数字口径：`pool_available_count` 现在只表示后端当前可立即 `serve()` 的候选；新增 `pool_raw_count` / `pool_pending_count` 用于区分素材库存和待整理内容，避免“池子有素材”被显示成“还有 N 条可换”。
+- `count_pool_candidates()` 读取前会刷新 SQLite/WAL snapshot，避免同一次操作里 runtime status 看到旧库存、`get_pool_candidates()` 看到新状态而返回空。
+- `count_pool_candidates()` 现在默认应用与 `get_pool_candidates()` 相同的 `max_per_topic_group=3` 候选窗口；单个 `topic_group` 堆积大量内容时，UI “可换”数量不再高于 `serve()` 实际可加载库存。
+- 推荐 serve 的零候选 warning 增加 `raw/servable/pending` 诊断字段，方便区分 Gemini quota / 分类文案未完成导致的 pending，和真实 count/load 查询漂移。
+- 插件 side panel、移动 Web 和桌面 Web 统一显示真实可换数；当 `pool_available_count=0` 且 `pool_pending_count>0` 时显示“找到 N 条素材，正在整理成可换内容”，不会把 pending 数量写成“可换”。插件手动“换一批”空结果会重新同步 runtime status，并用单飞锁避免重复点击竞态。
+- 新增不喜欢领域探针设计与实现：系统会主动确认可能的避雷方向，移动 Web / 桌面 Web / 浏览器插件 / OpenClaw 都可查看和操作。
+- 确认后通过 `apply_new_dislikes()` 写入 `disliked_topics` 并触发候选池清理；未确认避雷方向不参与 discovery / recommendation 过滤。
+- 避雷探针聊天使用 durable `scope=avoidance_probe`，用户在多聊中确认或否认会走同一条反馈、写回与冷却路径。
+
 ## v0.3.90-local: 合入上游 v0.3.89 / extension v0.3.44 与 MusicMark 画像源集成（2026-05-23）
 
 - 合入上游 `upstream/main` 至 `c6229ee`，包含 extension v0.3.44 惊喜推荐内联多轮聊天、桌面 Web `/web`、LLM 并发配置、B 站 search 风控冷却、封面预热、自动续页用户意图门闩、初始化收藏标题 / UP 提取修复等作者更新；旧本地 Vite `web/` 工程、独立部署脚本和旧 Web 交接文档从主树移除，后续统一维护 `src/openbiliclaw/web/`。
@@ -15,12 +44,16 @@
 
 ## v0.3.89 / extension v0.3.44: 惊喜推荐内联多轮聊天（2026-05-22）
 
+- 修复用户显式配置 `[llm.embedding].provider = "openrouter"` 仍然报 `No embedding-capable provider available (requested='openrouter')` 并禁用 embedding 的 bug：`_EMBEDDING_CAPABLE_PROVIDERS` 漏了 `openrouter`，dedicated 构建分支也没有 OpenRouter 路径。现在 registry 显式支持 OpenRouter embedding（必须配 `model = "<vendor>/<model>"`，例如 `google/gemini-embedding-2-preview`；无显式 model 时拒绝构建，避免运行时 404），`[llm.openrouter]` 的 `http_referer` / `x_title` 也会透传到 embedding 实例。`OpenRouterProvider.supports_embedding` 仍保持 `False` —— 只有用户显式选 openrouter 才走这条 dedicated 路径，不污染 chat-side 的自动回退链。
+- 修复桌面 Web 推荐卡片点击「忽略」时 `/api/feedback` 返回 422 的回归：`feedback_type` 白名单新增 `dismiss`（CLI / API / OpenClaw adapter 同步放行）。dismiss 走「软移除」语义——`content_cache.pool_status` 标记为 `feedbacked` 让候选不再被重新发现，前端按 `feedback_type` 非空过滤掉已忽略卡片；soul 与 preference 分析忽略 dismiss 事件，不会把单次软忽略升成话题级负反馈。`activity_feed._feedback_items` 现会显示「这条你忽略了：{title}」而不是落到 fallback 的「写了一句反馈」。
 - 浏览器插件版本提升到 extension v0.3.44，准备发布 `extension-v0.3.44`；后端源码版本仍为 v0.3.89，不发布新的后端 tag。
 - 移动 Web 惊喜推荐的「聊一聊」不再切到对话 tab，而是在当前惊喜卡片内展开 16px textarea composer，提交后就地显示用户气泡、AI thinking、完成回复或失败提示。
 - 移动 Web 和插件的惊喜推荐内聊统一走 durable `/api/chat/turns`，按 `scope=delight` + `subject_id` 归并历史；pending turn 会轮询恢复，reload 后可重新 hydrate。
 - `[llm].concurrency` 新增为全局 LLM 请求并发上限，默认从 1 提升到 3，并接入 `/api/config` 与插件设置页「模型」tab，方便在速度和上游限流之间调整。
 - 插件、桌面 Web 与移动 Web 的 runtime-stream 自动刷新新增 debounce / single-flight：后台补货事件密集时会合并 activity、recommendation、profile 等刷新请求，避免 LLM 并发提升后前端重复拉取和渲染造成卡顿。
 - 后端独立候选池文案预计算完成后会回写 `last_replenished_count` 并广播 `refresh.pool_updated`，修复候选已进入可换库存但前端仍显示“这轮没补进”的状态错位。
+- 推荐候选池 serve / 计数 / 文案预生成入口统一加 `style_key` 与 `topic_group` 非空门控；未分类内容必须先经过 `classify_pool_backlog`，不会再先生成推荐文案后绕过分类口径进入换一批。
+- API runtime 与 OpenClaw direct bootstrap 读取 `[llm].concurrency` 时统一使用默认值兜底；旧测试夹具或精简配置缺少该字段时不再在组件构建阶段抛 `AttributeError`。
 - embedding 预热从 refresh 收尾主路径改为后台 task；慢本地 embedding 后端只影响后续 MMR cache / topic supergroup cache 命中率，不再让 `manual_refresh_state` 长时间停在 `running` 或占住 refresh lock。
 - `[scheduler].pool_target_count` 默认从 600 降到 300；B 站初始化关注默认从 300 收敛到 100，减少长关注列表对首次画像的事件量。XHS / Douyin / YouTube `bootstrap_profile` 的 `max_items_per_scope` 仍默认 300。
 - 移动 Web 与插件 / side panel 推荐列表的自动续页新增用户滚动意图门闩；后台 `refresh.pool_updated` 或列表重渲染不会在加载更多哨兵仍可见时连续调用 `append`，避免候选刚补进就被空转消费到 0。
@@ -30,6 +63,7 @@
 - 移动 Web 推荐列表的高速滑动封面体验继续收敛：当前批次默认预热 12 张封面，前 12 张用 eager 加载，追加批次会先等待封面预热/解码或短超时再插入卡片；封面图加载和 decode 完成前保持透明，让粉蓝渐变骨架先显示，decode 完成后淡入，减少快速下滑时的白屏闪烁。
 - 插件惊喜推荐卡片从单个 `chat_reply` 升级为 per-delight `turns` 多轮气泡，`chat_reply` 仅保留为兼容 last reply；切换候选和 side panel reload 不再覆盖旧回合。
 - 修复兴趣探针聊天反馈的情绪判断：`/api/interest-probes/respond` 的 sentiment LLM 调用改为普通文本模式，不再把只需 `positive / negative / neutral` 的标量分类请求发送成 `json_object`，避免 DeepSeek 返回 400 后频繁落到关键词 fallback。
+- 修复兴趣探针 WebSocket 投递语义：`interest.probe` 只有实际投递到至少一个 `runtime-stream` 订阅者后，才写入 `probed_domains` / `probed_axes` 冷却状态；前端离线时不会把探针误标为已问过。
 - Discovery / recommendation 的批量内容评估统一透传近期 negative exemplars：B 站、抖音、YouTube 策略和 OpenClaw bootstrap 都会把共享 database 传给内部 evaluator；推荐层的未分类池子补评估也会带上 `negative_examples`，让短期话术避让与长期 `disliked_topics` 一起生效。
 - 补充移动端回归测试，锁定 delight inline chat 复用 `session=popup` 契约、`chatted` 状态继续保留「聊一聊」入口，同时 viewed/liked/rejected 等永久处理态不泄漏通用动作按钮。
 

@@ -266,7 +266,13 @@ def test_discovery_runtime_state_defaults_when_missing(tmp_path: Path) -> None:
         "recent_pool_topics": [],
         "probed_domains": {},
         "probed_axes": {},
+        "probed_distance_bands": {},
         "probe_feedback_history": [],
+        "short_term_exploration_buffer": {"entries": []},
+        "probed_avoidance_domains": {},
+        "probed_avoidance_axes": {},
+        "avoidance_probe_feedback_history": [],
+        "last_probe_kind": "",
     }
 
 
@@ -286,6 +292,26 @@ def test_discovery_runtime_state_round_trips_to_json(tmp_path: Path) -> None:
             "recent_pool_topics": ["国际时事", "宏观经济", "纪录片"],
             "probed_domains": {"建筑美学": "2026-03-10T10:30:00"},
             "probed_axes": {"aesthetic|light": "2026-03-10T10:30:00"},
+            "probed_distance_bands": {"bridge": "2026-05-24T12:00:00"},
+            "short_term_exploration_buffer": {
+                "entries": [
+                    {
+                        "domain": "城市基础设施观察",
+                        "score": 1.5,
+                    }
+                ]
+            },
+            "probed_avoidance_domains": {"浅层热点复读": "2026-05-24T10:00:00"},
+            "probed_avoidance_axes": {"knowledge|light": "2026-05-24T10:00:00"},
+            "last_probe_kind": "avoidance",
+            "avoidance_probe_feedback_history": [
+                {
+                    "domain": "浅层热点复读",
+                    "response": "confirm",
+                    "axis": "knowledge|light",
+                    "created_at": "2026-05-24T10:01:00",
+                }
+            ],
             "probe_feedback_history": [
                 {
                     "domain": "城市漫游路线",
@@ -309,6 +335,26 @@ def test_discovery_runtime_state_round_trips_to_json(tmp_path: Path) -> None:
     assert state["recent_pool_topics"] == ["国际时事", "宏观经济", "纪录片"]
     assert state["probed_domains"] == {"建筑美学": "2026-03-10T10:30:00"}
     assert state["probed_axes"] == {"aesthetic|light": "2026-03-10T10:30:00"}
+    assert state["probed_distance_bands"] == {"bridge": "2026-05-24T12:00:00"}
+    assert state["short_term_exploration_buffer"] == {
+        "entries": [
+            {
+                "domain": "城市基础设施观察",
+                "score": 1.5,
+            }
+        ]
+    }
+    assert state["probed_avoidance_domains"] == {"浅层热点复读": "2026-05-24T10:00:00"}
+    assert state["probed_avoidance_axes"] == {"knowledge|light": "2026-05-24T10:00:00"}
+    assert state["last_probe_kind"] == "avoidance"
+    assert state["avoidance_probe_feedback_history"] == [
+        {
+            "domain": "浅层热点复读",
+            "response": "confirm",
+            "axis": "knowledge|light",
+            "created_at": "2026-05-24T10:01:00",
+        }
+    ]
     assert state["probe_feedback_history"] == [
         {
             "domain": "城市漫游路线",
@@ -317,6 +363,38 @@ def test_discovery_runtime_state_round_trips_to_json(tmp_path: Path) -> None:
             "created_at": "2026-05-15T10:00:00",
         }
     ]
+
+
+def test_discovery_runtime_state_round_trips_probed_distance_bands(tmp_path: Path) -> None:
+    memory = MemoryManager(data_dir=tmp_path)
+    memory.save_discovery_runtime_state(
+        {
+            "probed_distance_bands": {"bridge": "2026-05-24T12:00:00"},
+        }
+    )
+
+    state = memory.load_discovery_runtime_state()
+
+    assert state["probed_distance_bands"] == {"bridge": "2026-05-24T12:00:00"}
+
+
+def test_discovery_runtime_state_round_trips_short_term_exploration_buffer(
+    tmp_path: Path,
+) -> None:
+    memory = MemoryManager(data_dir=tmp_path)
+    memory.save_discovery_runtime_state(
+        {
+            "short_term_exploration_buffer": {
+                "entries": [{"domain": "城市基础设施观察", "score": 1.5}]
+            },
+        }
+    )
+
+    state = memory.load_discovery_runtime_state()
+
+    assert state["short_term_exploration_buffer"] == {
+        "entries": [{"domain": "城市基础设施观察", "score": 1.5}]
+    }
 
 
 def test_discovery_runtime_state_round_trips_probe_feedback_history(
@@ -350,6 +428,26 @@ def test_discovery_runtime_state_round_trips_probe_feedback_history(
             "created_at": "2026-05-15T10:00:00",
         }
     ]
+
+
+def test_discovery_runtime_state_caps_avoidance_feedback_history(
+    tmp_path: Path,
+) -> None:
+    memory = MemoryManager(tmp_path)
+    memory.initialize()
+
+    memory.save_discovery_runtime_state(
+        {
+            "avoidance_probe_feedback_history": [
+                {"domain": f"避雷{i}", "response": "reject"} for i in range(105)
+            ]
+        }
+    )
+
+    state = memory.load_discovery_runtime_state()
+
+    assert len(state["avoidance_probe_feedback_history"]) == 100
+    assert state["avoidance_probe_feedback_history"][0]["domain"] == "避雷5"
 
 
 def test_account_sync_state_defaults_when_missing(tmp_path: Path) -> None:

@@ -13,6 +13,7 @@ from openbiliclaw.soul.speculator import (
     CooldownEntry,
     InterestSpeculator,
     SpeculativeInterest,
+    SpeculativeSpecific,
     SpeculativeState,
     _event_matches_speculation,
     _tokenize,
@@ -105,9 +106,7 @@ def test_probe_novelty_guard_matches_negative_feedback_history():
     )
 
     assert guard.is_duplicate_domain("城市漫游隐藏路线") is True
-    assert guard.filter_specifics(["老街路线", "城市声音采样"]) == [
-        "城市声音采样"
-    ]
+    assert guard.filter_specifics(["老街路线", "城市声音采样"]) == ["城市声音采样"]
     assert guard.is_duplicate_domain("手作模型制作") is False
 
 
@@ -177,6 +176,18 @@ def test_choose_next_probe_prefers_axis_without_negative_feedback():
     assert chosen.domain == "手作模型制作"
 
 
+def test_choose_next_probe_candidate_prefers_fresh_probe_mode_after_filters():
+    near = SpeculativeInterest(domain="近", probe_mode="near", weight=0.9)
+    bridge = SpeculativeInterest(domain="桥", probe_mode="bridge", weight=0.6)
+
+    chosen = choose_next_probe_candidate(
+        [near, bridge],
+        probed_probe_modes={"near"},
+    )
+
+    assert chosen is bridge
+
+
 def test_select_diverse_candidates_avoids_negative_feedback_axis():
     candidates = [
         SpeculativeInterest(
@@ -225,6 +236,20 @@ def test_select_diverse_candidates_avoids_negative_feedback_axis():
         "咖啡馆空间设计",
         "本地 Stable Diffusion 工作台",
     ]
+
+
+def test_select_diverse_candidates_enforces_probe_mode_quota_when_possible():
+    candidates = [
+        SpeculativeInterest(domain="近1", probe_mode="near", confidence=0.9, weight=0.9),
+        SpeculativeInterest(domain="近2", probe_mode="near", confidence=0.8, weight=0.8),
+        SpeculativeInterest(domain="横向", probe_mode="lateral", confidence=0.6, weight=0.6),
+        SpeculativeInterest(domain="桥接", probe_mode="bridge", confidence=0.55, weight=0.55),
+    ]
+
+    selected = speculator_module._select_diverse_candidates(candidates, limit=3)
+
+    assert any(item.probe_mode != "near" for item in selected)
+    assert sum(1 for item in selected if item.probe_mode == "near") <= 2
 
 
 def _profile_with_ai_specifics():
@@ -475,9 +500,7 @@ def test_promote_ready_handles_user_confirmed_status():
     assert updated.total_promoted == 2
 
 
-async def test_force_tick_unblocked_when_active_full_of_confirmed(
-    monkeypatch, tmp_path
-):
+async def test_force_tick_unblocked_when_active_full_of_confirmed(monkeypatch, tmp_path):
     """Regression for the 'probe wedge' bug observed in production:
     a profile with N=max_active rows all in ``status="confirmed"``
     (because the user kept clicking 喜欢 but no tick ever ran) made
@@ -509,8 +532,15 @@ async def test_force_tick_unblocked_when_active_full_of_confirmed(
         for i in range(5)
     ]
     state_file.write_text(
-        json.dumps({"active": confirmed_rows, "cooldown": [], "total_rejected": 0,
-                    "total_promoted": 0, "last_generation_at": None})
+        json.dumps(
+            {
+                "active": confirmed_rows,
+                "cooldown": [],
+                "total_rejected": 0,
+                "total_promoted": 0,
+                "last_generation_at": None,
+            }
+        )
     )
 
     # Stub LLM service to return 5 fresh probes; without the fix this
@@ -555,6 +585,105 @@ async def test_force_tick_unblocked_when_active_full_of_confirmed(
     persisted = speculator._load_state()
     persisted_active_domains = {s.domain for s in persisted.active if s.status == "active"}
     assert persisted_active_domains == {f"全新方向{i}" for i in range(5)}
+
+
+async def test_force_tick_fills_challenge_slots_when_near_pool_full(tmp_path):
+    from openbiliclaw.soul.profile import OnionProfile
+
+    data_dir = tmp_path / "memory"
+    data_dir.mkdir()
+    near_rows = [
+        SpeculativeInterest(
+            domain=f"近距方向{i}",
+            reason="已有普通兴趣探针",
+            confidence=0.5,
+            weight=0.5,
+            created_at=datetime.now().isoformat(),
+            ttl_days=3,
+            status="active",
+            probe_mode="near",
+            specifics=[
+                SpeculativeSpecific(name=f"existing-{i}-a"),
+                SpeculativeSpecific(name=f"existing-{i}-b"),
+            ],
+        ).to_dict()
+        for i in range(5)
+    ]
+    save_speculative_state(
+        data_dir.parent,
+        SpeculativeState(active=[SpeculativeInterest.from_dict(row) for row in near_rows]),
+    )
+
+    fake_speculations = [
+        {
+            "domain": "近距额外方向",
+            "category": "娱乐",
+            "reason": "这是一段足够长的普通近距方向理由，用来证明普通池已经满了不会再塞。",
+            "confidence": 0.66,
+            "specifics": ["sub-a", "sub-b"],
+            "experience_mode": "knowledge",
+            "entry_load": "light",
+            "probe_mode": "near",
+        },
+        {
+            "domain": "横向挑战方向",
+            "category": "生活",
+            "reason": "这是一段足够长的横向挑战理由，用来测试挑战池可以独立进入。",
+            "confidence": 0.65,
+            "specifics": ["横向子方向A", "横向子方向B"],
+            "experience_mode": "wander_observe",
+            "entry_load": "light",
+            "probe_mode": "lateral",
+        },
+        {
+            "domain": "桥接挑战方向",
+            "category": "科技",
+            "reason": "这是一段足够长的桥接挑战理由，用来测试挑战池可以独立进入。",
+            "confidence": 0.64,
+            "specifics": ["桥接子方向A", "桥接子方向B"],
+            "experience_mode": "hands_on",
+            "entry_load": "heavy",
+            "probe_mode": "bridge",
+        },
+        {
+            "domain": "野卡挑战方向",
+            "category": "人文",
+            "reason": "这是一段足够长的野卡挑战理由，用来测试挑战池可以独立进入。",
+            "confidence": 0.63,
+            "specifics": ["野卡子方向A", "野卡子方向B"],
+            "experience_mode": "people_story",
+            "entry_load": "light",
+            "probe_mode": "wildcard",
+        },
+    ]
+
+    class _FakeResponse:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    class _FakeLLMService:
+        async def complete_structured_task(self, **_kw):
+            return _FakeResponse(json.dumps({"speculations": fake_speculations}))
+
+    speculator = InterestSpeculator(
+        llm_service=_FakeLLMService(),
+        data_dir=data_dir.parent,
+        max_active=5,
+    )
+
+    result = await speculator.force_tick(OnionProfile())
+
+    assert {item.probe_mode for item in result.generated} == {
+        "lateral",
+        "bridge",
+        "wildcard",
+    }
+    assert "近距额外方向" not in {item.domain for item in result.generated}
+
+    persisted = speculator._load_state()
+    active = [item for item in persisted.active if item.status == "active"]
+    assert sum(1 for item in active if item.probe_mode == "near") == 5
+    assert sum(1 for item in active if item.challenge) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +782,29 @@ def test_speculative_state_roundtrip():
     assert len(restored.cooldown) == 1
     assert restored.total_promoted == 3
     assert restored.total_rejected == 5
+
+
+def test_speculative_interest_round_trips_probe_mode_and_confirmation_fields():
+    spec = SpeculativeInterest(
+        domain="城市基础设施观察",
+        category="知识观察",
+        probe_mode="bridge",
+        confirmation_source="probe_confirmed",
+        confirmed_at="2026-05-24T12:00:00",
+    )
+
+    restored = SpeculativeInterest.from_dict(spec.to_dict())
+
+    assert restored.probe_mode == "bridge"
+    assert restored.challenge is True
+    assert restored.confirmation_source == "probe_confirmed"
+    assert restored.confirmed_at == "2026-05-24T12:00:00"
+
+
+def test_normalize_probe_mode_defaults_missing_or_unknown_to_near():
+    assert speculator_module._normalize_probe_mode("") == "near"
+    assert speculator_module._normalize_probe_mode(None) == "near"
+    assert speculator_module._normalize_probe_mode("surprise") == "near"
 
 
 # ---------------------------------------------------------------------------
@@ -794,6 +946,35 @@ def test_speculator_get_active():
         assert {s.domain for s in active} == {"A", "C"}
 
 
+def test_user_confirm_speculation_records_source_and_confirmed_at():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir)
+        speculator = InterestSpeculator(llm_service=None, data_dir=data_dir)
+        save_speculative_state(
+            data_dir,
+            SpeculativeState(
+                active=[
+                    SpeculativeInterest(
+                        domain="建筑美学",
+                        status="active",
+                        created_at=datetime.now().isoformat(),
+                    )
+                ]
+            ),
+        )
+
+        speculator.user_confirm_speculation(
+            "建筑美学",
+            confirmation_source="profile_confirmed",
+        )
+        state = speculator._load_state()
+        spec = next(item for item in state.active if item.domain == "建筑美学")
+
+        assert spec.status == "confirmed"
+        assert spec.confirmation_source == "profile_confirmed"
+        assert spec.confirmed_at
+
+
 async def test_speculator_tick_promotes():
     with tempfile.TemporaryDirectory() as tmpdir:
         data_dir = Path(tmpdir)
@@ -896,10 +1077,7 @@ def test_should_generate_respects_primary_cap():
         assert speculator._should_generate(state, datetime.now(), profile) is True
 
         capped_state = SpeculativeState(
-            active=[
-                SpeculativeInterest(domain=f"猜{i}", status="active")
-                for i in range(15)
-            ]
+            active=[SpeculativeInterest(domain=f"猜{i}", status="active") for i in range(15)]
         )
         assert speculator._should_generate(capped_state, datetime.now(), profile) is False
 
@@ -941,10 +1119,7 @@ def test_should_generate_respects_secondary_cap():
         assert speculator._should_generate(state, datetime.now(), profile) is True
 
         capped_state = SpeculativeState(
-            active=[
-                SpeculativeInterest(domain=f"猜{i}", status="active")
-                for i in range(60)
-            ]
+            active=[SpeculativeInterest(domain=f"猜{i}", status="active") for i in range(60)]
         )
         assert speculator._should_generate(capped_state, datetime.now(), profile) is False
 
@@ -986,8 +1161,7 @@ async def test_speculator_generate_keeps_visible_experience_mix():
                                 "domain": "博弈论科普",
                                 "category": "知识解释",
                                 "reason": (
-                                    "你一直在看结构化推演内容，"
-                                    "这个方向能继续提供可验证的思考乐趣。"
+                                    "你一直在看结构化推演内容，这个方向能继续提供可验证的思考乐趣。"
                                 ),
                                 "bridge_type": "near",
                                 "confidence": 0.59,
@@ -999,8 +1173,7 @@ async def test_speculator_generate_keeps_visible_experience_mix():
                                 "domain": "AI治理",
                                 "category": "社会文化",
                                 "reason": (
-                                    "你对技术影响现实社会的链条敏感，"
-                                    "这个方向能接住这种关注。"
+                                    "你对技术影响现实社会的链条敏感，这个方向能接住这种关注。"
                                 ),
                                 "bridge_type": "far",
                                 "confidence": 0.57,
@@ -1025,8 +1198,7 @@ async def test_speculator_generate_keeps_visible_experience_mix():
                                 "domain": "城市漫游",
                                 "category": "现实观察",
                                 "reason": (
-                                    "你有从具体场景观察系统的习惯，"
-                                    "这个方向入口轻但仍有结构感。"
+                                    "你有从具体场景观察系统的习惯，这个方向入口轻但仍有结构感。"
                                 ),
                                 "bridge_type": "near",
                                 "confidence": 0.49,
@@ -1038,8 +1210,7 @@ async def test_speculator_generate_keeps_visible_experience_mix():
                                 "domain": "器物修复",
                                 "category": "实操动手",
                                 "reason": (
-                                    "你喜欢看结构怎么被拆开再复原，"
-                                    "这个方向能给到更直接的动手反馈。"
+                                    "你喜欢看结构怎么被拆开再复原，这个方向能给到更直接的动手反馈。"
                                 ),
                                 "bridge_type": "near",
                                 "confidence": 0.48,
@@ -1094,8 +1265,7 @@ async def test_speculator_generate_prefers_axis_missing_from_active_pool():
                                 "domain": "旧物修复",
                                 "category": "实操动手",
                                 "reason": (
-                                    "你喜欢看结构怎么被拆开再复原，"
-                                    "这个方向能补上更直接的动手反馈。"
+                                    "你喜欢看结构怎么被拆开再复原，这个方向能补上更直接的动手反馈。"
                                 ),
                                 "confidence": 0.48,
                                 "experience_mode": "hands_on",
